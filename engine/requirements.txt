@@ -1,0 +1,20 @@
+# AstSight Engine 运行时依赖
+# 验证环境：Windows · Python 3.13.14 · 2026-10-25
+# 安装：pip install -r requirements.txt
+
+# ── 编排层（LangGraph StateGraph）──
+# 1.x 系列；契约层与编排骨架在此版本实测可导入、可 compile、可 invoke
+langgraph==1.2.17
+
+# ── 契约层（全部核心实体）──
+pydantic==2.14.1
+
+# ── 执行与配置 ──
+httpx==0.28.1
+PyYAML==6.0.3
+pytest==9.1.1
+
+# ── M1 内置示例服务（examples/order_service）──
+# 仅运行示例/端到端测试需要；接入真实项目时可去掉
+fastapi==0.162.0
+uvicorn==0.54.0

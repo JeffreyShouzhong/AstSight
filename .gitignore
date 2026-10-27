@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Test / run artifacts
+.pytest_cache/
+.astsight/
+examples/**/.astsight/
+
+# CodeGraph generated index
+.codegraph/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.claude/settings.local.json

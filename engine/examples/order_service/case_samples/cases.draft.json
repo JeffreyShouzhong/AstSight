@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "generator": {
+    "kind": "manual",
+    "name": "order_service_sample"
+  },
+  "scope_docs": [
+    "docs/api-design.md",
+    "docs/requirements.md"
+  ],
+  "cases": [
+    {
+      "case_key": "create_order_quantity_zero",
+      "title": "quantity 低于下限返回 422",
+      "requirement_refs": [
+        {
+          "doc": "docs/api-design.md",
+          "section": "订单服务接口设计 > POST /api/v1/orders",
+          "quote": "1 <= quantity <= 99"
+        }
+      ],
+      "endpoint": "POST /api/v1/orders",
+      "category": "boundary",
+      "priority": "P0",
+      "body": {
+        "customer_id": "cust_1001",
+        "sku": "SKU-1001",
+        "quantity": 0
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "in",
+          "expect": [400, 422]
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "quantity 的下界为 1，0 应被契约拒绝"
+    },
+    {
+      "case_key": "create_order_missing_customer",
+      "title": "缺少 customer_id 返回 422",
+      "requirement_refs": [
+        {
+          "doc": "docs/api-design.md",
+          "section": "订单服务接口设计 > POST /api/v1/orders",
+          "quote": "customer_id | string | 是"
+        }
+      ],
+      "endpoint": "POST /api/v1/orders",
+      "category": "missing_required",
+      "priority": "P0",
+      "body": {
+        "sku": "SKU-1001",
+        "quantity": 1
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "in",
+          "expect": [400, 422]
+        }
+      ],
+      "assert_strength": "L1"
+    },
+    {
+      "case_key": "patch_order_invalid_status",
+      "title": "PATCH 非法状态返回 422",
+      "requirement_refs": [
+        {
+          "doc": "docs/api-design.md",
+          "section": "订单服务接口设计 > PATCH /api/v1/orders/{order_id}",
+          "quote": "枚举 pending / paid / shipped / cancelled"
+        }
+      ],
+      "endpoint": "PATCH /api/v1/orders/{order_id}",
+      "category": "type_error",
+      "priority": "P0",
+      "path_params": {
+        "order_id": 1
+      },
+      "body": {
+        "status": "unknown"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "in",
+          "expect": [400, 422]
+        }
+      ],
+      "assert_strength": "L1"
+    },
+    {
+      "case_key": "patch_order_paid_success",
+      "title": "PATCH 将订单更新为 paid",
+      "requirement_refs": [
+        {
+          "doc": "docs/api-design.md",
+          "section": "订单服务接口设计 > PATCH /api/v1/orders/{order_id}",
+          "quote": "枚举 pending / paid / shipped / cancelled"
+        }
+      ],
+      "endpoint": "PATCH /api/v1/orders/{order_id}",
+      "category": "business",
+      "priority": "P1",
+      "path_params": {
+        "order_id": 1
+      },
+      "body": {
+        "status": "paid"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 200
+        },
+        {
+          "kind": "body_field",
+          "target": "status",
+          "op": "eq",
+          "expect": "paid"
+        }
+      ],
+      "assert_strength": "L2"
+    }
+  ],
+  "uncovered_requirements": [
+    {
+      "doc": "docs/requirements.md",
+      "section": "订单状态需求 > POST /api/v1/orders/{order_id}/pay",
+      "reason": "needs_c5_state_setup"
+    },
+    {
+      "doc": "docs/requirements.md",
+      "section": "订单状态需求 > POST /api/v1/orders/{order_id}/cancel",
+      "reason": "needs_c5_state_setup"
+    }
+  ]
+}
