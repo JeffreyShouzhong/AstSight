@@ -1,6 +1,6 @@
 # CodeGraph 集成设计
 
-> 依据：`framework-capability-design.md`（能力设计 v2.16）、`engine/codegraph/`（客户端与路由重建）
+> 依据：`framework-capability-design.md`（能力设计 v4.2）、`engine/codegraph/`（客户端与路由重建）
 > 输入：`@colbymchenry/codegraph` **1.6.2** 实包核对（`dist/*.d.ts` 全量类型）+ D:\testhub_platform\codegraph_lab 嵌入样例 + 本轮 11 组可复现实测
 > 版本：**v2.0** · 2026-10-25（v1.0 见文末修订记录）
 
@@ -34,10 +34,12 @@ CodeGraph 的路由能力正好落在第三种。这是本轮全部实测的主�
 
 | 项 | 值 |
 |---|---|
-| 包版本 | `@colbymchenry/codegraph` 1.6.2（含平台子包 `codegraph-win32-x64`，原生内核在子包内） |
+| 包版本 | `@colbymchenry/codegraph` 1.6.2（原生内核按平台放在子包内；1.6.2 的 `optionalDependencies` 含 `codegraph-{win32,linux,darwin}-{x64,arm64}` 六个平台子包） |
 | 模块形态 | **CommonJS**。ESM 具名 import 会抛 `SyntaxError: Named export 'CodeGraph' not found`，必须 default import 或 `createRequire` |
 | Node 要求 | 库模式 **>= 22.5**（依赖内置 `node:sqlite`） |
 | 实测环境 | Node 22.22.2 / Windows 11 / Python 3.13.14 |
+| 平台支持（上游） | 上游 README 的 **Supported Platforms** 声明：每个 release 为 **Windows / macOS / Linux × x64 / arm64** 提供自包含构建（自带 Node runtime，无需编译）；1.6.2 实际发布的平台子包为 `codegraph-{win32,linux,darwin}-{x64,arm64}` |
+| 平台验证（本项目） | 本文件全部实测**只覆盖 `win32-x64`**。上游有产物 ≠ 本项目已验证：**部署基线 Linux** 与 macOS 开发机在落地前必须复验原生模块可加载、索引/路由结果一致，不能把 Windows 结论直接外推 |
 
 ### 1.2 库 API 全清单（来源：`dist/index.d.ts`，非推测）
 
@@ -219,6 +221,14 @@ engine/codegraph/
 > `EmbeddedCodeGraphClient.impact()` 内部已完成求交并返回 `affected_routes`，
 > 调用方不要拿 `affected`（符号名列表）当接口清单用。
 
+**CodeGraph 不覆盖的两块（C2 自行补齐）**：
+
+- **只收提供方端点**：路由表/图谱里的 HTTP 客户端、`@DubboReference`、gRPC stub 是消费方调用点，
+  不是被测端点；它们写入 C3 `downstream_deps`，不进 `ChangedAPI[]`。
+- **纯契约 diff**：`.proto`、OpenAPI、Dubbo 接口签名的 base/target 差异不来自符号调用图，
+  由 AstSight 契约解析器生成 `change_kinds/contract_change`；图谱无变更符号时也可能有契约变更，
+  不得因 `affected_routes` 为空就判定“无影响”。
+
 非 Python 映射的证据等级：
 
 | 变更行位置 | 处理 | 证据 |
@@ -259,7 +269,14 @@ engine/codegraph/
 
 图谱的 handler 映射在 `@app.route` 形式下是准的，可作为独立第二来源；在 shortcut 形式下直接缺失，此时只有插件单方证据。
 
-下游识别仍走 `callees` 递归，命中 HTTP client / MQ producer / Redis / RPC / 三方 SDK 调用点。
+下游识别仍走 `callees` 递归，命中 HTTP client / gRPC stub / Dubbo reference / MQ producer /
+Redis / 三方 SDK 调用点。**HTTP 下游**统一按出站调用点处理：图谱提供调用点与源码，目标地址、
+端口与可覆盖配置由 S3 提取（`type=http`），不区分客户端框架、不新增 transport；同一
+`(METHOD, 规范化目标 URL)` 的多个调用点合并为一个 `dep_id`，不同下游同路径不合并（见能力设计
+C3.5.5）；识别不出的调用点标 `unidentified` 进缺口清单。**gRPC/Dubbo 的契约文档（proto/descriptor、接口签名、
+`@DubboService`/`@DubboReference`、XML）不由 CodeGraph 提供**——图谱只提供符号与调用边，
+`transport`、`param_types`、`group/version` 由 AstSight 自有解析器确定性提取；不得把同名符号
+当作 Dubbo 接口证据。
 
 ### C3.5.1 Mock 语义完整性
 
@@ -322,6 +339,8 @@ v1.0 列了 6 项必测，本轮关闭 4 项：
 | 5.4 扩展点 | 「新 Web 框架路由识别 → C2 路由插件接口」 | 明确其**第一用途是补 CodeGraph 的路由缺陷**（前缀丢失 + shortcut 漏识别 + Django 无 method），是必需品 |
 | 七 风险表 | 「Java/Spring 路由识别精度不足·高」 | 追加：**Python 栈也有语义缺陷**，风险从"某语言"升级为"全栈"，缓解手段是路由插件交叉校验 |
 | 八 迭代 1 | C2 变更感知 | 出口标准增加「路由审计报告中 `matched` 占比达标」 |
+| C3 下游识别（v4.6） | HTTP 下游 | `callees` 定位出站 HTTP 调用点；目标地址/端口与可覆盖配置由 S3 提取，`type=http`，不区分客户端框架、不新增 transport；识别不出标 `unidentified` |
+| C3 下游/契约（v4.2） | gRPC stub、Dubbo reference | `callees` 只提供调用点与符号；gRPC 契约取 repo proto/descriptor，Dubbo 契约取接口源码 + 全限定注解/XML。图谱不提供 `transport`、`param_types`、`group/version` 证据；无源码接口标 `unsupported` |
 
 ---
 

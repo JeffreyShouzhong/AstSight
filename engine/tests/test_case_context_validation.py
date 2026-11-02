@@ -201,6 +201,9 @@ def test_build_context_is_deterministic_and_writes_package(tmp_path: Path) -> No
     prepared = prepare_context(project, ["docs/api.md"])
     assert prepared.context_path.is_file()
     assert prepared.prompt_path.is_file()
+    prompt = prepared.prompt_path.read_text(encoding="utf-8")
+    assert "A4 用例设计" in prompt
+    assert "rule_refs" in prompt
     assert prepared.schema_path.is_file()
     assert prepared.readme_path.is_file()
     loaded = load_context(prepared.context_dir)

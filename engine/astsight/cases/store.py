@@ -11,14 +11,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from contracts import CaseEntry, CaseSet, CaseStatus, ReviewDecision
+from contracts import CaseEntry, CaseLevel, CaseSet, CaseStatus, ReviewDecision
 
 from ..persistence import load_json, save_json_atomic, sha256_json, sha256_text, sha256_file
 from .draft import case_fingerprint
 
 DEFAULT_CASE_BASE = "caseset.json"
-SUPPORTED_STORE_SCHEMA = 1
-SUPPORTED_FINGERPRINT_VERSION = 1
+SUPPORTED_STORE_SCHEMA = 2
+SUPPORTED_FINGERPRINT_VERSION = 2
 EMPTY_STORE_HASH = sha256_json(
     {"case_set": "empty", "schema_version": SUPPORTED_STORE_SCHEMA}
 )
@@ -86,6 +86,15 @@ def validate_case_set(caseset: CaseSet) -> None:
         raise CaseStoreError(
             f"不支持的 fingerprint_version={caseset.fingerprint_version}"
         )
+    snapshot = caseset.ruleset or {}
+    if snapshot:
+        missing = [
+            key for key in ("id", "version", "hash") if not snapshot.get(key)
+        ]
+        if missing:
+            raise CaseStoreError(
+                f"caseset.ruleset 快照缺少字段: {missing}"
+            )
 
     seen: dict[tuple[str, int], str] = {}
     anchors: dict[tuple[str, str], str] = {}
@@ -134,10 +143,22 @@ def validate_case_set(caseset: CaseSet) -> None:
             raise CaseStoreError(
                 f"{entry.id} v{entry.version} 已入库但审核决定不是 approve"
             )
+        if snapshot:
+            _validate_level_invariants(entry)
     if caseset.sequence < max_number:
         raise CaseStoreError(
             f"sequence={caseset.sequence} 小于最大 TC 编号 {max_number}"
         )
+
+
+def _validate_level_invariants(entry: CaseEntry) -> None:
+    """只有规则驱动的 store 强制两级不变量；模板回归用例不伪造 rule_refs。"""
+    if not entry.rule_refs:
+        raise CaseStoreError(f"{entry.id} 缺少 rule_refs（规则驱动 use store 必填）")
+    if entry.level is CaseLevel.BUSINESS and not entry.requirement_refs:
+        raise CaseStoreError(f"{entry.id} business 用例缺少 requirement_refs")
+    if entry.level is CaseLevel.CODE and not entry.change_refs:
+        raise CaseStoreError(f"{entry.id} code 用例缺少 change_refs")
 
 
 def load_case_set(path: str | Path) -> CaseSet | None:
@@ -204,12 +225,19 @@ def case_summary(caseset: CaseSet) -> dict[str, int]:
     deprecated = sum(
         1 for entry in caseset.cases if entry.status is CaseStatus.DEPRECATED
     )
+    levels = {"business": 0, "code": 0}
+    for entry in caseset.cases:
+        if entry.status is CaseStatus.APPROVED:
+            levels[entry.level.value] = levels.get(entry.level.value, 0) + 1
     return {
         "approved": approved,
         "deprecated": deprecated,
         "history_versions": len(caseset.history),
         "total_cases": len(caseset.cases),
         "review_events": len(caseset.review_log),
+        "business_cases": levels["business"],
+        "code_cases": levels["code"],
+        "has_ruleset": bool(caseset.ruleset),
     }
 
 

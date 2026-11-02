@@ -3,12 +3,15 @@
 事实源零 LLM。任何一路缺失都显式标记，不降级猜测：
 - 无 OpenAPI → `contract_incomplete=true`，用例只能做状态码冒烟；
 - 路由证据等级直接沿用路由审计结果（verified/inferred/unmapped）；
-- 下游依赖来自 CodeGraph 正向 `callees`，无法识别时留空并标 `downstream_unmapped`。
+- 下游依赖来自源码 AST + CodeGraph 正向 `callees`（见 `downstream.py`）；
+  找不到源码或无法静态解析时留空并标 `downstream_unmapped`，不猜。
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from .downstream import DownstreamScanner
 from .openapi import EndpointSpec, normalize_path
 
 
@@ -23,35 +26,31 @@ def _endpoint_index(operations: list[EndpointSpec]) -> dict[tuple[str, str], End
     return index
 
 
-def _classify_dep(name: str) -> str:
-    """下游类型粗分类（仅标类型，不判读写；全 Mock 策略下读写不影响决策）。"""
-    lowered = name.lower()
-    if any(token in lowered for token in ("redis", "cache", "memcache")):
-        return "cache"
-    if any(token in lowered for token in ("kafka", "rabbit", "mq", "producer", "publish", "queue")):
-        return "mq"
-    if any(token in lowered for token in ("grpc", "rpc", "thrift", "dubbo")):
-        return "rpc"
-    if any(token in lowered for token in ("http", "requests", "httpx", "client", "api", "gateway", "payment", "pay")):
-        return "http"
-    return "unknown"
-
-
 def build_profiles(
     routes: list[dict],
     operations: list[EndpointSpec],
     *,
     codegraph_client: Any | None = None,
     max_callees: int = 30,
+    project_root: str | Path | None = None,
+    downstream_scanner: DownstreamScanner | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """返回 (profiles, unmapped)。
 
     routes 的每一项至少含 method/path/handler/confidence/source。
+    `project_root` 提供时启用 Python 源码 AST 扫描识别下游 HTTP 调用点。
     """
     index = _endpoint_index(operations)
     profiles: list[dict] = []
     unmapped: list[dict] = []
     seen: set[tuple[str, str]] = set()
+    scanner = downstream_scanner
+    if scanner is None and project_root is not None:
+        scanner = DownstreamScanner(
+            project_root,
+            codegraph_client=codegraph_client,
+            max_symbols=max_callees,
+        )
 
     for route in routes:
         method = str(route.get("method") or "").upper()
@@ -88,7 +87,13 @@ def build_profiles(
             "endpoint": f"{method} {path}",
             "method": method,
             "path": path,
+            "transport": "http",
+            "business_key": route.get("handler", ""),
+            "coverage_role": "primary",
+            "adapter_fingerprint": None,
+            "semantic_branches": [],
             "handler": route.get("handler", ""),
+            "handler_owner": route.get("owner", ""),
             "file": route.get("file", ""),
             "route_source": route.get("source", "framework_plugin"),
             "route_confidence": route.get("confidence", "verified"),
@@ -129,23 +134,33 @@ def build_profiles(
             )
 
         handler = profile["handler"]
-        if codegraph_client is not None and handler:
+        if scanner is not None and handler:
             try:
-                callees = codegraph_client.callees(handler)[:max_callees]
-            except Exception as exc:  # 图谱是辅助证据，单次失败不中断画像
-                profile["codegraph_error"] = str(exc)[:300]
-                callees = []
-            deps = []
-            for symbol in callees:
-                deps.append(
-                    {
-                        "dep_id": getattr(symbol, "name", str(symbol)),
-                        "dep_type": _classify_dep(getattr(symbol, "name", str(symbol))),
-                        "evidence": "inferred",
-                    }
+                scan = scanner.scan(
+                    handler,
+                    owner=str(route.get("owner") or ""),
+                    file_hint=str(route.get("file") or ""),
                 )
-            profile["downstream_deps"] = deps
-            profile["downstream_unmapped"] = not deps
+            except Exception as exc:  # 源码扫描是辅助证据，单次失败不中断画像
+                profile["downstream_error"] = f"{type(exc).__name__}: {exc}"[:300]
+            else:
+                profile["downstream_deps"] = scan.deps
+                profile["downstream_unmapped"] = not scan.deps
+                profile["downstream_checked"] = scan.checked
+                profile["downstream_call_sites"] = [
+                    site.as_dict() for site in scan.call_sites
+                ]
+                if scan.unsupported:
+                    profile["downstream_unsupported"] = scan.unsupported
+                if scan.collisions:
+                    profile["downstream_collisions"] = scan.collisions
+                if scan.warnings:
+                    profile["downstream_warnings"] = scan.warnings
+        elif codegraph_client is not None and handler:
+            # 只有图谱、没有项目源码根：无法解析调用点地址，留空不猜。
+            profile["downstream_unmapped"] = True
+            profile["downstream_checked"] = False
+            profile["downstream_warnings"] = ["downstream_project_root_missing"]
 
         profiles.append(profile)
 

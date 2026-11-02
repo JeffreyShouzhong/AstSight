@@ -11,7 +11,17 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts import RequirementDoc, TestCase
+from contracts import (
+    CaseLevel,
+    DataCatalog,
+    MockSemantic,
+    RequirementDoc,
+    RuleAuthority,
+    RuleSet,
+    RuleStatus,
+    TestCase,
+    Transport,
+)
 
 from .context import (
     context_documents,
@@ -29,9 +39,13 @@ from .draft import (
     case_fingerprint,
     to_test_case,
 )
+from ..persistence import sha256_json
 from .requirements import normalize_text
 
 _PATH_PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
+_MAX_MOCK_BINDINGS = 64
+_MAX_DEP_ID_LENGTH = 512
+_MAX_BRANCH_LENGTH = 128
 _ALLOWED_HEADERS = {
     "content-type",
     "accept",
@@ -549,6 +563,337 @@ def _check_request(
                 )
 
 
+def _check_mock_bindings(
+    draft_case: DraftCase,
+    *,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    """Mock 绑定进入执行会话，必须是可定位、非空的确定性字符串。"""
+    if len(draft_case.mock_bindings) > _MAX_MOCK_BINDINGS:
+        result.errors.append(
+            _issue(
+                "error",
+                "mock.too_many_bindings",
+                f"mock_bindings 数量 {len(draft_case.mock_bindings)} 超过上限 "
+                f"{_MAX_MOCK_BINDINGS}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    for dep_id, branch in draft_case.mock_bindings.items():
+        if not dep_id.strip() or len(dep_id) > _MAX_DEP_ID_LENGTH:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.dep_id_invalid",
+                    f"mock_bindings 的 dep_id 为空或过长: {dep_id[:80]!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if not branch.strip() or len(branch) > _MAX_BRANCH_LENGTH:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.branch_invalid",
+                    f"{dep_id[:80]!r} 的 branch 为空或过长: {branch[:80]!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+
+
+def _check_rule_refs(
+    draft_case: DraftCase,
+    *,
+    ruleset: RuleSet | None,
+    require_rules: bool,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    if require_rules and ruleset is None:
+        result.errors.append(
+            _issue(
+                "error",
+                "ruleset.missing",
+                "该流程要求提供 ruleset，但未加载规则库",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if require_rules and not draft_case.rule_refs:
+        result.errors.append(
+            _issue(
+                "error",
+                "case.rule_refs_missing",
+                "规则驱动流程的用例至少引用一条规则",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if not draft_case.rule_refs:
+        return
+    if ruleset is None:
+        result.warnings.append(
+            _issue(
+                "warning",
+                "ruleset.missing",
+                "未提供 ruleset，无法核对 rule_refs",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    index = ruleset.rule_index()
+    authorities: list[RuleAuthority] = []
+    for ref in draft_case.rule_refs:
+        rule = index.get(ref.rule_key)
+        if rule is None:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "rule.unknown",
+                    f"rule_key 不在规则库中: {ref.rule_key!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+            continue
+        authorities.append(rule.authority)
+        if rule.status is RuleStatus.DISPUTED:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "rule.disputed",
+                    f"规则存在未裁决冲突: {rule.rule_id} ({rule.rule_key})",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        elif rule.status is RuleStatus.UNGROUNDED:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "rule.ungrounded",
+                    f"规则无原文依据: {rule.rule_id} ({rule.rule_key})",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        elif rule.status is RuleStatus.DEPRECATED:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "rule.deprecated",
+                    f"规则已废弃: {rule.rule_id} ({rule.rule_key})",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    if authorities and all(
+        authority in {RuleAuthority.C, RuleAuthority.D} for authority in authorities
+    ):
+        result.errors.append(
+            _issue(
+                "error",
+                "rule.authority_insufficient",
+                "C/D 级规则不能作为用例的唯一依据",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+
+
+def _check_level_refs(
+    draft_case: DraftCase,
+    *,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    if draft_case.level is CaseLevel.BUSINESS:
+        if not draft_case.requirement_refs:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "case.requirement_refs_missing",
+                    "business 用例至少引用一条需求原文",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    else:
+        if not draft_case.change_refs:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "case.change_refs_missing",
+                    "code 用例至少引用一条变更来源",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+
+
+def _check_profile_alignment(
+    draft_case: DraftCase,
+    *,
+    profile: dict[str, Any],
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    profile_transport = str(profile.get("transport") or Transport.HTTP.value).lower()
+    if draft_case.transport is not Transport.HTTP:
+        result.errors.append(
+            _issue(
+                "error",
+                "transport.unsupported",
+                f"v1 只支持 http transport，草案为 {draft_case.transport.value}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    elif profile_transport and profile_transport != draft_case.transport.value:
+        result.errors.append(
+            _issue(
+                "error",
+                "transport.mismatch",
+                f"草案 transport={draft_case.transport.value} 与画像 "
+                f"{profile_transport} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    profile_role = str(profile.get("coverage_role") or "primary").lower()
+    if profile_role != draft_case.coverage_role.value:
+        result.errors.append(
+            _issue(
+                "error",
+                "coverage_role.mismatch",
+                f"草案 coverage_role={draft_case.coverage_role.value} 与画像 "
+                f"{profile_role} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+
+
+def _check_preconditions(
+    draft_case: DraftCase,
+    *,
+    data_catalog: DataCatalog | None,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    if not draft_case.preconditions:
+        return
+    if data_catalog is None:
+        result.warnings.append(
+            _issue(
+                "warning",
+                "data_catalog.missing",
+                "用例声明了前置数据状态，但未提供 data_catalog，执行阶段将标 blocked",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    known = data_catalog.state_index()
+    for item in draft_case.preconditions:
+        if item.state_key not in known:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "precondition.state_unknown",
+                    f"state_key 不在 data_catalog 中: {item.state_key!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+
+
+def _check_mock_semantics(
+    draft_case: DraftCase,
+    *,
+    profile: dict[str, Any],
+    mock_semantic: MockSemantic | None,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    if mock_semantic is None or not draft_case.mock_bindings:
+        return
+    deps = mock_semantic.dep_index()
+    known_profile_deps = {
+        str(dep.get("dep_id"))
+        for dep in profile.get("downstream_deps") or []
+        if dep.get("dep_id")
+    }
+    for dep_id, branch in draft_case.mock_bindings.items():
+        if dep_id not in deps:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.dep_unknown",
+                    f"mock_bindings 的 dep_id 不在 mock_semantics 中: {dep_id!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        elif known_profile_deps and dep_id not in known_profile_deps:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.dep_not_in_profile",
+                    f"dep_id 不属于当前接口画像的下游依赖: {dep_id!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        elif branch not in {item.branch for item in deps[dep_id].branches}:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.branch_unknown",
+                    f"{dep_id!r} 不存在语义分支 {branch!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+
+
 def _check_requirement_refs(
     draft_case: DraftCase,
     *,
@@ -659,6 +1004,10 @@ def validate_draft(
     *,
     project: str | Any,
     check_doc_hashes: bool = True,
+    ruleset: RuleSet | None = None,
+    data_catalog: DataCatalog | None = None,
+    mock_semantic: MockSemantic | None = None,
+    require_rules: bool = False,
 ) -> ValidationResult:
     result = ValidationResult(
         context_id=str(context.get("context_id") or ""),
@@ -683,6 +1032,25 @@ def validate_draft(
                 f"不支持的草案 schema_version={draft.schema_version}",
             )
         )
+    if ruleset is not None:
+        if draft.ruleset_id and draft.ruleset_id != ruleset.ruleset_id:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "draft.ruleset_id_mismatch",
+                    f"草案 ruleset_id={draft.ruleset_id!r} 与规则库 "
+                    f"{ruleset.ruleset_id!r} 不一致",
+                )
+            )
+        expected_hash = sha256_json(ruleset.model_dump(mode="json"))
+        if draft.ruleset_hash and draft.ruleset_hash != expected_hash:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "draft.ruleset_hash_mismatch",
+                    "草案 ruleset_hash 与当前规则库不一致，请重新生成草案",
+                )
+            )
 
     explicit_scope = set(draft.scope_docs)
     for doc in explicit_scope:
@@ -724,6 +1092,37 @@ def validate_draft(
                     path=pseudo_path,
                 )
             )
+        _check_mock_bindings(
+            draft_case,
+            case_key=key,
+            endpoint=endpoint_raw,
+            path=pseudo_path,
+            result=result,
+        )
+        _check_level_refs(
+            draft_case,
+            case_key=key,
+            endpoint=endpoint_raw,
+            path=pseudo_path,
+            result=result,
+        )
+        _check_rule_refs(
+            draft_case,
+            ruleset=ruleset,
+            require_rules=require_rules,
+            case_key=key,
+            endpoint=endpoint_raw,
+            path=pseudo_path,
+            result=result,
+        )
+        _check_preconditions(
+            draft_case,
+            data_catalog=data_catalog,
+            case_key=key,
+            endpoint=endpoint_raw,
+            path=pseudo_path,
+            result=result,
+        )
 
         profile, exact = find_profile(context, endpoint_raw)
         if profile is None:
@@ -792,12 +1191,30 @@ def validate_draft(
         canonical_draft = draft_case.model_copy(
             update={"endpoint": canonical_endpoint}
         )
+        _check_profile_alignment(
+            canonical_draft,
+            profile=profile,
+            case_key=key,
+            endpoint=canonical_endpoint,
+            path=pseudo_path,
+            result=result,
+        )
+        _check_mock_semantics(
+            canonical_draft,
+            profile=profile,
+            mock_semantic=mock_semantic,
+            case_key=key,
+            endpoint=canonical_endpoint,
+            path=pseudo_path,
+            result=result,
+        )
         case = to_test_case(
             canonical_draft,
             method=str(profile["method"]),
             path=str(profile["path"]),
             doc_versions=result.doc_versions,
             generator=draft.generator,
+            ruleset=ruleset,
         )
         _check_requirement_refs(
             canonical_draft,

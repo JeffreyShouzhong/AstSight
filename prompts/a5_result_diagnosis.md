@@ -60,7 +60,7 @@
 对每个失败用例，输出一个归因结论，回答四个问题：
 
 1. **现象**：预期 vs 实际的差异是什么？（用一句话说清断言差在哪）
-2. **最可能根因**：从下列四类中选出**最可能的一类**，并给出判断依据：
+2. **最可能根因**：从下列七类中选出**最可能的一类**，并给出判断依据：
 
    | 根因类别 | 归属 | 典型表现 | 判断线索 |
    |---|---|---|---|
@@ -69,6 +69,8 @@
    | `data_error`（造数错误） | 框架 | 前置状态没造对，且 data_plan 能力不足以构造该状态 | `arrange.pre_state` 与实际数据状态不一致，或 data_plan 不支持该状态（造数能力缺口） |
    | `mock_error`（Mock 语义错误） | 框架 | 语义分支缺失或回放机制不符 | 需求所需语义分支在 `downstream_deps.semantic_branches` 中不存在，或下游实际未按绑定回放 |
    | `change_induced`（变更引入） | 用户 | 改代码导致行为变化 | `change_set` 命中了本接口的调用链/字段 |
+   | `adapter_error`（transport 适配错误） | 框架 | gRPC descriptor 加载失败、Dubbo sidecar 启动/版本/stdio 错误、回退失败 | 错误来自 `grpc_descriptor` / `dubbo_sidecar` 适配层，而非 SUT 业务响应；gRPC/Dubbo 错误未归一或被误判为 HTTP |
+   | `env_error`（环境不满足） | 框架 | `No provider available`、注册中心不可达、Dubbo Mock agent 未激活/心跳缺失 | 错误发生在调用链建立之前或 Mock agent 自检失败，SUT 业务逻辑尚未执行 |
 
 3. **证据链**：列出支撑该根因的 2-4 条证据，每条标注证据来源（断言比对 / trace / downstream_calls / change_set / history）。
 4. **验证建议**：给出 1 条最小成本的验证动作（重跑造数、修正 Mock 分支、复查需求 quote、回看变更 diff 等），**不得**给出需要重新设计需求的建议。
@@ -100,7 +102,7 @@
 |---|---|---|
 | `case_id` | 用例编号 | 必须取自输入 `case.id`，不得编造 |
 | `phenomenon` | 现象 | 一句话，含「预期 X vs 实际 Y」 |
-| `root_cause` | 根因类别 | 仅限五值：`code_defect` / `case_error` / `data_error` / `mock_error` / `change_induced` |
+| `root_cause` | 根因类别 | 仅限七值：`code_defect` / `case_error` / `data_error` / `mock_error` / `change_induced` / `adapter_error` / `env_error` |
 | `action_target` | 后续动作归属 | 仅限两值：`user`（反馈给用户改进）/ `framework`（回流框架侧升级），路由规则见下表 |
 | `confidence` | 置信度 | 仅限三值：`high` / `medium` / `low`；证据不足时**必须**用 `low`，不得硬撑 |
 | `evidence` | 证据链 | 每条 `fact` 描述事实、`from` 标注来源字段名，来源必须是输入里真实存在的字段 |
@@ -115,6 +117,8 @@
 | `change_induced` | `user` | 变更导致的既有行为变化，反馈用户确认是否预期 |
 | `data_error` | `framework` | 造数能力不足以构造所需状态，回流框架升级造数/数据溯源能力 |
 | `mock_error` | `framework` | Mock 语义模型覆盖不足或分支回放不符，回流框架升级 Mock 语义模型 |
+| `adapter_error` | `framework` | gRPC descriptor / Dubbo sidecar / 回退适配失败，回流框架升级 transport 适配能力；不得算作 SUT 缺陷 |
+| `env_error` | `framework` | 测试环境不满足（provider 不可用、注册中心不可达、agent 未激活）；用例 `blocked`，不得算作 SUT 缺陷 |
 
 > 判定要点：**根因是「用户资产写错」→ `user`；根因是「框架能力不足以支撑正确资产」→ `framework`。**
 > 边界情形：`mock_error` 若纯粹是「用户把用例里的 `mock_binding` 绑错分支」（而非框架语义模型缺分支），应判 `case_error` → `user`，而非 `mock_error` → `framework`。区分标准：语义分支**已存在但绑错**=用户问题；语义分支**本身缺失或回放机制不符**=框架问题。
@@ -135,7 +139,7 @@
 
 - [ ] 是否只输出 JSON（对象或数组），无任何额外文字？
 - [ ] `case_id` / 证据来源字段名是否都能在输入里找到对应？
-- [ ] `root_cause` 是否只用五类合法取值？
+- [ ] `root_cause` 是否只用七类合法取值？
 - [ ] `action_target` 是否与根因 → 归属路由表一致（用户资产写错→user，框架能力不足→framework）？
 - [ ] `mock_error`/`case_error` 是否按「分支缺失=框架 / 绑错=用户」正确区分？
 - [ ] `confidence` 是否与证据强度匹配（证据不足必 low）？

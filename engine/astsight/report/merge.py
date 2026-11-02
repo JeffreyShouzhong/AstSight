@@ -28,14 +28,21 @@ def build_report(
     codegen: dict,
     gate_config: dict | None = None,
     case_store: dict | None = None,
+    mock_evidence: dict | None = None,
+    data_plan: dict | None = None,
+    rules: dict | None = None,
 ) -> dict:
     gate_config = gate_config or {}
     cases_by_id = {c.id: c for c in cases}
 
-    by_endpoint: dict[str, dict] = defaultdict(lambda: {"total": 0, "passed": 0, "failed": 0})
-    by_category: dict[str, dict] = defaultdict(lambda: {"total": 0, "passed": 0, "failed": 0})
+    def _bucket() -> dict:
+        return {"total": 0, "passed": 0, "failed": 0, "blocked": 0}
+
+    by_endpoint: dict[str, dict] = defaultdict(_bucket)
+    by_category: dict[str, dict] = defaultdict(_bucket)
     by_reason: Counter = Counter()
     failures: list[dict] = []
+    blocked_records: list[dict] = []
     flaky: list[str] = []
 
     first_pass = 0
@@ -43,6 +50,7 @@ def build_report(
     recovered = 0
     sut_defects = 0
     unknown = 0
+    blocked = 0
 
     executed_ids = {r["case_id"] for r in records if r.get("case_id")}
 
@@ -54,13 +62,28 @@ def build_report(
         diagnosis = record.get("diagnosis") or {}
         first_ok = bool(attempts) and attempts[0].get("status") == "pass"
         final_ok = record.get("outcome") == "passed"
+        is_blocked = record.get("outcome") == "blocked"
 
         by_endpoint[endpoint]["total"] += 1
         by_category[category]["total"] += 1
-        by_endpoint[endpoint]["passed" if final_ok else "failed"] += 1
-        by_category[category]["passed" if final_ok else "failed"] += 1
+        bucket = "passed" if final_ok else ("blocked" if is_blocked else "failed")
+        by_endpoint[endpoint][bucket] += 1
+        by_category[category][bucket] += 1
         first_pass += int(first_ok)
         final_pass += int(final_ok)
+        if is_blocked:
+            # 造数/DB 未就绪是用例未真正执行，不计入通过率分母，也不伪装为失败。
+            blocked += 1
+            blocked_records.append(
+                {
+                    "case_id": record.get("case_id"),
+                    "endpoint": endpoint,
+                    "category": category,
+                    "reason": diagnosis.get("reason") or "data_unavailable",
+                    "message": (record.get("message") or "")[:2000],
+                }
+            )
+            continue
         if not first_ok and final_ok:
             recovered += 1
             if diagnosis.get("reason") == "env_flake":
@@ -93,7 +116,8 @@ def build_report(
 
     total = len(cases)
     executed = len(records)
-    pass_rate = _rate(final_pass, executed)
+    runnable = executed - blocked
+    pass_rate = _rate(final_pass, runnable)
 
     contract_incomplete = [
         p["endpoint"] for p in profiles if p.get("contract_incomplete")
@@ -120,7 +144,11 @@ def build_report(
         blockers.append("存在未映射范围（unmapped）：变更符号/路由/契约缺口未闭合")
     if executed == 0:
         warnings.append("未执行用例：未提供 base_url 或执行被跳过")
-    if executed and pass_rate < float(gate_config.get("min_pass_rate", 0.95)):
+    if blocked:
+        blockers.append(
+            f"存在 {blocked} 条用例因造数前置未就绪被阻断（blocked/data_unavailable）"
+        )
+    if runnable and pass_rate < float(gate_config.get("min_pass_rate", 0.95)):
         warnings.append(f"最终通过率 {pass_rate:.2%} 低于 {gate_config.get('min_pass_rate', 0.95):.0%}")
     if case_store:
         blockers.extend(case_store.get("gate_blockers") or [])
@@ -134,6 +162,63 @@ def build_report(
                 f"用例库存在 {case_store['summary']['deprecated']} 条 deprecated 用例，不参与执行"
             )
 
+    mock = mock_evidence or {
+        "checked": False,
+        "reason": "mock_evidence_not_configured",
+    }
+    if mock.get("checked"):
+        blocking = int(mock.get("blocking_errors") or 0)
+        if blocking:
+            blockers.append(
+                f"Mock 调用存在 {blocking} 个阻断类错误"
+                "（unknown/ambiguous/unbound/branch_missing）"
+            )
+        by_result = mock.get("by_result") or {}
+        late = int(by_result.get("late") or 0)
+        if late:
+            warnings.append(
+                f"Mock 晚到/过期调用 {late} 次：drain 窗口不足或 SUT 存在异步调用（degraded）"
+            )
+        if mock.get("invalid_lines"):
+            warnings.append(
+                f"mock_calls.jsonl 有 {mock['invalid_lines']} 行无法解析（degraded）"
+            )
+        if mock.get("unattributed_calls"):
+            warnings.append(
+                f"Mock 有 {mock['unattributed_calls']} 次调用无法归因到用例"
+            )
+        unused = int(mock.get("unused_binding_count") or 0)
+        if unused:
+            blockers.append(
+                f"Mock 有 {unused} 个会话绑定的下游依赖零调用（mock_not_used）"
+            )
+        if mock.get("sessions_reason"):
+            warnings.append(
+                f"Mock 会话绑定未校验：{mock['sessions_reason']}（degraded）"
+            )
+        elif not mock.get("sessions_checked"):
+            warnings.append(
+                "Mock 会话绑定未校验：未提供会话历史（degraded）"
+            )
+        if mock.get("sessions_missing"):
+            warnings.append(
+                f"Mock 证据中有 {mock['sessions_missing']} 个会话不在会话历史中，"
+                "mock_not_used 校验不完整（degraded）"
+            )
+    elif mock.get("reason") not in (None, "mock_evidence_not_configured"):
+        warnings.append(f"Mock 证据未读取：{mock.get('reason')}")
+
+    plan = mock.get("plan") or {}
+    if plan:
+        for item in plan.get("warnings") or []:
+            warnings.append(f"Mock 计划告警：{item}")
+        unsupported = int(plan.get("unsupported_count") or 0)
+        if unsupported:
+            warnings.append(
+                f"Mock 计划有 {unsupported} 个下游无法注入（unsupported），"
+                "相关用例可能未真正隔离"
+            )
+
     route_health = (route_audit or {}).get("health") or {}
     if route_health.get("status") == "degraded":
         reasons = "，".join(route_health.get("reasons") or [])
@@ -142,6 +227,10 @@ def build_report(
             + (f"：{reasons}" if reasons else "")
             + "；受影响接口可能被少报"
         )
+
+    if rules:
+        blockers.extend(rules.get("gate_blockers") or [])
+        warnings.extend(rules.get("gate_warnings") or [])
 
     if warnings:
         # 通过率不是门禁的唯一依据，但必须显式暴露
@@ -161,13 +250,14 @@ def build_report(
             "executed_cases": executed,
             "first_pass": first_pass,
             "final_pass": final_pass,
-            "first_pass_rate": _rate(first_pass, executed),
+            "first_pass_rate": _rate(first_pass, runnable),
             "final_pass_rate": pass_rate,
             "sut_defects": sut_defects,
             "recovered_by_retry": recovered,
             "unknown_attribution": unknown,
             "flaky_candidates": flaky,
             "unexecuted_cases": len(unexecuted),
+            "blocked_cases": blocked,
         },
         "gate": {
             "verdict": verdict,
@@ -186,6 +276,10 @@ def build_report(
             "changed_endpoints_without_cases": endpoints_without_cases,
         },
         "case_store": case_store,
+        "mock": mock,
+        "data_plan": data_plan,
+        "rules": rules,
+        "blocked": blocked_records,
         "routes": route_audit,
         "unmapped": {
             **unmapped,
@@ -232,6 +326,7 @@ def render_markdown(report: dict) -> str:
     lines.append(f"| 真实缺陷 | {summary['sut_defects']} |")
     lines.append(f"| 重试恢复 | {summary['recovered_by_retry']} |")
     lines.append(f"| 未执行 | {summary['unexecuted_cases']} |")
+    lines.append(f"| 数据阻断（blocked） | {summary.get('blocked_cases', 0)} |")
     if report.get("case_store"):
         store = report["case_store"]
         coverage = store.get("requirement_coverage") or {}
@@ -330,6 +425,188 @@ def render_markdown(report: dict) -> str:
                     f"by {item.get('reviewer')}"
                 )
             lines.append("</details>")
+        lines.append("")
+
+    rules = report.get("rules") or {}
+    if rules:
+        lines.append("## 规则与覆盖")
+        lines.append("")
+        if not rules.get("checked"):
+            lines.append(f"- 规则库未校验：`{rules.get('reason')}`")
+            if rules.get("error"):
+                lines.append(f"- 错误：`{str(rules['error'])[:500]}`")
+            lines.append("")
+        else:
+            counts = rules.get("counts") or {}
+            business = (rules.get("coverage") or {}).get("business") or {}
+            contract = (rules.get("coverage") or {}).get("contract") or {}
+            br_stats = business.get("stats") or {}
+            cr_stats = contract.get("stats") or {}
+            lines.append(
+                f"- 规则库：`{rules.get('ruleset_id') or '-'}` v{rules.get('version')} "
+                f"hash `{str(rules.get('hash') or '')[:12]}`"
+            )
+            if rules.get("path"):
+                lines.append(f"- 规则文件：`{rules.get('path')}`")
+            lines.append(
+                f"- BR：{counts.get('business_rules', 0)} 条，"
+                f"覆盖 {br_stats.get('covered', 0)}/{br_stats.get('active', 0)}"
+                f" ({float(br_stats.get('ratio') or 0):.1%})"
+            )
+            lines.append(
+                f"- CR：{counts.get('contract_rules', 0)} 条，"
+                f"覆盖 {cr_stats.get('covered', 0)}/{cr_stats.get('active', 0)}"
+                f" ({float(cr_stats.get('ratio') or 0):.1%})"
+            )
+            lines.append(
+                f"- 待确认：问题 {len(rules.get('questions') or [])} / "
+                f"缺口 {len(rules.get('gaps') or [])} / "
+                f"冲突 {len(rules.get('conflicts') or [])}"
+                f"（未裁决 {len(rules.get('unresolved_conflicts') or [])}）"
+            )
+            drift = rules.get("rule_drift") or {}
+            lines.append(
+                f"- 规则漂移：{'有' if drift.get('changed') else '无'}"
+                f"（store `{str(drift.get('store_hash') or '')[:12] or '-'}` → "
+                f"current `{str(drift.get('current_hash') or '')[:12]}`）"
+            )
+            orphaned = rules.get("orphaned_rule_keys") or []
+            if orphaned:
+                lines.append(f"- 孤立规则引用：{len(orphaned)}（用例引用的规则已不存在）")
+            stale_cases = rules.get("stale_rule_cases") or []
+            if stale_cases:
+                lines.append(f"- 引用非 active 规则的用例：{len(stale_cases)}")
+            uncovered = [
+                item
+                for item in (business.get("rules") or [])
+                if not item.get("covered") and item.get("status") == "active"
+            ]
+            if uncovered:
+                lines.append("")
+                lines.append("<details><summary>未覆盖的 BR 规则</summary>")
+                for item in uncovered[:50]:
+                    lines.append(
+                        f"- `{item.get('rule_id')}` {item.get('rule_key')} "
+                        f"({item.get('authority')})"
+                    )
+                lines.append("</details>")
+            lines.append("")
+
+    mock = report.get("mock") or {}
+    if mock.get("checked"):
+        lines.append("## 下游 Mock")
+        lines.append("")
+        lines.append(
+            f"- 调用 {mock.get('calls', 0)} 次 / 会话 {mock.get('sessions', 0)} 个 / "
+            f"无法归因 {mock.get('unattributed_calls', 0)} 次"
+        )
+        by_result = mock.get("by_result") or {}
+        lines.append(
+            "- 结果：" + "，".join(f"{key}={value}" for key, value in by_result.items())
+        )
+        if mock.get("sessions_checked"):
+            lines.append(
+                f"- 会话绑定：{mock.get('session_records', 0)} 个会话 / "
+                f"未命中 `dep_id` {mock.get('unused_binding_count', 0)} 个"
+            )
+        if mock.get("sessions_missing"):
+            lines.append(
+                f"- 会话历史缺失：{mock['sessions_missing']} 个证据会话未出现在历史中"
+            )
+        if mock.get("degraded"):
+            lines.append("- 状态：**degraded**（存在晚到、阻断类错误或损坏证据）")
+        unused = mock.get("unused_bindings") or []
+        if unused:
+            lines.append("")
+            lines.append(
+                f"<details><summary>绑定但零调用（{mock.get('unused_binding_count', 0)}）</summary>"
+            )
+            for item in unused:
+                lines.append(
+                    f"- `{item.get('case_id') or '-'}` / `{item.get('dep_id') or '-'}` "
+                    f"→ `{item.get('branch') or '-'}`（session `{item.get('session_id')}`）"
+                )
+            lines.append("</details>")
+        late_calls = mock.get("late_calls") or []
+        if late_calls:
+            lines.append("")
+            lines.append(f"<details><summary>晚到调用（{len(late_calls)}）</summary>")
+            for call in late_calls:
+                lines.append(
+                    f"- `{call.get('case_id') or '-'}` / `{call.get('dep_id') or '-'}` "
+                    f"`{call.get('path')}`：{call.get('error') or '-'} at {call.get('at')}"
+                )
+            lines.append("</details>")
+        errors = mock.get("errors") or []
+        if errors:
+            lines.append("")
+            lines.append(f"<details><summary>阻断类调用（{len(errors)}）</summary>")
+            for call in errors:
+                lines.append(
+                    f"- `{call.get('case_id') or '-'}` / `{call.get('dep_id') or '-'}` "
+                    f"`{call.get('path')}`：`{call.get('result')}` "
+                    f"{call.get('error') or '-'}"
+                )
+            lines.append("</details>")
+        lines.append("")
+    elif mock.get("reason") not in (None, "mock_evidence_not_configured"):
+        lines.append("## 下游 Mock")
+        lines.append("")
+        lines.append(f"- 证据未读取：`{mock.get('reason')}`")
+        lines.append("")
+
+    plan = mock.get("plan") or {}
+    if plan:
+        lines.append("## 下游 Mock 计划")
+        lines.append("")
+        lines.append(
+            f"- 模式：`{plan.get('mode')}` / SUT `{plan.get('sut_id')}` "
+            f"/ namespace `{plan.get('namespace')}`"
+        )
+        if plan.get("plan"):
+            lines.append(f"- 计划文件：`{plan.get('plan')}`")
+        if plan.get("endpoint"):
+            lines.append(f"- 内嵌地址：`{plan.get('endpoint')}`（不含 token）")
+        lines.append(
+            f"- 路由 {plan.get('route_count', 0)} 个 / 注入 {plan.get('injection_count', 0)} 个"
+            f" / unsupported {plan.get('unsupported_count', 0)} 个"
+        )
+        if plan.get("warnings"):
+            lines.append("")
+            lines.append("<details><summary>计划告警</summary>")
+            for item in plan["warnings"]:
+                lines.append(f"- `{item}`")
+            lines.append("</details>")
+        lines.append("")
+
+    data_plan = report.get("data_plan") or {}
+    if data_plan:
+        lines.append("## 造数计划")
+        lines.append("")
+        lines.append(f"- 运行域：`{data_plan.get('run_scope') or '-'}`")
+        lines.append(
+            f"- 计划数：{data_plan.get('plans', 0)} / "
+            f"数据库：{'已配置' if data_plan.get('database_url_configured') else '未配置'}"
+        )
+        if data_plan.get("path"):
+            lines.append(f"- 计划文件：`{data_plan.get('path')}`")
+        missing = data_plan.get("missing_plans") or []
+        if missing:
+            lines.append(
+                f"- 缺少造数计划的前置用例：{len(missing)}（"
+                + ", ".join(str(item) for item in missing[:20]) + "）"
+            )
+        lines.append("")
+
+    blocked = report.get("blocked") or []
+    if blocked:
+        lines.append("## 数据阻断（blocked）")
+        lines.append("")
+        for item in blocked[:50]:
+            lines.append(
+                f"- {item.get('case_id') or '-'} `{item.get('endpoint')}`："
+                f"`{item.get('reason')}` {item.get('message') or ''}"
+            )
         lines.append("")
 
     lines.append("## 覆盖边界（unmapped）")

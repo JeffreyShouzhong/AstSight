@@ -9,12 +9,14 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
-from contracts import TestCase
+from contracts import DataPlanBundle, TestCase
 
 from ..artifacts import slugify, utc_now
 
@@ -24,7 +26,11 @@ _CONFTEST = '''"""AstSight 生成物：HTTP 客户端与用例隔离。
 
 手工修改请放在 MANUAL BEGIN/END 之间——二次生成会保留该段。
 """
+import json
 import os
+import sqlite3
+import uuid
+from contextlib import contextmanager
 
 import httpx
 import pytest
@@ -32,6 +38,242 @@ import pytest
 BASE_URL = os.environ.get("ASTSIGHT_BASE_URL", "http://127.0.0.1:8000")
 RESET_URL = os.environ.get("ASTSIGHT_RESET_URL", "")
 TIMEOUT = float(os.environ.get("ASTSIGHT_TIMEOUT", "10"))
+
+MOCK_ADMIN_URL = os.environ.get("ASTSIGHT_MOCK_ADMIN_URL", "").rstrip("/")
+MOCK_TOKEN = os.environ.get("ASTSIGHT_MOCK_TOKEN", "")
+MOCK_NAMESPACE = os.environ.get("ASTSIGHT_MOCK_NAMESPACE", "")
+MOCK_RUN_SCOPE = os.environ.get("ASTSIGHT_MOCK_RUN_SCOPE", "")
+MOCK_DRAIN_MS = int(os.environ.get("ASTSIGHT_MOCK_DRAIN_MS", "200"))
+MOCK_TTL_MS = int(os.environ.get("ASTSIGHT_MOCK_TTL_MS", "60000"))
+
+DB_URL = os.environ.get("ASTSIGHT_DB_URL", "")
+DATA_PLAN_PATH = os.environ.get(
+    "ASTSIGHT_DATA_PLAN_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_plan.json"),
+)
+
+_RESOLVED_NAMESPACE = None
+_DATA_PLANS = None
+
+
+def _mock_headers():
+    return {"Authorization": f"Bearer {MOCK_TOKEN}"} if MOCK_TOKEN else {}
+
+
+def _mock_namespace():
+    global _RESOLVED_NAMESPACE
+    if MOCK_NAMESPACE:
+        return MOCK_NAMESPACE
+    if _RESOLVED_NAMESPACE is None:
+        health = httpx.get(
+            f"{MOCK_ADMIN_URL}/_admin/health", headers=_mock_headers(), timeout=TIMEOUT
+        )
+        health.raise_for_status()
+        _RESOLVED_NAMESPACE = str(health.json()["namespace"])
+    return _RESOLVED_NAMESPACE
+
+
+@contextmanager
+def _open_mock_session(case_id, bindings):
+    """用例级 Mock 会话：创建 → 执行 → drain → 关闭。
+
+    未配置 ASTSIGHT_MOCK_ADMIN_URL 时退化为 no-op，保持纯接口用例可独立运行。
+    drain 超时会抛错，避免在途调用落到下一个用例。
+    """
+    if not MOCK_ADMIN_URL:
+        yield None
+        return
+    session_id = "astsight-" + uuid.uuid4().hex
+    payload = {
+        "session_id": session_id,
+        "namespace": _mock_namespace(),
+        "case_id": case_id,
+        "run_scope": MOCK_RUN_SCOPE,
+        "bindings": [
+            {"dep_id": str(dep_id), "branch": str(branch)}
+            for dep_id, branch in bindings.items()
+        ],
+        "ttl_ms": MOCK_TTL_MS,
+    }
+    create = httpx.post(
+        f"{MOCK_ADMIN_URL}/_admin/sessions",
+        headers=_mock_headers(),
+        json=payload,
+        timeout=TIMEOUT,
+    )
+    if create.status_code != 200:
+        raise RuntimeError(
+            f"mock_session_create_failed: {create.status_code} {create.text[:500]}"
+        )
+    primary = None
+    try:
+        yield session_id
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        close_error = None
+        try:
+            drain = httpx.post(
+                f"{MOCK_ADMIN_URL}/_admin/sessions/{session_id}/drain",
+                headers=_mock_headers(),
+                json={"timeout_ms": MOCK_DRAIN_MS},
+                timeout=TIMEOUT,
+            )
+            if drain.status_code != 200:
+                close_error = f"drain status={drain.status_code} {drain.text[:500]}"
+            elif not drain.json().get("drained"):
+                close_error = f"mock_session_not_drained: {drain.text[:500]}"
+        except httpx.HTTPError as exc:
+            close_error = f"mock_session_drain_failed: {exc}"
+        try:
+            delete = httpx.delete(
+                f"{MOCK_ADMIN_URL}/_admin/sessions/{session_id}",
+                headers=_mock_headers(),
+                timeout=TIMEOUT,
+            )
+            if delete.status_code != 200 and close_error is None:
+                close_error = f"delete status={delete.status_code} {delete.text[:500]}"
+        except httpx.HTTPError as exc:
+            if close_error is None:
+                close_error = f"mock_session_close_failed: {exc}"
+        # 用例本身失败时保留原始异常，不让清理错误掩盖真正的断言结果。
+        if close_error is not None and primary is None:
+            raise RuntimeError(close_error)
+
+
+def _load_data_plans(path):
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"data_plan_invalid: {exc}") from exc
+    plans = payload.get("plans") if isinstance(payload, dict) else payload
+    index = {}
+    for plan in plans or []:
+        if not isinstance(plan, dict):
+            continue
+        for key in (plan.get("case_id"), plan.get("case_key")):
+            if key:
+                index[str(key)] = plan
+    return index
+
+
+def _data_plans():
+    global _DATA_PLANS
+    if _DATA_PLANS is None:
+        _DATA_PLANS = _load_data_plans(DATA_PLAN_PATH)
+    return _DATA_PLANS
+
+
+def _sqlite_path(db_url):
+    value = str(db_url or "")
+    if not value.startswith("sqlite:///"):
+        raise RuntimeError(f"unsupported_dialect: {value.split(':', 1)[0]!r}")
+    raw = value[len("sqlite:///"):]
+    if not raw or raw == ":memory:":
+        raise RuntimeError("unsupported_dialect: sqlite file path required")
+    return raw
+
+
+def _check_data_statement(statement, kind):
+    if not isinstance(statement, dict) or statement.get("kind") != kind:
+        raise RuntimeError(f"data_plan_invalid: expected {kind} statement")
+    sql = str(statement.get("sql") or "")
+    prefix = "INSERT INTO " if kind == "insert" else "DELETE FROM "
+    if not sql.upper().startswith(prefix) or "?" not in sql:
+        raise RuntimeError(f"data_plan_invalid: non-parameterized {kind}")
+    if not isinstance(statement.get("params"), list):
+        raise RuntimeError("data_plan_invalid: params must be list")
+
+
+@pytest.fixture()
+def data_state(request):
+    """用例级造数：请求前 apply，用例结束后 teardown。
+
+    未声明前置状态的用例不受影响；声明了 preconditions 却没有 plan 或
+    数据库连接时显式 skip 为 data_unavailable，不伪装成通过。
+    """
+    marker = request.node.get_closest_marker("astsight_data")
+    if marker is None:
+        yield {"status": "not_required", "applied": 0, "deleted": 0}
+        return
+    case_id = str(marker.args[0]) if marker.args else ""
+    requires_data = bool(marker.kwargs.get("requires_data"))
+    plan = _data_plans().get(case_id)
+    record = {
+        "case_id": case_id,
+        "status": "not_required",
+        "applied": 0,
+        "deleted": 0,
+    }
+    if plan is None:
+        if requires_data:
+            pytest.skip(
+                "data_unavailable: case declares preconditions but no data plan "
+                f"was found for {case_id}"
+            )
+        yield record
+        return
+    if not DB_URL:
+        pytest.skip(
+            "data_unavailable: ASTSIGHT_DB_URL is not configured; "
+            f"data plan for {case_id} was not applied"
+        )
+
+    conn = None
+    try:
+        db_path = _sqlite_path(DB_URL)
+        inserts = list(plan.get("statements") or [])
+        teardown = plan.get("teardown")
+        if not isinstance(teardown, list):
+            raise RuntimeError("data_plan_invalid: teardown statements missing")
+        for statement in inserts:
+            _check_data_statement(statement, "insert")
+        for statement in teardown:
+            _check_data_statement(statement, "delete")
+        if not os.path.isfile(db_path):
+            raise RuntimeError(f"sqlite database not found: {db_path}")
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        with conn:
+            for statement in inserts:
+                conn.execute(statement["sql"], statement["params"])
+                record["applied"] += 1
+    except Exception as exc:
+        if conn is not None:
+            conn.close()
+        pytest.skip(f"data_unavailable: {exc}")
+
+    record["status"] = "applied"
+    primary = None
+    try:
+        yield record
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        close_error = None
+        try:
+            with conn:
+                for statement in reversed(teardown):
+                    conn.execute(statement["sql"], statement["params"])
+                    record["deleted"] += 1
+        except BaseException as exc:
+            close_error = exc
+        finally:
+            conn.close()
+        if close_error is not None and primary is None:
+            raise RuntimeError(f"data_teardown_failed: {close_error}")
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "astsight_data(case_id, requires_data=False): 用例级造数计划绑定",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -51,6 +293,11 @@ def client(base_url: str):
         resp.raise_for_status()
     with httpx.Client(base_url=base_url, timeout=TIMEOUT) as http:
         yield http
+
+
+@pytest.fixture()
+def mock_session():
+    return _open_mock_session
 
 
 # ASTSIGHT MANUAL BEGIN
@@ -134,7 +381,7 @@ def _assert_line(assertion, case: TestCase) -> str:
     return f"        # unsupported assertion: {kind}/{op}"
 
 
-def _case_function(case: TestCase) -> str:
+def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
     name = f"test_{case.id.replace('-', '_').lower()}_{case.category}"
     path = _render_path(case.path, case.path_params)
     request_args = [repr(case.method), repr(path)]
@@ -145,22 +392,37 @@ def _case_function(case: TestCase) -> str:
     if case.body is not None:
         request_args.append(f"json={case.body!r}")
 
-    lines = [
-        f"    def {name}(self, client):",
-        f'        """case={case.id} endpoint={case.endpoint} category={case.category} '
-        f'source={case.source}"""',
-        f"        resp = client.request({', '.join(request_args)})",
-    ]
+    bindings = dict(sorted(case.mock_bindings.items()))
+    requires_data = bool(case.preconditions)
+    lines: list[str] = []
+    if requires_data or has_data_plan:
+        # 有前置状态或已生成 plan 的用例必须走 data_state fixture：
+        # 缺 DB/plan 时它会显式 skip 为 data_unavailable，而不是静默通过。
+        lines.append(
+            f"    @pytest.mark.astsight_data({case.id!r}, "
+            f"requires_data={requires_data!r})"
+        )
+    lines.extend(
+        [
+            f"    def {name}(self, client, mock_session, data_state):",
+            f'        """case={case.id} endpoint={case.endpoint} category={case.category} '
+            f'source={case.source}"""',
+            # 未配置 Mock 时 fixture 是 no-op；配置后每个用例都有独立会话与证据。
+            f"        with mock_session({case.id!r}, {bindings!r}):",
+        ]
+    )
     # 先判状态码再解析 body：服务返回 500/非 JSON 时，失败信息应指向真正的
     # 问题（状态码），而不是被 JSONDecodeError 掩盖成一条无上下文的异常。
+    inner = [f"        resp = client.request({', '.join(request_args)})"]
     body_asserts = [a for a in case.asserts if a.kind == "body_field"]
     for assertion in case.asserts:
         if assertion.kind != "body_field":
-            lines.append(_assert_line(assertion, case))
+            inner.append(_assert_line(assertion, case))
     if body_asserts:
-        lines.append("        body = resp.json()")
+        inner.append("        body = resp.json()")
         for assertion in body_asserts:
-            lines.append(_assert_line(assertion, case))
+            inner.append(_assert_line(assertion, case))
+    lines.extend("    " + line for line in inner)
     return "\n".join(lines)
 
 
@@ -182,17 +444,41 @@ def _manual_block(existing: str) -> str:
     return match.group(1).strip("\n") if match else ""
 
 
+def _plan_index(bundle: DataPlanBundle | None) -> dict[str, Any]:
+    """case_id / case_key → DataPlan；两者都缺失的 plan 不参与匹配。"""
+    index: dict[str, Any] = {}
+    if bundle is None:
+        return index
+    for plan in bundle.plans:
+        for key in (plan.case_id, plan.case_key):
+            if key:
+                index.setdefault(str(key), plan)
+    return index
+
+
+def _case_plan(
+    case: TestCase, index: dict[str, Any]
+) -> Any | None:
+    return index.get(case.id) or index.get(getattr(case, "case_key", "") or "")
+
+
 def generate_pytest(
     cases: list[TestCase],
     output_dir: str | Path,
     *,
     generated_at: str | None = None,
+    data_bundle: DataPlanBundle | None = None,
 ) -> CodegenResult:
-    """生成 conftest.py + 每接口一个测试文件，并做语法自检。"""
+    """生成 conftest.py + 每接口一个测试文件，并做语法自检。
+
+    `data_bundle` 提供时，只把本次运行用例的 plan 写入 `data_plan.json`；
+    conftest 的 `data_state` fixture 在请求前 apply、用例结束后 teardown。
+    """
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     result = CodegenResult()
     stamp = generated_at or utc_now()
+    plan_index = _plan_index(data_bundle)
 
     conftest = out / "conftest.py"
     existing = conftest.read_text(encoding="utf-8") if conftest.exists() else ""
@@ -201,6 +487,25 @@ def generate_pytest(
                                 f"# ASTSIGHT MANUAL BEGIN\n{manual}\n# ASTSIGHT MANUAL END")
     conftest.write_text(content, encoding="utf-8")
     result.files.append(conftest)
+
+    if data_bundle is not None:
+        case_ids = {case.id for case in cases}
+        case_keys = {
+            getattr(case, "case_key", "") for case in cases if getattr(case, "case_key", "")
+        }
+        matched = [
+            plan
+            for plan in data_bundle.plans
+            if (plan.case_id and plan.case_id in case_ids)
+            or (plan.case_key and plan.case_key in case_keys)
+        ]
+        filtered = data_bundle.model_copy(update={"plans": matched})
+        plan_file = out / "data_plan.json"
+        plan_file.write_text(
+            json.dumps(filtered.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        result.files.append(plan_file)
 
     grouped: dict[str, list[TestCase]] = {}
     for case in cases:
@@ -222,7 +527,10 @@ def generate_pytest(
             f'Manual: 手工修改放在 ASTSIGHT MANUAL 段内。\n"""\n'
             f"import pytest\n\n\n"
         )
-        body = "\n\n".join(_case_function(c) for c in endpoint_cases)
+        body = "\n\n".join(
+            _case_function(c, has_data_plan=_case_plan(c, plan_index) is not None)
+            for c in endpoint_cases
+        )
         footer = f"\n\n# ASTSIGHT MANUAL BEGIN\n{manual}\n# ASTSIGHT MANUAL END\n"
         source = f"{header}class {class_name}:\n{body}{footer}"
 

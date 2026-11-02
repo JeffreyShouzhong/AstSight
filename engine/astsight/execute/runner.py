@@ -68,7 +68,30 @@ class ExecutionResult:
         }
 
 
-def _env(base_url: str | None, reset_url: str | None, timeout: float) -> dict[str, str]:
+_MOCK_ENV = {
+    "mock_admin_url": "ASTSIGHT_MOCK_ADMIN_URL",
+    "mock_token": "ASTSIGHT_MOCK_TOKEN",
+    "mock_namespace": "ASTSIGHT_MOCK_NAMESPACE",
+    "mock_run_scope": "ASTSIGHT_MOCK_RUN_SCOPE",
+    "mock_drain_ms": "ASTSIGHT_MOCK_DRAIN_MS",
+    "mock_ttl_ms": "ASTSIGHT_MOCK_TTL_MS",
+}
+
+
+def _env(
+    base_url: str | None,
+    reset_url: str | None,
+    timeout: float,
+    *,
+    mock_admin_url: str | None = None,
+    mock_token: str | None = None,
+    mock_namespace: str | None = None,
+    mock_run_scope: str | None = None,
+    mock_drain_ms: int | None = None,
+    mock_ttl_ms: int | None = None,
+    data_plan_path: str | None = None,
+    database_url: str | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     if base_url:
@@ -76,6 +99,22 @@ def _env(base_url: str | None, reset_url: str | None, timeout: float) -> dict[st
     if reset_url:
         env["ASTSIGHT_RESET_URL"] = reset_url
     env["ASTSIGHT_TIMEOUT"] = str(timeout)
+    # 造数计划路径与数据库 URL 只通过环境变量传给生成物，不写入报告。
+    if data_plan_path:
+        env["ASTSIGHT_DATA_PLAN_PATH"] = data_plan_path
+    if database_url:
+        env["ASTSIGHT_DB_URL"] = database_url
+    # 未显式配置时保留调用方环境变量；显式值优先。
+    for name, value in {
+        "mock_admin_url": mock_admin_url,
+        "mock_token": mock_token,
+        "mock_namespace": mock_namespace,
+        "mock_run_scope": mock_run_scope,
+        "mock_drain_ms": mock_drain_ms,
+        "mock_ttl_ms": mock_ttl_ms,
+    }.items():
+        if value is not None:
+            env[_MOCK_ENV[name]] = str(value)
     return env
 
 
@@ -98,10 +137,35 @@ def collect_only(
     base_url: str | None = None,
     reset_url: str | None = None,
     timeout: float = 300.0,
+    mock_admin_url: str | None = None,
+    mock_token: str | None = None,
+    mock_namespace: str | None = None,
+    mock_run_scope: str | None = None,
+    mock_drain_ms: int | None = None,
+    mock_ttl_ms: int | None = None,
+    data_plan_path: str | None = None,
+    database_url: str | None = None,
 ) -> tuple[bool, str]:
     """生成代码的收集自检：import/fixture 错误在开跑前暴露。"""
     cwd = Path(generated_dir).resolve()
-    proc = _pytest(["--collect-only", "-q"], cwd, _env(base_url, reset_url, timeout), timeout)
+    proc = _pytest(
+        ["--collect-only", "-q"],
+        cwd,
+        _env(
+            base_url,
+            reset_url,
+            timeout,
+            mock_admin_url=mock_admin_url,
+            mock_token=mock_token,
+            mock_namespace=mock_namespace,
+            mock_run_scope=mock_run_scope,
+            mock_drain_ms=mock_drain_ms,
+            mock_ttl_ms=mock_ttl_ms,
+            data_plan_path=data_plan_path,
+            database_url=database_url,
+        ),
+        timeout,
+    )
     output = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode == 0, output
 
@@ -115,6 +179,14 @@ def run_pytest(
     nodeids: list[str] | None = None,
     timeout: float = 600.0,
     maxfail: int | None = None,
+    mock_admin_url: str | None = None,
+    mock_token: str | None = None,
+    mock_namespace: str | None = None,
+    mock_run_scope: str | None = None,
+    mock_drain_ms: int | None = None,
+    mock_ttl_ms: int | None = None,
+    data_plan_path: str | None = None,
+    database_url: str | None = None,
 ) -> ExecutionResult:
     """执行 pytest（可选只跑指定 nodeids，用于有界重试）。"""
     cwd = Path(generated_dir).resolve()
@@ -126,7 +198,24 @@ def run_pytest(
         args.append(f"--maxfail={maxfail}")
     args.extend(nodeids or ["."])
 
-    proc = _pytest(args, cwd, _env(base_url, reset_url, timeout), timeout)
+    proc = _pytest(
+        args,
+        cwd,
+        _env(
+            base_url,
+            reset_url,
+            timeout,
+            mock_admin_url=mock_admin_url,
+            mock_token=mock_token,
+            mock_namespace=mock_namespace,
+            mock_run_scope=mock_run_scope,
+            mock_drain_ms=mock_drain_ms,
+            mock_ttl_ms=mock_ttl_ms,
+            data_plan_path=data_plan_path,
+            database_url=database_url,
+        ),
+        timeout,
+    )
     result = ExecutionResult(
         returncode=proc.returncode,
         stdout=(proc.stdout or "")[-20000:],
@@ -187,6 +276,10 @@ def _parse_junit(path: Path) -> list[TestRecord]:
         elif skipped is not None:
             outcome = "skipped"
             message = (skipped.get("message") or "").strip()
+            # 造数前置未满足是 blocked（不能算通过，也不是 SUT 缺陷）；
+            # 与普通 skip 区分，报告才能单列。
+            if message.lower().startswith("data_unavailable"):
+                outcome = "blocked"
 
         match = _CASE_ID_RE.search(name)
         case_id = f"TC-{int(match.group(1)):04d}" if match else ""

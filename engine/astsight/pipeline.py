@@ -11,11 +11,14 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from contracts import TestCase
+import httpx
+
+from contracts import DataPlanBundle, TestCase
 
 from .artifacts import RunDir, new_run_id, utc_now
 from .cases import generate_cases
@@ -41,9 +44,23 @@ from .inventory import (
     route_inventory_health,
 )
 from .persistence import sha256_json
+from .mock import (
+    MockPlanError,
+    resolve_plan_path,
+    start_mock_plan,
+    summarize_evidence,
+)
 from .profile import build_profiles, load_spec, parse_operations
 from .profile.openapi import normalize_path
 from .report import build_report, render_markdown
+from .rules import (
+    RuleStoreError,
+    load_rule_set,
+    orphaned_rule_keys,
+    rule_coverage,
+    rule_set_hash,
+    rule_set_snapshot,
+)
 
 
 @dataclass
@@ -71,7 +88,107 @@ class RunConfig:
     fail_on_pending_proposals: bool = False
     min_requirement_coverage: float | None = None
     allow_stale_cases: bool = False
+    data_plan: str | None = None
+    database_url: str | None = None
+    ruleset: str | None = None
+    allow_stale_rules: bool = False
+    mock_plan: str | None = None
+    mock_admin_url: str | None = None
+    mock_token: str | None = None
+    mock_namespace: str | None = None
+    mock_run_scope: str | None = None
+    mock_drain_ms: int | None = None
+    mock_ttl_ms: int | None = None
+    mock_evidence: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+def _resolve_mock_evidence(
+    project: Path, config: "RunConfig"
+) -> tuple[str | None, str | None]:
+    """定位 `mock_calls.jsonl`；未显式给出时向已启动的 Mock 服务查询。
+
+    返回 `(path, reason)`。`reason` 只在“配置了 Mock 但证据不可得”时非空，
+    用于报告降级；完全未配置 Mock 时两者均为 None。
+    """
+    if config.mock_evidence:
+        raw = Path(config.mock_evidence)
+        if not raw.is_absolute():
+            cwd_candidate = (Path.cwd() / raw).resolve()
+            raw = cwd_candidate if cwd_candidate.exists() else (project / raw).resolve()
+        return str(raw), None
+    if not config.mock_admin_url:
+        return None, None
+    headers = (
+        {"Authorization": f"Bearer {config.mock_token}"}
+        if config.mock_token else {}
+    )
+    try:
+        response = httpx.get(
+            f"{config.mock_admin_url.rstrip('/')}/_admin/server",
+            headers=headers,
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        history = (response.json() or {}).get("history_path")
+    except (httpx.HTTPError, ValueError) as exc:
+        return None, f"mock_server_unreachable: {type(exc).__name__}: {exc}"[:500]
+    if not history:
+        return None, "mock_evidence_path_missing"
+    return str(history), None
+
+
+def _fetch_mock_sessions(
+    config: "RunConfig", run_scope: str | None
+) -> tuple[list[dict] | None, str | None]:
+    """读取 Mock 服务的会话历史，用于 `mock_not_used` 检查。
+
+    返回 `(sessions, reason)`。未配置 Mock 服务时返回 `(None, None)`。
+    """
+    if not config.mock_admin_url:
+        return None, None
+    headers = (
+        {"Authorization": f"Bearer {config.mock_token}"}
+        if config.mock_token else {}
+    )
+    params = {"run_scope": run_scope} if run_scope else {}
+    try:
+        response = httpx.get(
+            f"{config.mock_admin_url.rstrip('/')}/_admin/sessions",
+            headers=headers,
+            params=params,
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        payload = response.json() or {}
+    except (httpx.HTTPError, ValueError) as exc:
+        return None, f"mock_sessions_unreachable: {type(exc).__name__}: {exc}"[:500]
+    sessions = payload.get("sessions") if isinstance(payload, dict) else None
+    if not isinstance(sessions, list):
+        return None, "mock_sessions_invalid"
+    return sessions, None
+
+
+def _mock_env(
+    config: "RunConfig", run_scope: str | None = None
+) -> dict[str, Any]:
+    return {
+        "mock_admin_url": config.mock_admin_url,
+        "mock_token": config.mock_token,
+        "mock_namespace": config.mock_namespace,
+        "mock_run_scope": run_scope or config.mock_run_scope,
+        "mock_drain_ms": config.mock_drain_ms,
+        "mock_ttl_ms": config.mock_ttl_ms,
+    }
+
+
+def _data_env(
+    config: "RunConfig", data_plan_path: str | None
+) -> dict[str, Any]:
+    return {
+        "data_plan_path": data_plan_path,
+        "database_url": config.database_url,
+    }
 
 
 def _changed_scope_full(routes: list[dict]) -> tuple[list[dict], dict]:
@@ -132,6 +249,200 @@ def _resolve_openapi_source(project: Path, raw: str | None) -> str | None:
     return str(path.resolve())
 
 
+def _load_data_plan_bundle(
+    project: Path, config: "RunConfig"
+) -> DataPlanBundle | None:
+    """读取 C5b `data_plan.json`；非法计划直接失败，不降级成“无造数”。"""
+    if not config.data_plan:
+        return None
+    raw = Path(config.data_plan)
+    if not raw.is_absolute():
+        cwd_candidate = (Path.cwd() / raw).resolve()
+        raw = cwd_candidate if cwd_candidate.exists() else (project / raw).resolve()
+    if not raw.is_file():
+        raise FileNotFoundError(f"data_plan 不存在: {raw}")
+    try:
+        payload = json.loads(raw.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"data_plan 无法解析: {raw}: {exc}") from exc
+    try:
+        bundle = DataPlanBundle.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(f"data_plan 校验失败: {raw}: {exc}") from exc
+    if bundle.rejected:
+        details = "；".join(
+            f"{item.case_key or item.case_id or '-'}:{item.reason}"
+            for item in bundle.rejected[:20]
+        )
+        raise ValueError(f"data_plan 含被拒绝的用例，拒绝执行: {details}")
+    return bundle
+
+
+def _data_plan_state(
+    bundle: DataPlanBundle | None,
+    *,
+    path: str | None,
+    database_url: str | None,
+    cases: list[Any],
+) -> dict[str, Any] | None:
+    if bundle is None:
+        return None
+    case_ids = {case.id for case in cases}
+    case_keys = {
+        getattr(case, "case_key", "") for case in cases if getattr(case, "case_key", "")
+    }
+    matched = [
+        plan
+        for plan in bundle.plans
+        if (plan.case_id and plan.case_id in case_ids)
+        or (plan.case_key and plan.case_key in case_keys)
+    ]
+    missing = [
+        case.id
+        for case in cases
+        if case.preconditions
+        and not any(
+            (plan.case_id == case.id)
+            or (plan.case_key and plan.case_key == getattr(case, "case_key", ""))
+            for plan in matched
+        )
+    ]
+    return {
+        "path": path,
+        "run_scope": bundle.run_scope,
+        "plans": len(matched),
+        "database_url_configured": bool(database_url),
+        "missing_plans": missing,
+        "warnings": list(bundle.warnings),
+    }
+
+
+def _rules_state(
+    project: Path,
+    config: "RunConfig",
+    *,
+    store_snapshot: dict[str, Any] | None,
+    cases: list[Any],
+) -> dict[str, Any] | None:
+    """规则库与覆盖快照；未配置且项目无 ruleset.json 时返回 None。"""
+    raw = config.ruleset
+    explicit = raw is not None
+    path = Path(raw) if raw else project / "ruleset.json"
+    if not path.is_absolute():
+        path = (project / path).resolve()
+    else:
+        path = path.resolve()
+    if not path.is_file():
+        if not explicit:
+            return None
+        return {
+            "checked": False,
+            "reason": "ruleset_not_found",
+            "path": str(path),
+            "gate_blockers": ["规则库不可加载：文件不存在"],
+            "gate_warnings": [],
+        }
+    try:
+        ruleset = load_rule_set(path)
+    except RuleStoreError as exc:
+        return {
+            "checked": False,
+            "reason": "ruleset_invalid",
+            "path": str(path),
+            "error": str(exc)[:2_000],
+            "gate_blockers": ["规则库不可加载或校验失败"],
+            "gate_warnings": [],
+        }
+
+    coverage = rule_coverage(ruleset, cases).as_dict()
+    refs = [
+        ref.rule_key
+        for case in cases
+        for ref in (getattr(case, "rule_refs", None) or [])
+    ]
+    orphaned = orphaned_rule_keys(refs, ruleset)
+    active = {"active"}
+    stale_rule_cases = [
+        {
+            "case_id": getattr(case, "id", None),
+            "case_key": getattr(case, "case_key", ""),
+            "rule_keys": [
+                ref.rule_key
+                for ref in (getattr(case, "rule_refs", None) or [])
+                if ref.rule_key in {rule.rule_key for rule in ruleset.all_rules()
+                                    if rule.status.value not in active}
+            ],
+        }
+        for case in cases
+    ]
+    stale_rule_cases = [item for item in stale_rule_cases if item["rule_keys"]]
+    snapshot = dict(store_snapshot or {})
+    current_snapshot = rule_set_snapshot(ruleset)
+    drift_changed = bool(
+        snapshot
+        and snapshot.get("hash")
+        and snapshot.get("hash") != current_snapshot.get("hash")
+    )
+    unresolved = [
+        conflict.model_dump(mode="json")
+        for conflict in ruleset.conflicts
+        if not conflict.resolved_at
+    ]
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if unresolved:
+        blockers.append(f"规则库存在 {len(unresolved)} 个未裁决冲突")
+    if orphaned:
+        warnings.append(
+            f"{len(orphaned)} 个用例引用的规则已不在规则库中（rule_orphaned）"
+        )
+    if stale_rule_cases:
+        warnings.append(
+            f"{len(stale_rule_cases)} 条用例引用非 active 规则（drift/disputed/ungrounded）"
+        )
+    if drift_changed:
+        message = "规则库 hash 与用例库快照不一致，已批准用例可能过期"
+        if config.allow_stale_rules:
+            warnings.append(message + "（--allow-stale-rules）")
+        else:
+            blockers.append(message)
+    if coverage["business"]["stats"]["uncovered"] or coverage["contract"]["stats"]["uncovered"]:
+        warnings.append(
+            "存在未被用例覆盖的规则："
+            f"BR {coverage['business']['stats']['uncovered']} / "
+            f"CR {coverage['contract']['stats']['uncovered']}"
+        )
+    return {
+        "checked": True,
+        "path": str(path),
+        "ruleset_id": ruleset.ruleset_id,
+        "version": ruleset.version,
+        "hash": rule_set_hash(ruleset),
+        "snapshot": current_snapshot,
+        "store_snapshot": snapshot,
+        "counts": {
+            "business_rules": len(ruleset.rules),
+            "contract_rules": len(ruleset.contract_rules),
+        },
+        "coverage": coverage,
+        "questions": [item.model_dump(mode="json") for item in ruleset.questions],
+        "gaps": [item.model_dump(mode="json") for item in ruleset.gaps],
+        "conflicts": [
+            item.model_dump(mode="json") for item in ruleset.conflicts
+        ],
+        "unresolved_conflicts": unresolved,
+        "orphaned_rule_keys": orphaned,
+        "stale_rule_cases": stale_rule_cases,
+        "rule_drift": {
+            "changed": drift_changed,
+            "store_hash": snapshot.get("hash"),
+            "current_hash": current_snapshot.get("hash"),
+        },
+        "gate_blockers": blockers,
+        "gate_warnings": warnings,
+    }
+
+
 def _case_contract_drift(
     project: Path, config: RunConfig, store: Any
 ) -> dict[str, Any]:
@@ -190,7 +501,7 @@ def _case_contract_drift(
     }
 
 
-def _build_case_store_state(
+def build_case_store_state(
     *,
     project: Path,
     config: RunConfig,
@@ -269,6 +580,7 @@ def _build_case_store_state(
         "store_hash": store_hash(store) if store is not None else "",
         "approved_at": store.approved_at if store is not None else None,
         "approved_by": store.approved_by if store is not None else None,
+        "ruleset": dict(store.ruleset) if store is not None else {},
         "summary": summary,
         "pending_proposals": len(pending),
         "pending_proposal_paths": [item.get("path", "") for item in pending],
@@ -285,7 +597,7 @@ def _build_case_store_state(
     }
 
 
-def _execute_and_report(
+def _execute_and_report_inner(
     *,
     project: Path,
     config: RunConfig,
@@ -300,17 +612,67 @@ def _execute_and_report(
     codegen_gate: dict | None = None,
     case_store_state: dict | None = None,
     route_notes: list[str] | None = None,
+    mock_plan_state: dict | None = None,
 ) -> dict:
+    # 未显式指定 run_scope 时用 run_id：既让响应变量按本次运行隔离，
+    # 也让报告能只扫描本次运行产生的 Mock 会话。
+    mock_run_scope = config.mock_run_scope or str(run_meta.get("run_id") or "") or None
+    if config.mock_admin_url:
+        # 不落 token：报告只记录定位信息与指纹由 MockServer 自己提供。
+        run_meta.setdefault(
+            "mock",
+            {
+                "admin_url": config.mock_admin_url,
+                "namespace": config.mock_namespace,
+                "run_scope": mock_run_scope,
+                "drain_ms": config.mock_drain_ms,
+                "ttl_ms": config.mock_ttl_ms,
+            },
+        )
+    if mock_plan_state:
+        run_meta.setdefault("mock", {})
+        run_meta["mock"]["plan"] = mock_plan_state.get("plan")
+        run_meta["mock"]["plan_mode"] = mock_plan_state.get("mode")
+        run_meta["mock"]["plan_routes"] = mock_plan_state.get("route_count")
+        run_meta["mock"]["plan_injections"] = mock_plan_state.get("injection_count")
     run_dir.write_json("run_meta.json", run_meta)
     run_dir.write_json("changed_apis.json", impact)
     run_dir.write_json("cases.json", [case.model_dump(mode="json") for case in cases])
 
+    data_bundle = _load_data_plan_bundle(project, config)
+    data_plan_state = _data_plan_state(
+        data_bundle,
+        path=config.data_plan,
+        database_url=config.database_url,
+        cases=cases,
+    )
+    if data_plan_state is not None:
+        run_dir.write_json("data_plan_state.json", data_plan_state)
+    if case_store_state is not None:
+        case_store_state = {**case_store_state, "data_plan": data_plan_state}
+
+    rules_state = _rules_state(
+        project,
+        config,
+        store_snapshot=(case_store_state or {}).get("ruleset"),
+        cases=cases,
+    )
+
     generated_dir = run_dir.path / "generated"
+    data_plan_path: str | None = None
     codegen_dict: dict = {}
     if cases:
-        codegen = generate_pytest(cases, generated_dir)
+        codegen = generate_pytest(cases, generated_dir, data_bundle=data_bundle)
         codegen_dict = codegen.as_dict()
         run_dir.write_json("codegen.json", codegen_dict)
+        if data_bundle is not None:
+            plan_file = generated_dir / "data_plan.json"
+            data_plan_path = str(plan_file.resolve())
+            if plan_file.is_file():
+                run_dir.write_json(
+                    "data_plan.json",
+                    json.loads(plan_file.read_text(encoding="utf-8")),
+                )
 
     entries: list[dict] = []
     cases_by_id = {case.id: case for case in cases}
@@ -323,6 +685,8 @@ def _execute_and_report(
                 base_url=config.base_url,
                 reset_url=config.reset_url,
                 timeout=config.timeout,
+                **_mock_env(config, mock_run_scope),
+                **_data_env(config, data_plan_path),
             )
             execution_meta["collect_only"] = True
             execution_meta["collect_ok"] = ok
@@ -336,6 +700,8 @@ def _execute_and_report(
                 reset_url=config.reset_url,
                 junit_path=run_dir.path / "results.xml",
                 timeout=config.timeout,
+                **_mock_env(config, mock_run_scope),
+                **_data_env(config, data_plan_path),
             )
             run_dir.write_json("execution-first.json", first.as_dict())
             execution_meta["executed"] = True
@@ -350,10 +716,45 @@ def _execute_and_report(
                 if not _apply_retry(
                     entries, cases_by_id, generated_dir, config, run_dir,
                     changed_endpoints, attempt_no=attempt,
+                    mock_run_scope=mock_run_scope,
+                    data_plan_path=data_plan_path,
                 ):
                     break
                 attempt += 1
+    execution_meta["data_plan"] = data_plan_state
     run_dir.write_json("execution.json", {"meta": execution_meta, "records": entries})
+
+    mock_evidence_path, mock_evidence_reason = _resolve_mock_evidence(project, config)
+    mock_sessions, mock_sessions_reason = _fetch_mock_sessions(config, mock_run_scope)
+    mock_summary = summarize_evidence(
+        mock_evidence_path,
+        sessions=mock_sessions,
+        allow_missing=bool(mock_plan_state),
+    )
+    if mock_evidence_reason:
+        mock_summary = {
+            **mock_summary,
+            "checked": False,
+            "reason": mock_evidence_reason,
+            "degraded": True,
+        }
+    if mock_sessions_reason:
+        mock_summary = {
+            **mock_summary,
+            "sessions_checked": False,
+            "sessions_reason": mock_sessions_reason,
+            "degraded": True,
+        }
+    elif mock_summary.get("checked") and not mock_summary.get("sessions_checked"):
+        # 只有调用证据、没有会话快照时无法证明绑定 dep 真的被调用。
+        mock_summary = {
+            **mock_summary,
+            "sessions_reason": "mock_admin_url_not_configured",
+            "degraded": True,
+        }
+    if mock_plan_state:
+        mock_summary = {**mock_summary, "plan": mock_plan_state}
+    run_dir.write_json("mock_evidence.json", mock_summary)
 
     report = build_report(
         run_meta={**run_meta, "finished_at": utc_now()},
@@ -372,6 +773,9 @@ def _execute_and_report(
             **(codegen_gate or {}),
         },
         case_store=case_store_state,
+        mock_evidence=mock_summary,
+        data_plan=data_plan_state,
+        rules=rules_state,
     )
     report["execution"] = execution_meta
     if route_notes is not None:
@@ -389,6 +793,187 @@ def _execute_and_report(
     return report
 
 
+def _execute_and_report(
+    *,
+    project: Path,
+    config: RunConfig,
+    run_dir: RunDir,
+    run_meta: dict,
+    changes: dict,
+    impact: dict,
+    profiles: list[dict],
+    cases: list[Any],
+    unmapped: dict,
+    route_audit: dict,
+    codegen_gate: dict | None = None,
+    case_store_state: dict | None = None,
+    route_notes: list[str] | None = None,
+) -> dict:
+    """执行链路入口；`--mock-plan` 时先启动内嵌服务，结束后必定停止。"""
+    if not config.mock_plan:
+        return _execute_and_report_inner(
+            project=project,
+            config=config,
+            run_dir=run_dir,
+            run_meta=run_meta,
+            changes=changes,
+            impact=impact,
+            profiles=profiles,
+            cases=cases,
+            unmapped=unmapped,
+            route_audit=route_audit,
+            codegen_gate=codegen_gate,
+            case_store_state=case_store_state,
+            route_notes=route_notes,
+        )
+
+    conflicts = [
+        flag
+        for flag, value in (
+            ("--mock-admin-url", config.mock_admin_url),
+            ("--mock-token", config.mock_token),
+            ("--mock-namespace", config.mock_namespace),
+            ("--mock-evidence", config.mock_evidence),
+        )
+        if value
+    ]
+    if conflicts:
+        raise ValueError(
+            "--mock-plan 不能与 "
+            + " / ".join(conflicts)
+            + " 同时使用：内嵌服务会生成自己的地址、token、namespace 和证据路径"
+        )
+
+    plan_path = resolve_plan_path(project, config.mock_plan)
+    try:
+        runtime = start_mock_plan(
+            plan_path,
+            history_path=run_dir.path / "mock_calls.jsonl",
+        )
+    except MockPlanError as exc:
+        raise MockPlanError(exc.code, f"{exc.detail}（plan: {plan_path}）") from exc
+
+    run_id = str(run_meta.get("run_id") or "")
+    try:
+        plan_state = runtime.report_state()
+        run_dir.write_json("run_manifest.json", runtime.manifest(run_id=run_id))
+        run_dir.write_json("mock_injection.json", runtime.injection_document())
+        effective = replace(
+            config,
+            mock_admin_url=runtime.server.admin_endpoint,
+            mock_token=runtime.token,
+            mock_namespace=runtime.plan.namespace,
+            mock_evidence=(
+                str(runtime.evidence_path) if runtime.evidence_path else None
+            ),
+        )
+        return _execute_and_report_inner(
+            project=project,
+            config=effective,
+            run_dir=run_dir,
+            run_meta=run_meta,
+            changes=changes,
+            impact=impact,
+            profiles=profiles,
+            cases=cases,
+            unmapped=unmapped,
+            route_audit=route_audit,
+            codegen_gate=codegen_gate,
+            case_store_state=case_store_state,
+            route_notes=route_notes,
+            mock_plan_state=plan_state,
+        )
+    finally:
+        runtime.stop()
+
+
+def execute_cases(
+    *,
+    project: Path,
+    config: RunConfig,
+    run_dir: RunDir,
+    run_meta: dict,
+    changes: dict,
+    impact: dict,
+    profiles: list[dict],
+    cases: list[Any],
+    unmapped: dict,
+    route_audit: dict,
+    codegen_gate: dict | None = None,
+    case_store_state: dict | None = None,
+    route_notes: list[str] | None = None,
+) -> dict:
+    """不启动新 Mock 的执行入口（Mock 可已由调用方启动）。"""
+    return _execute_and_report(
+        project=project,
+        config=config,
+        run_dir=run_dir,
+        run_meta=run_meta,
+        changes=changes,
+        impact=impact,
+        profiles=profiles,
+        cases=cases,
+        unmapped=unmapped,
+        route_audit=route_audit,
+        codegen_gate=codegen_gate,
+        case_store_state=case_store_state,
+        route_notes=route_notes,
+    )
+
+
+def execute_with_runtime(
+    *,
+    project: Path,
+    config: RunConfig,
+    run_dir: RunDir,
+    run_meta: dict,
+    changes: dict,
+    impact: dict,
+    profiles: list[dict],
+    cases: list[Any],
+    unmapped: dict,
+    route_audit: dict,
+    runtime: Any,
+    codegen_gate: dict | None = None,
+    case_store_state: dict | None = None,
+    route_notes: list[str] | None = None,
+) -> dict:
+    """使用调用方已启动的 Mock runtime；不负责停止它。
+
+    Agent 流程需要先启动 Mock 计算注入 URL，再用这些环境变量启动 SUT，
+    因此 Mock 的生命周期必须由外层编排器掌握。
+    """
+    run_id = str(run_meta.get("run_id") or "")
+    plan_state = runtime.report_state()
+    run_dir.write_json("run_manifest.json", runtime.manifest(run_id=run_id))
+    run_dir.write_json("mock_injection.json", runtime.injection_document())
+    effective = replace(
+        config,
+        mock_admin_url=runtime.server.admin_endpoint,
+        mock_token=runtime.token,
+        mock_namespace=runtime.plan.namespace,
+        mock_evidence=(
+            str(runtime.evidence_path) if runtime.evidence_path else None
+        ),
+    )
+    return _execute_and_report_inner(
+        project=project,
+        config=effective,
+        run_dir=run_dir,
+        run_meta=run_meta,
+        changes=changes,
+        impact=impact,
+        profiles=profiles,
+        cases=cases,
+        unmapped=unmapped,
+        route_audit=route_audit,
+        codegen_gate=codegen_gate,
+        case_store_state=case_store_state,
+        route_notes=route_notes,
+        mock_plan_state=plan_state,
+    )
+
+
 def _run_cases_mode(
     config: RunConfig, project: Path, run_dir: RunDir, run_id: str
 ) -> dict:
@@ -401,7 +986,7 @@ def _run_cases_mode(
         else {"total": 0, "covered": 0, "rate": 0.0, "uncovered": []}
     )
     contract_drift = _case_contract_drift(project, config, store)
-    state = _build_case_store_state(
+    state = build_case_store_state(
         project=project,
         config=config,
         store=store,
@@ -499,6 +1084,8 @@ def _apply_retry(
     changed_endpoints: set[str],
     *,
     attempt_no: int,
+    mock_run_scope: str | None = None,
+    data_plan_path: str | None = None,
 ) -> bool:
     """对可重试失败做一次有界重跑。返回是否有重跑。"""
     retryable = [
@@ -520,6 +1107,8 @@ def _apply_retry(
         junit_path=run_dir.path / f"results-attempt{attempt_no}.xml",
         nodeids=nodeids,
         timeout=config.timeout,
+        **_mock_env(config, mock_run_scope),
+        **_data_env(config, data_plan_path),
     )
     run_dir.write_json(f"attempt{attempt_no}_summary.json", retry_result.as_dict())
     retry_by_node = {r.nodeid: r for r in retry_result.records}
@@ -699,13 +1288,17 @@ def run(config: RunConfig) -> dict:
                 "method": api.get("method", ""),
                 "path": api.get("path", ""),
                 "handler": api.get("route_handler", ""),
-                "file": (api.get("change_files") or [""])[0],
+                "owner": api.get("route_owner", ""),
+                "file": api.get("route_file") or (api.get("change_files") or [""])[0],
                 "source": api.get("route_source", ""),
                 "confidence": api.get("evidence", "inferred"),
             }
         )
     profiles, profile_unmapped = build_profiles(
-        profile_routes, operations, codegraph_client=graph_client
+        profile_routes,
+        operations,
+        codegraph_client=graph_client,
+        project_root=project,
     )
     run_dir.write_json("profiles.json", {"profiles": profiles, "unmapped": profile_unmapped})
 
@@ -790,6 +1383,8 @@ def _artifacts(run_dir: RunDir) -> dict:
         "run_meta.json", "routes.json", "changes.json", "changed_apis.json",
         "profiles.json", "caseset.json", "requirement_coverage.json",
         "pending_proposals.json", "cases.json", "codegen.json", "execution.json",
+        "data_plan.json", "data_plan_state.json",
+        "run_manifest.json", "mock_injection.json", "mock_evidence.json",
         "results.xml", "report.json", "report.md",
     ]
     return {name: run_dir.rel(run_dir.path / name) for name in names}

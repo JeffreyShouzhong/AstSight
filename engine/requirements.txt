@@ -1,5 +1,6 @@
 # AstSight Engine 运行时依赖
-# 验证环境：Windows · Python 3.13.14 · 2026-10-25
+# 目标运行环境：Linux（服务器 / CI 容器）；Windows 仅开发机本地调试
+# 最近验证：Windows · Python 3.13.14 · 2026-10-25（Windows 结果不作为部署基线）
 # 安装：pip install -r requirements.txt
 
 # ── 编排层（LangGraph StateGraph）──
@@ -14,7 +15,7 @@ httpx==0.28.1
 PyYAML==6.0.3
 pytest==9.1.1
 
-# ── M1 内置示例服务（examples/order_service）──
-# 仅运行示例/端到端测试需要；接入真实项目时可去掉
+# ── HTTP Mock 服务（C3.5.5，仅明文 HTTP）与 M1 内置示例服务 ──
+# HTTP Mock 是运行时依赖（内嵌 FastAPI/uvicorn），不再仅用于 examples
 fastapi==0.162.0
 uvicorn==0.54.0

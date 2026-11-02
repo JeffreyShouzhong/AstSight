@@ -433,6 +433,7 @@ def _merge(
             "path": route.get("path", ""),
             "route_handler": route.get("handler", ""),
             "route_owner": route.get("handler_owner", ""),
+            "route_file": route.get("file", ""),
             "confidence": confidence,
             "evidence": evidence,
             "attribution": attribution,

@@ -12,9 +12,11 @@ from contracts import (
     CaseReview,
     CaseSet,
     CaseStatus,
+    DataCatalog,
     RequirementDoc,
     ReviewDecision,
     ReviewEvent,
+    RuleSet,
 )
 
 from ..persistence import load_json, save_json_atomic, sha256_json, sha256_text
@@ -288,6 +290,7 @@ def _request_summary(candidate: dict[str, Any]) -> dict[str, Any]:
         "query": candidate.get("query") or {},
         "headers": candidate.get("headers") or {},
         "body": candidate.get("body"),
+        "mock_bindings": candidate.get("mock_bindings") or {},
     }
 
 
@@ -295,8 +298,10 @@ def _render_review_md(
     proposal: dict[str, Any],
     draft: CaseDraft,
     warnings: list[dict[str, Any]],
+    ruleset: RuleSet | None = None,
 ) -> str:
     counts = proposal["counts"]
+    rules_snapshot = proposal.get("base_ruleset") or {}
     lines = [
         f"# 用例审核提案 `{proposal['proposal_id']}`",
         "",
@@ -304,6 +309,14 @@ def _render_review_md(
         f"- 基线 store: v{proposal['base_store_version']} "
         f"`{proposal['base_store_hash'][:16]}…`",
         f"- 草案指纹: `{proposal['draft_fingerprint'][:16]}…`",
+    ]
+    if rules_snapshot:
+        lines.append(
+            f"- 规则库: `{rules_snapshot.get('id')}` v{rules_snapshot.get('version')} "
+            f"`{str(rules_snapshot.get('hash') or '')[:16]}…`"
+        )
+    lines.extend(
+        [
         f"- 新增 {counts.get('new', 0)} / 更新 {counts.get('update', 0)} / "
         f"恢复 {counts.get('revive', 0)} / 废弃 {counts.get('deprecate', 0)} / "
         f"不变 {counts.get('unchanged', 0)} / 范围外保留 "
@@ -317,7 +330,8 @@ def _render_review_md(
         "",
         "| # | action | endpoint | case_key | title | fingerprint |",
         "|---|---|---|---|---|---|",
-    ]
+        ]
+    )
     for index, item in enumerate(proposal["items"], 1):
         lines.append(
             f"| {index} | {item['action']} | `{item['endpoint']}` | "
@@ -338,6 +352,45 @@ def _render_review_md(
         )
         candidate = item.get("candidate") or {}
         existing = item.get("existing") or {}
+        if candidate and candidate.get("rule_refs"):
+            rule_index = ruleset.rule_index() if ruleset is not None else {}
+            lines.extend(["", "规则依据："])
+            for ref in candidate.get("rule_refs") or []:
+                key = str(ref.get("rule_key") or "")
+                rule = rule_index.get(key)
+                if rule is None:
+                    lines.append(f"- `{ref.get('rule_id') or key}`（规则库中未找到）")
+                    continue
+                text = (
+                    rule.constraint
+                    if hasattr(rule, "constraint")
+                    else getattr(rule, "text", "")
+                )
+                source = getattr(rule, "source", None)
+                section = getattr(source, "section", "") if source else ""
+                kind = getattr(getattr(source, "kind", None), "value", "")
+                lines.append(
+                    f"- `{rule.rule_id}` {rule.authority.value} "
+                    f"[{kind}] {text}  \n  来源: `{section}`"
+                )
+        if candidate and candidate.get("level"):
+            lines.append(
+                f"- level: `{candidate.get('level')}` / transport "
+                f"`{candidate.get('transport')}` / coverage "
+                f"`{candidate.get('coverage_role')}`"
+            )
+        if candidate and candidate.get("preconditions"):
+            lines.extend(
+                [
+                    "",
+                    "前置数据状态：",
+                    "```json",
+                    json.dumps(
+                        candidate.get("preconditions"), ensure_ascii=False, indent=2
+                    ),
+                    "```",
+                ]
+            )
         if candidate:
             lines.extend(
                 [
@@ -407,12 +460,35 @@ def _render_review_md(
     return "\n".join(lines)
 
 
+def _ruleset_snapshot(ruleset: RuleSet | None) -> dict[str, Any]:
+    if ruleset is None:
+        return {}
+    return {
+        "id": ruleset.ruleset_id,
+        "version": ruleset.version,
+        "hash": sha256_json(ruleset.model_dump(mode="json")),
+    }
+
+
+def _data_catalog_snapshot(catalog: DataCatalog | None) -> dict[str, Any]:
+    if catalog is None:
+        return {}
+    return {
+        "id": catalog.catalog_id,
+        "hash": sha256_json(catalog.model_dump(mode="json")),
+        "tables": len(catalog.tables),
+        "states": len(catalog.states),
+    }
+
+
 def _proposal_signature(
     context_id: str,
     base_store_version: int,
     base_store_hash: str,
     draft_hash: str,
     case_base: str,
+    ruleset_hash: str = "",
+    catalog_hash: str = "",
 ) -> str:
     return sha256_json(
         {
@@ -421,6 +497,8 @@ def _proposal_signature(
             "base_store_hash": base_store_hash,
             "draft_fingerprint": draft_hash,
             "case_base": case_base,
+            "ruleset_hash": ruleset_hash,
+            "catalog_hash": catalog_hash,
         }
     )
 
@@ -469,6 +547,8 @@ def build_proposal(
     validation: ValidationResult,
     store: CaseSet,
     store_path: str | Path,
+    ruleset: RuleSet | None = None,
+    data_catalog: DataCatalog | None = None,
 ) -> ProposalResult:
     if validation.has_errors:
         raise ProposalError("草案校验失败，不能生成 proposal")
@@ -479,6 +559,8 @@ def build_proposal(
     if not diff.actionable:
         return ProposalResult(path=None, proposal=None, diff=diff)
 
+    rules_snapshot = _ruleset_snapshot(ruleset)
+    catalog_snapshot = _data_catalog_snapshot(data_catalog)
     store_path_resolved = Path(store_path).resolve()
     store_exists = store_path_resolved.is_file()
     base_hash = store_hash(store) if store_exists else EMPTY_STORE_HASH
@@ -488,6 +570,8 @@ def build_proposal(
         base_hash,
         draft_fingerprint(draft),
         store_path_resolved.as_posix(),
+        str(rules_snapshot.get("hash") or ""),
+        str(catalog_snapshot.get("hash") or ""),
     )
     existing = _find_pending_by_signature(project, signature)
     if existing is not None:
@@ -531,6 +615,8 @@ def build_proposal(
         "base_store_hash": base_hash,
         "base_store_exists": store_exists,
         "case_base": store_path_resolved.as_posix(),
+        "base_ruleset": rules_snapshot,
+        "base_data_catalog": catalog_snapshot,
         "scope_docs": validation.scope_docs,
         "openapi": context.get("openapi") or {},
         "counts": diff.counts(),
@@ -553,10 +639,19 @@ def build_proposal(
         _requirements_snapshot(context, validation.scope_docs),
     )
     save_json_atomic(proposal_dir / "validation.json", validation.as_dict())
+    if ruleset is not None:
+        save_json_atomic(
+            proposal_dir / "rules_snapshot.json", ruleset.model_dump(mode="json")
+        )
+    if data_catalog is not None:
+        save_json_atomic(
+            proposal_dir / "data_catalog_snapshot.json",
+            data_catalog.model_dump(mode="json"),
+        )
     save_json_atomic(proposal_dir / "proposal.json", proposal)
     save_json_atomic(proposal_dir / "cases.review.json", _review_json(proposal))
     (proposal_dir / "cases.review.md").write_text(
-        _render_review_md(proposal, draft, warnings),
+        _render_review_md(proposal, draft, warnings, ruleset),
         encoding="utf-8",
         newline="\n",
     )
@@ -665,7 +760,7 @@ def _entry_from_candidate(
     payload["status"] = CaseStatus.APPROVED
     payload["version"] = version
     payload["fingerprint"] = fingerprint
-    payload["fingerprint_version"] = 1
+    payload["fingerprint_version"] = 2
     payload["review"] = CaseReview(
         decision=ReviewDecision.APPROVE,
         by=reviewer,
@@ -745,6 +840,31 @@ def approve_proposal(
     if draft_fingerprint(draft) != proposal.get("draft_fingerprint"):
         raise ProposalError("proposal 的 draft 快照指纹不匹配，请重新 import")
 
+    ruleset: RuleSet | None = None
+    rules_snapshot = proposal.get("base_ruleset") or {}
+    rules_path = proposal_dir / "rules_snapshot.json"
+    if rules_snapshot:
+        if not rules_path.is_file():
+            raise ProposalError("proposal 缺少 rules_snapshot.json，请重新 import")
+        ruleset = RuleSet.model_validate(load_json(rules_path))
+        expected_hash = sha256_json(ruleset.model_dump(mode="json"))
+        if expected_hash != str(rules_snapshot.get("hash") or ""):
+            raise ProposalError("rules_snapshot.json 与 proposal 的规则快照不一致")
+    data_catalog: DataCatalog | None = None
+    catalog_snapshot = proposal.get("base_data_catalog") or {}
+    catalog_path = proposal_dir / "data_catalog_snapshot.json"
+    if catalog_snapshot:
+        if not catalog_path.is_file():
+            raise ProposalError(
+                "proposal 缺少 data_catalog_snapshot.json，请重新 import"
+            )
+        data_catalog = DataCatalog.model_validate(load_json(catalog_path))
+        expected_hash = sha256_json(data_catalog.model_dump(mode="json"))
+        if expected_hash != str(catalog_snapshot.get("hash") or ""):
+            raise ProposalError(
+                "data_catalog_snapshot.json 与 proposal 的目录快照不一致"
+            )
+
     store_path = Path(case_base)
     if not store_path.is_absolute():
         store_path = Path(project).resolve() / store_path
@@ -780,7 +900,13 @@ def approve_proposal(
         store = empty_case_set(project, context=context)
 
     validation = validate_draft(
-        draft, context, project=project, check_doc_hashes=False
+        draft,
+        context,
+        project=project,
+        check_doc_hashes=False,
+        ruleset=ruleset,
+        data_catalog=data_catalog,
+        require_rules=ruleset is not None,
     )
     if validation.has_errors:
         raise ProposalError(
@@ -964,6 +1090,8 @@ def approve_proposal(
     store.approved_at = now
     store.approved_by = reviewer
     store.openapi = dict(proposal.get("openapi") or store.openapi)
+    if rules_snapshot:
+        store.ruleset = dict(rules_snapshot)
     store.review_log.extend(events)
     _update_requirements(
         store,

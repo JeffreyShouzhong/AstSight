@@ -12,7 +12,21 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts import AssertStrength, Assertion, Priority, SourceRef, TestCase
+from contracts import (
+    AssertStrength,
+    Assertion,
+    CaseLevel,
+    ChangeRef,
+    CoverageRole,
+    Precondition,
+    Priority,
+    RuleRef,
+    RuleSet,
+    RuleStatus,
+    SourceRef,
+    TestCase,
+    Transport,
+)
 
 from ..persistence import sha256_json
 
@@ -21,6 +35,9 @@ MAX_CASES = 500
 MAX_ASSERTS_PER_CASE = 50
 MAX_BODY_DEPTH = 20
 MAX_BODY_ITEMS = 5000
+MAX_RULE_REFS_PER_CASE = 50
+MAX_CHANGE_REFS_PER_CASE = 20
+MAX_PRECONDITIONS_PER_CASE = 20
 
 CASE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 CATEGORY_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -41,7 +58,28 @@ class DraftCase(BaseModel):
 
     case_key: str = Field(description="稳定业务标识，如 order_quantity_below_min")
     title: str = Field(default="")
-    requirement_refs: list[DraftRequirementRef] = Field(min_length=1)
+    level: CaseLevel = Field(default=CaseLevel.BUSINESS)
+    transport: Transport = Field(default=Transport.HTTP)
+    coverage_role: CoverageRole = Field(default=CoverageRole.PRIMARY)
+    requirement_refs: list[DraftRequirementRef] = Field(
+        default_factory=list,
+        max_length=50,
+        description="business 用例必填；code 用例可为空",
+    )
+    rule_refs: list[RuleRef] = Field(
+        default_factory=list,
+        max_length=MAX_RULE_REFS_PER_CASE,
+        description="只写 rule_key/rule_id；authority/source_kind 由 ruleset 回填",
+    )
+    change_refs: list[ChangeRef] = Field(
+        default_factory=list,
+        max_length=MAX_CHANGE_REFS_PER_CASE,
+        description="code 用例必填，描述变更来源",
+    )
+    preconditions: list[Precondition] = Field(
+        default_factory=list,
+        max_length=MAX_PRECONDITIONS_PER_CASE,
+    )
     endpoint: str = Field(description="METHOD /path")
     category: str = Field(default="business")
     priority: Priority = Field(default=Priority.P1)
@@ -54,6 +92,10 @@ class DraftCase(BaseModel):
     rationale: str | None = None
     assumptions: list[str] = Field(default_factory=list)
     note: str | None = None
+    mock_bindings: dict[str, str] = Field(
+        default_factory=dict,
+        description="可选：dep_id → branch；执行时写入用例级 Mock 会话",
+    )
 
 
 class UncoveredRequirement(BaseModel):
@@ -70,6 +112,8 @@ class CaseDraft(BaseModel):
     schema_version: int = 1
     context_id: str | None = None
     generator: dict[str, Any] = Field(default_factory=dict)
+    ruleset_id: str | None = None
+    ruleset_hash: str | None = None
     scope_docs: list[str] = Field(default_factory=list)
     cases: list[DraftCase] = Field(default_factory=list)
     uncovered_requirements: list[UncoveredRequirement] = Field(default_factory=list)
@@ -150,6 +194,32 @@ def _source_for(refs: list[SourceRef], generator: dict[str, Any]) -> str:
     return f"{kind}:{name}"
 
 
+def resolve_rule_refs(
+    refs: list[RuleRef], ruleset: RuleSet | None
+) -> list[RuleRef]:
+    """以规则库为事实源回填 authority/source_kind，不信任草案自报。"""
+    if ruleset is None:
+        return [ref.model_copy() for ref in refs]
+    index = ruleset.rule_index()
+    resolved: list[RuleRef] = []
+    for ref in refs:
+        rule = index.get(ref.rule_key)
+        if rule is None:
+            resolved.append(ref.model_copy())
+            continue
+        source = getattr(rule, "source", None)
+        source_kind = getattr(source, "kind", ref.source_kind)
+        resolved.append(
+            RuleRef(
+                rule_key=rule.rule_key,
+                rule_id=rule.rule_id,
+                authority=rule.authority,
+                source_kind=source_kind,
+            )
+        )
+    return resolved
+
+
 def to_test_case(
     draft_case: DraftCase,
     *,
@@ -158,6 +228,7 @@ def to_test_case(
     doc_versions: dict[str, str],
     generator: dict[str, Any],
     case_id: str = "TC-0000",
+    ruleset: RuleSet | None = None,
 ) -> TestCase:
     """把草案用例解析成执行形态；version 取自 context 文档 hash。"""
     refs = [
@@ -172,6 +243,12 @@ def to_test_case(
     return TestCase(
         id=case_id,
         title=draft_case.title or draft_case.case_key,
+        level=draft_case.level,
+        transport=draft_case.transport,
+        coverage_role=draft_case.coverage_role,
+        rule_refs=resolve_rule_refs(draft_case.rule_refs, ruleset),
+        change_refs=[ref.model_copy() for ref in draft_case.change_refs],
+        preconditions=[item.model_copy() for item in draft_case.preconditions],
         endpoint=draft_case.endpoint,
         category=draft_case.category,
         method=method.upper(),
@@ -187,6 +264,7 @@ def to_test_case(
         source=_source_for(refs, generator),
         assert_strength=draft_case.assert_strength,
         note=draft_case.note,
+        mock_bindings=dict(draft_case.mock_bindings),
     )
 
 
@@ -209,6 +287,9 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
     )
     payload = {
         "case_key": case_key,
+        "level": case.level.value,
+        "transport": case.transport.value,
+        "coverage_role": case.coverage_role.value,
         "endpoint": case.endpoint,
         "category": case.category,
         "priority": case.priority.value,
@@ -229,7 +310,20 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
         ],
         "assert_strength": case.assert_strength.value,
         "requirement_refs": refs,
+        "rule_keys": sorted({ref.rule_key for ref in case.rule_refs}),
+        "preconditions": [
+            {
+                "kind": item.kind.value,
+                "state_key": item.state_key,
+                "table": item.table or "",
+                "where": item.where,
+                "set": item.set,
+            }
+            for item in case.preconditions
+        ],
+        "mock_bindings": dict(sorted(case.mock_bindings.items())),
     }
+    # change_refs 不进指纹：换变更分支不应触发业务用例重审。
     return sha256_json(payload)
 
 
@@ -252,5 +346,6 @@ __all__ = [
     "draft_fingerprint",
     "load_draft",
     "proposal_key",
+    "resolve_rule_refs",
     "to_test_case",
 ]

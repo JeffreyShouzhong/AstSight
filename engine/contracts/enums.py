@@ -84,9 +84,161 @@ class GraphSource(str, Enum):
     CODEGRAPH_MCP = "codegraph_mcp"
 
 
+class MockTransport(str, Enum):
+    """Mock 服务的协议形态。"""
+
+    HTTP = "http"
+    GRPC = "grpc"
+
+
+class MockMode(str, Enum):
+    """Mock 服务的运行形态。"""
+
+    EMBEDDED = "embedded"
+    GRIPMOCK = "gripmock"
+
+
+class MockStrategy(str, Enum):
+    """HTTP 下游注入策略（v4.6.1 支持边界见 C3.5.5）。"""
+
+    URL_OVERRIDE = "url_override"
+    DISCOVERY_OVERRIDE = "discovery_override"
+    HTTP_PROXY = "http_proxy"
+    UNSUPPORTED = "unsupported"
+
+
+class MockRouteMatch(str, Enum):
+    """请求命中 MockRoute 的依据。"""
+
+    PATH_PREFIX = "path_prefix"
+    HOST_PATH = "host_path"
+    METHOD_PATH = "method_path"
+
+
+class MockCallResult(str, Enum):
+    """一次 Mock 调用的处理结果。"""
+
+    OK = "ok"
+    UNKNOWN = "unknown"
+    AMBIGUOUS = "ambiguous"
+    UNBOUND = "unbound"
+    BRANCH_MISSING = "branch_missing"
+    LATE = "late"
+
+
 class SymbolKind(str, Enum):
     """代码符号种类。"""
 
     FUNCTION = "function"
     METHOD = "method"
     CLASS = "class"
+
+
+class RuleAuthority(str, Enum):
+    """规则权威等级（A 最硬，D 只能提示）。"""
+
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
+
+
+class RuleStatus(str, Enum):
+    """规则在规则库中的状态。"""
+
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
+    DISPUTED = "disputed"
+    UNGROUNDED = "ungrounded"
+
+
+class RuleType(str, Enum):
+    """业务规则类型。"""
+
+    BUSINESS_CONSTRAINT = "business_constraint"
+    VALIDATION = "validation"
+    CALCULATION = "calculation"
+    STATE_TRANSITION = "state_transition"
+    ERROR_HANDLING = "error_handling"
+    DATA_CONSISTENCY = "data_consistency"
+    OTHER = "other"
+
+
+class RuleSourceKind(str, Enum):
+    """规则来源方式。"""
+
+    EXPLICIT = "explicit"
+    INFERRED = "inferred"
+
+
+class CaseLevel(str, Enum):
+    """两级用例：业务规则用例 / 代码变更回归用例。"""
+
+    BUSINESS = "business"
+    CODE = "code"
+
+
+class Transport(str, Enum):
+    """接口传输协议；v1 只实现 http。"""
+
+    HTTP = "http"
+    GRPC = "grpc"
+    DUBBO = "dubbo"
+
+
+class CoverageRole(str, Enum):
+    """用例在接口覆盖中的角色。"""
+
+    PRIMARY = "primary"
+    ALIAS = "alias"
+    INDEPENDENT = "independent"
+
+
+class CaseCategory(str, Enum):
+    """用例意图；与 level 分离。"""
+
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    BOUNDARY = "boundary"
+    BUSINESS = "business"
+    CHANGE_REGRESSION = "change_regression"
+    CHANGE_BOUNDARY = "change_boundary"
+    ERROR_BRANCH = "error_branch"
+    SMOKE = "smoke"
+
+
+class ColumnSemantic(str, Enum):
+    """数据列业务语义。"""
+
+    IDENTIFIER = "identifier"
+    REFERENCE = "reference"
+    QUANTITY = "quantity"
+    AMOUNT = "amount"
+    STATUS = "status"
+    ENUM = "enum"
+    TIMESTAMP = "timestamp"
+    BOOLEAN = "boolean"
+    TEXT = "text"
+    UNKNOWN = "unknown"
+
+
+class DataChannel(str, Enum):
+    """造数写入通道。"""
+
+    SQL = "sql"
+    API = "api"
+
+
+class DataWriteMode(str, Enum):
+    """表在造数中的读写权限。"""
+
+    READ = "read"
+    WRITE = "write"
+    BOTH = "both"
+
+
+class PreconditionKind(str, Enum):
+    """用例前置状态类型。"""
+
+    DB_STATE = "db_state"
+    API_STATE = "api_state"

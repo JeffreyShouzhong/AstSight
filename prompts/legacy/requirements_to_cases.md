@@ -1,4 +1,8 @@
-# 需求 → 接口测试用例草案
+# 需求 → 接口测试用例草案（legacy）
+
+> **状态：legacy，非当前设计口径。** 该提示词属于旧“直接生成用例”链路，当前代码与
+> 主流程均不引用；规则驱动主流程使用 `prompts/a4_case_design.md`。保留用于回滚与审计。
+
 
 你是接口测试用例生成器。你的唯一任务是读取上下文包中的事实，产出一份严格符合
 `cases.schema.json` 的 JSON 用例草案。**不要调用框架、不要修改已批准用例库、不要执行代码。**
@@ -40,6 +44,9 @@
 9. 不要输出 `method`、`path`、`id`、`TC-*`、`status`、`version`、`fingerprint`；
    这些由框架回填/分配。
 10. 输出严格 JSON，不要 Markdown 代码围栏，不要注释，不要额外字段。
+11. 仅当 context 的 profile 中明确列出 `downstream_deps[].dep_id` 与可用 `semantic_branches`
+    时，才可填 `mock_bindings: {dep_id: branch}`；不得臆造 dep_id 或 branch。
+    未提供下游信息时不填，由框架默认成功分支并告警。
 
 ## 输出结构
 

@@ -30,7 +30,7 @@ class CaseEntry(TestCase):
     status: CaseStatus = Field(default=CaseStatus.APPROVED)
     version: int = Field(default=1, description="用例自身版本，从 1 递增")
     fingerprint: str = Field(description="行为/需求归属指纹")
-    fingerprint_version: int = Field(default=1)
+    fingerprint_version: int = Field(default=2)
     review: CaseReview | None = Field(default=None, description="最近一次审核决定")
     created_at: str = Field(description="首次批准时间 ISO8601")
     updated_at: str = Field(description="最近更新时间 ISO8601")
@@ -67,8 +67,8 @@ class CaseSet(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
-    fingerprint_version: int = 1
+    schema_version: int = 2
+    fingerprint_version: int = 2
     id: str = Field(description="用例库标识")
     project: str = Field(description="项目标识/相对路径")
     store_version: int = Field(default=1, description="用例库版本，批准时 +1")
@@ -78,6 +78,9 @@ class CaseSet(BaseModel):
     approved_at: str | None = None
     approved_by: str | None = None
     openapi: dict = Field(default_factory=dict, description="source/sha256/operation_count")
+    ruleset: dict = Field(
+        default_factory=dict, description="规则库快照：id/version/hash"
+    )
     cases: list[CaseEntry] = Field(default_factory=list, description="approved + deprecated")
     history: list[CaseEntry] = Field(default_factory=list, description="superseded 旧版本")
     review_log: list[ReviewEvent] = Field(default_factory=list)
