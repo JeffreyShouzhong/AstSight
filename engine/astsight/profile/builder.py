@@ -1,7 +1,8 @@
 """C3 画像构建（S3）：路由 × OpenAPI × 下游依赖。
 
 事实源零 LLM。任何一路缺失都显式标记，不降级猜测：
-- 无 OpenAPI → `contract_incomplete=true`，用例只能做状态码冒烟；
+- 无 OpenAPI → 仍可由代码路由建画像，但 `contract_incomplete=true`、
+  `contract_incomplete_reason=openapi_missing`，字段事实为空，用例只能做状态码/需求规则冒烟；
 - 路由证据等级直接沿用路由审计结果（verified/inferred/unmapped）；
 - 下游依赖来自源码 AST + CodeGraph 正向 `callees`（见 `downstream.py`）；
   找不到源码或无法静态解析时留空并标 `downstream_unmapped`，不猜。
@@ -99,11 +100,17 @@ def build_profiles(
             "route_confidence": route.get("confidence", "verified"),
             "path_aligned_from": aligned_from,
             "contract_incomplete": operation is None,
+            "contract_incomplete_reason": (
+                None
+                if operation is not None
+                else ("openapi_operation_missing" if operations else "openapi_missing")
+            ),
             "params": [],
             "request_body": {},
             "body_required": [],
             "success_codes": [200],
             "response_fields": {},
+            "error_codes": [],
             "downstream_deps": [],
             "downstream_unmapped": False,
             "source": "openapi" if operation else "route",
@@ -123,7 +130,10 @@ def build_profiles(
                     },
                 }
             )
-        else:
+        elif operations:
+            # 有契约但缺这一个 operation：逐接口标缺口。
+            # 整个项目没有契约时不逐条刷 unmapped，由 context 的 openapi_missing
+            # 统一告警；否则几十个接口会把“没有契约”淹没成几十条同因告警。
             unmapped.append(
                 {
                     "endpoint": f"{method} {path}",

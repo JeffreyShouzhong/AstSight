@@ -17,13 +17,15 @@ from contracts import (
     RuleStatus,
 )
 
+from ..cases.requirements import normalize_text
 from ..persistence import load_json, save_json_atomic, sha256_json, sha256_text
 from .contract import build_contract_rules
 from .diff import RuleDiff, diff_rules
 from .draft import RuleDraft
+from .grounding import rule_value_tokens
 from .validate import RuleValidation, build_rule_set, contract_rule_key, rule_fingerprint, rule_key, validate_rule_draft
 
-SUPPORTED_RULESET_SCHEMA = 1
+SUPPORTED_RULESET_SCHEMA = 2
 MAX_RULESET_BYTES = 20 * 1024 * 1024
 _KEY_RE = re.compile(r"^RK-[0-9a-f]{12}$")
 _RULE_ID_RE = re.compile(r"^(BR|CR)-\d{2,}$")
@@ -113,6 +115,17 @@ def validate_rule_set(ruleset: RuleSet) -> list[str]:
             errors.append(f"{where}: ungrounded 规则不能是 A 级")
         if not rule.source.doc or not rule.source.section:
             errors.append(f"{where}: 来源 doc/section 为空")
+        if rule.constraints and rule.status is RuleStatus.ACTIVE:
+            quote_norm = normalize_text(rule.source.quote)
+            missing = [
+                token
+                for token in rule_value_tokens("", rule.constraints)
+                if normalize_text(token) not in quote_norm
+            ]
+            if missing:
+                errors.append(
+                    f"{where}: 结构化约束值不在 quote 中: {missing}"
+                )
         expected_fp = rule_fingerprint(rule)
         if rule.fingerprint and rule.fingerprint != expected_fp:
             errors.append(f"{where}: fingerprint 与内容不一致")
@@ -149,27 +162,6 @@ def validate_rule_set(ruleset: RuleSet) -> list[str]:
             errors.append(f"conflicts[{index}]: 引用了不存在的规则 {missing}")
         if len(set(conflict.rule_keys)) != len(conflict.rule_keys):
             errors.append(f"conflicts[{index}]: rule_keys 重复")
-    errors.extend(_apply_conflict_statuses(ruleset))
-    return errors
-
-
-def _apply_conflict_statuses(ruleset: RuleSet) -> list[str]:
-    """未裁决冲突中的规则必须是 disputed；已裁决冲突不自动解除其它冲突。"""
-    errors: list[str] = []
-    disputed: set[str] = set()
-    for conflict in ruleset.conflicts:
-        if conflict.resolved_at:
-            continue
-        disputed.update(conflict.rule_keys)
-    for rule in ruleset.all_rules():
-        if rule.rule_key in disputed:
-            rule.status = RuleStatus.DISPUTED
-        elif (
-            isinstance(rule, Rule)
-            and rule.status is RuleStatus.DISPUTED
-        ):
-            # 旧冲突已消失时，不把规则永久锁死。
-            rule.status = RuleStatus.ACTIVE
     return errors
 
 
@@ -214,36 +206,67 @@ def _merge_prompt(previous: RuleSet | None, prompt: dict[str, Any] | None) -> di
     return merged
 
 
+def _merge_origin(first: str, second: str) -> str:
+    origins = {first or "model", second or "model"}
+    if "model+framework" in origins:
+        return "model+framework"
+    if "model" in origins and "framework" in origins:
+        return "model+framework"
+    return sorted(origins)[0]
+
+
+_SEVERITY_ORDER = {"loss": 0, "silent": 1, "rights": 2, "untestable": 3, "minor": 4}
+
+
+def _conflict_key(conflict: RuleConflict) -> tuple[str, str]:
+    """冲突身份 = topic + kind。
+
+    只按 topic 合并会把"同一句话的两种不同毛病"压成一条：例如某个字段既
+    存在枚举未闭合，又存在两处取值不一致，合并后只剩一条，另一条永久丢失。
+    """
+    return (conflict.topic, conflict.kind.value)
+
+
+def _merge_severity(first, second):
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return first if _SEVERITY_ORDER.get(first.value, 9) <= _SEVERITY_ORDER.get(
+        second.value, 9
+    ) else second
+
+
 def _merge_conflicts(
-    previous: RuleSet | None,
     incoming: list[RuleConflict],
     known_keys: set[str],
 ) -> list[RuleConflict]:
-    old_by_topic = {conflict.topic: conflict for conflict in (previous.conflicts if previous else [])}
-    merged: list[RuleConflict] = []
-    seen_topics: set[str] = set()
-    for conflict in incoming:
-        keys = [key for key in conflict.rule_keys if key in known_keys]
+    """按 (topic, kind) 合并**本次**抽取的冲突。
+
+    每次导入都是一次完整抽取，不是增量补丁：上一版存在、本次不再检出的冲突
+    必须消失。否则回写需求修复后重新抽取，旧冲突仍会留在规则库里，闭环永远
+    收敛不了；无法回答的“它是不是已经修好了”也就无从判断。
+    """
+    by_key: dict[tuple[str, str], RuleConflict] = {}
+    for raw in incoming:
+        keys = sorted({key for key in raw.rule_keys if key in known_keys})
         if not keys:
             continue
-        old = old_by_topic.get(conflict.topic)
+        conflict = raw.model_copy(deep=True)
         conflict.rule_keys = keys
-        if old and old.resolved_at:
-            conflict.resolved_by = old.resolved_by
-            conflict.resolved_at = old.resolved_at
-            if not conflict.decision:
-                conflict.decision = old.decision
-        merged.append(conflict)
-        seen_topics.add(conflict.topic)
-    for topic, old in old_by_topic.items():
-        if topic in seen_topics:
-            continue
-        keys = [key for key in old.rule_keys if key in known_keys]
-        if not keys:
-            continue
-        old.rule_keys = keys
-        merged.append(old)
-    return merged
+        existing = by_key.get(_conflict_key(conflict))
+        if existing is None:
+            by_key[_conflict_key(conflict)] = conflict
+        else:
+            existing.rule_keys = sorted(set(existing.rule_keys) | set(conflict.rule_keys))
+            existing.docs = sorted(set(existing.docs) | set(conflict.docs))
+            existing.origin = _merge_origin(existing.origin, conflict.origin)
+            existing.severity = _merge_severity(existing.severity, conflict.severity)
+            if conflict.reason and conflict.reason not in existing.reason:
+                existing.reason = "; ".join(
+                    part for part in (existing.reason, conflict.reason) if part
+                )[:2_000]
+    return [*by_key.values()]
 
 
 def import_rule_draft(
@@ -284,9 +307,8 @@ def import_rule_draft(
         )
     contract_list = list(contract_rules)
 
-    resolved_conflicts = _merge_conflicts(
-        previous,
-        validation.conflicts,
+    merged_conflicts = _merge_conflicts(
+        [*validation.conflicts, *validation.framework_conflicts],
         {rule.rule_key for rule in [*validation.rules, *contract_list]},
     )
     version = (previous.version if previous else 0) + 1
@@ -298,7 +320,7 @@ def import_rule_draft(
             rules=list(validation.rules),
             questions=list(validation.questions),
             gaps=list(validation.gaps),
-            conflicts=resolved_conflicts,
+            conflicts=merged_conflicts,
             errors=list(validation.errors),
             warnings=list(validation.warnings),
         ),
@@ -335,45 +357,6 @@ def import_rule_draft(
     )
 
 
-def resolve_conflict(
-    *,
-    ruleset: RuleSet,
-    topic: str,
-    choose: str,
-    reviewer: str,
-    decision: str = "",
-    path: str | Path | None = None,
-) -> RuleSet:
-    conflict = next((item for item in ruleset.conflicts if item.topic == topic), None)
-    if conflict is None:
-        raise RuleStoreError(f"未找到规则冲突 topic={topic!r}")
-    if choose not in conflict.rule_keys:
-        raise RuleStoreError(
-            f"choose={choose!r} 不在冲突规则中: {conflict.rule_keys}"
-        )
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    conflict.decision = decision or f"choose {choose}"
-    conflict.resolved_by = reviewer
-    conflict.resolved_at = now
-    index = ruleset.rule_index()
-    chosen = index.get(choose)
-    for key in conflict.rule_keys:
-        rule = index.get(key)
-        if rule is None:
-            continue
-        if key == choose:
-            rule.status = RuleStatus.ACTIVE
-        elif isinstance(rule, Rule):
-            rule.status = RuleStatus.DEPRECATED
-    if chosen is not None:
-        chosen.status = RuleStatus.ACTIVE
-    ruleset.version += 1
-    ruleset.generated_at = now
-    if path is not None:
-        save_rule_set(path, ruleset)
-    return ruleset
-
-
 def rule_text(rule: Rule | ContractRule) -> str:
     if isinstance(rule, ContractRule):
         return f"{rule.endpoint} {rule.field}: {rule.constraint}"
@@ -392,7 +375,6 @@ __all__ = [
     "empty_rule_set",
     "import_rule_draft",
     "load_rule_set",
-    "resolve_conflict",
     "rule_label",
     "rule_set_hash",
     "rule_set_snapshot",

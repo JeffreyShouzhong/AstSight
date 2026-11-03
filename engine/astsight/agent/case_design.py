@@ -149,8 +149,12 @@ def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
         "transport": profile.get("transport", "http"),
         "coverage_role": profile.get("coverage_role", "primary"),
         "business_key": profile.get("business_key"),
-        "request_fields": profile.get("request_fields") or [],
-        "response_fields": profile.get("response_fields") or [],
+        "contract_incomplete": bool(profile.get("contract_incomplete")),
+        "contract_incomplete_reason": profile.get("contract_incomplete_reason"),
+        "params": profile.get("params") or [],
+        "request_body": profile.get("request_body") or {},
+        "body_required": profile.get("body_required") or [],
+        "response_fields": profile.get("response_fields") or {},
         "success_codes": profile.get("success_codes") or [],
         "error_codes": profile.get("error_codes") or [],
         "downstream_deps": profile.get("downstream_deps") or [],
@@ -179,9 +183,18 @@ def _prompt_input(
             "version": ruleset.version,
             "hash": rule_set_hash(ruleset),
             "rules": _rule_view(ruleset),
-            "unresolved_conflicts": sum(
-                1 for conflict in ruleset.conflicts if not conflict.resolved_at
-            ),
+            "conflicts": [
+                {
+                    "topic": conflict.topic,
+                    "kind": conflict.kind.value,
+                    "severity": conflict.severity.value if conflict.severity else "",
+                    "rule_keys": list(conflict.rule_keys),
+                    "docs": list(conflict.docs),
+                    "origin": conflict.origin,
+                    "reason": conflict.reason,
+                }
+                for conflict in ruleset.conflicts
+            ],
         },
         "mock_semantics": _semantic_view(mock_semantic),
         "data_catalog": _catalog_view(data_catalog),

@@ -55,16 +55,18 @@ from .profile import build_plan_from_profiles, build_profiles, load_spec, parse_
 from .rules import (
     RuleDraft,
     RuleStoreError,
+    build_rules_context,
     import_rule_draft,
     load_rule_set,
     load_rules_context,
     load_rule_draft,
     prepare_rules_context,
-    resolve_conflict,
+    render_rule_set_markdown,
     rule_coverage,
     rule_set_hash,
     rule_set_snapshot,
     save_rule_set,
+    write_rules_context,
 )
 
 _EXIT = {"pass": 0, "fail": 1, "not_run": 2}
@@ -181,6 +183,17 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--requirements", action="append", required=True, metavar="PATH")
     prepare.add_argument("--openapi", default=None)
     prepare.add_argument("--base-url", default=None)
+    prepare.add_argument(
+        "--codegraph",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help="无 OpenAPI 时扫描代码路由所用的图谱模式",
+    )
+    prepare.add_argument(
+        "--no-scan-routes",
+        action="store_true",
+        help="没有 OpenAPI 时也不扫描代码路由；只生成需求上下文",
+    )
     prepare.add_argument("--out", default=".astsight/casegen", help="相对 project")
     prepare.add_argument("--json", action="store_true")
 
@@ -235,11 +248,35 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--force", action="store_true", help="允许覆盖已存在的计划文件")
     plan.add_argument("--json", action="store_true")
 
-    rules_parser = sub.add_parser("rules", help="规则库：上下文、导入、状态与冲突裁决")
+    rules_parser = sub.add_parser(
+        "rules", help="规则库：需求文档抽取、框架外导入、状态与评审文档"
+    )
     rules_sub = rules_parser.add_subparsers(dest="rules_command", required=True)
 
+    rules_extract = rules_sub.add_parser(
+        "extract",
+        help="需求文档 → ruleset.json + ruleset.md（调用模型，一次抽取）",
+    )
+    rules_extract.add_argument("--project", required=True)
+    rules_extract.add_argument(
+        "--requirements", action="append", required=True, metavar="PATH"
+    )
+    rules_extract.add_argument(
+        "--openapi", default=None, help="可选：补充 CR 契约规则；不提供则不生成 CR"
+    )
+    rules_extract.add_argument("--out", default=".astsight/rules", help="相对 project")
+    rules_extract.add_argument("--rule-base", default=None, help="相对 project")
+    rules_extract.add_argument(
+        "--max-rules", type=int, default=500, help="单次抽取规则上限（<=500）"
+    )
+    rules_extract.add_argument(
+        "--prompt", default=None, help="覆盖 A1 提示词路径（默认 prompts/a1_requirement_analysis.md）"
+    )
+    rules_extract.add_argument("--dry-run", action="store_true", help="只校验，不写规则库")
+    rules_extract.add_argument("--json", action="store_true")
+
     rules_prepare = rules_sub.add_parser(
-        "prepare", help="确定性生成 A1 规则抽取上下文包"
+        "prepare", help="仅生成 A1 上下文包（模型在框架外运行时使用）"
     )
     rules_prepare.add_argument("--project", required=True)
     rules_prepare.add_argument(
@@ -247,6 +284,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rules_prepare.add_argument("--openapi", default=None)
     rules_prepare.add_argument("--out", default=".astsight/rules", help="相对 project")
+    rules_prepare.add_argument(
+        "--prompt", default=None, help="覆盖 A1 提示词路径（默认 prompts/a1_requirement_analysis.md）"
+    )
     rules_prepare.add_argument("--json", action="store_true")
 
     rules_import = rules_sub.add_parser(
@@ -265,14 +305,16 @@ def _build_parser() -> argparse.ArgumentParser:
     rules_status.add_argument("--case-base", default=None)
     rules_status.add_argument("--json", action="store_true")
 
-    rules_resolve = rules_sub.add_parser("resolve", help="人工裁决规则冲突")
-    rules_resolve.add_argument("--project", required=True)
-    rules_resolve.add_argument("--rule-base", default=None)
-    rules_resolve.add_argument("--topic", required=True)
-    rules_resolve.add_argument("--choose", required=True, help="选中的 rule_key")
-    rules_resolve.add_argument("--reviewer", required=True)
-    rules_resolve.add_argument("--decision", default="")
-    rules_resolve.add_argument("--json", action="store_true")
+    rules_render = rules_sub.add_parser(
+        "render", help="把 ruleset.json 渲染成人工评审用的 Markdown"
+    )
+    rules_render.add_argument("--project", required=True)
+    rules_render.add_argument("--rule-base", default=None)
+    rules_render.add_argument(
+        "--out", default=None, help="默认写到 ruleset.json 同目录的 ruleset.md"
+    )
+    rules_render.add_argument("--stdout", action="store_true", help="直接打印，不写文件")
+    rules_render.add_argument("--json", action="store_true")
 
     data_parser = sub.add_parser("data", help="C5 数据目录、造数计划与执行")
     data_sub = data_parser.add_subparsers(dest="data_command", required=True)
@@ -464,18 +506,23 @@ def _cases_prepare(args) -> int:
             openapi=args.openapi,
             base_url=args.base_url,
             out=args.out,
+            scan_routes=not args.no_scan_routes,
+            codegraph=args.codegraph,
         )
     except Exception as exc:
         print(f"cases prepare 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+    context = prepared.context
     payload = {
         "context_id": prepared.context_id,
         "context_dir": str(prepared.context_dir),
         "context": str(prepared.context_path),
         "prompt": str(prepared.prompt_path),
         "schema": str(prepared.schema_path),
-        "endpoints": len(prepared.context.get("profiles") or []),
-        "documents": len(prepared.context.get("documents") or []),
+        "endpoints": len(context.get("profiles") or []),
+        "documents": len(context.get("documents") or []),
+        "openapi": str((context.get("openapi") or {}).get("source") or ""),
+        "warnings": context.get("warnings") or [],
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -688,6 +735,112 @@ def _cases_status(args) -> int:
     return 0
 
 
+def _rules_llm():
+    """按环境变量构造模型客户端；测试通过 monkeypatch 替换。"""
+    from .llm import LLMClient, config_from_env
+
+    return LLMClient(config_from_env())
+
+
+def _rules_extract(args) -> int:
+    """需求文档是入口：确定性上下文 + 模型抽规则 + 确定性导入，一次完成。
+
+    模型只产出候选草案；`rule_key`、A 级落地、冲突检测、CR 契约规则与
+    版本号都由框架重算。校验不通过时 ruleset.json 保持原样。
+    """
+    from .agent.rule_analysis import generate_rule_draft, rule_prompt_metadata
+
+    project = Path(args.project).resolve()
+    rule_base = _resolve_under_project(project, args.rule_base) or project / "ruleset.json"
+    try:
+        context = build_rules_context(
+            project,
+            list(args.requirements),
+            openapi=args.openapi,
+            prompt_path=args.prompt,
+        )
+        prepared = write_rules_context(
+            context, project=project, out=args.out, prompt_path=args.prompt
+        )
+    except Exception as exc:
+        print(f"rules extract 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    draft_path = prepared.context_dir / "rules.draft.json"
+    llm = None
+    try:
+        llm = _rules_llm()
+        draft = generate_rule_draft(
+            context,
+            llm=llm,
+            prompt_path=args.prompt,
+            max_rules=max(1, min(500, args.max_rules)),
+        )
+        # 草案先落盘再校验：校验失败时保留模型原始输出，便于定位是模型问题
+        # 还是需求本身不可判定；规则库本身不写。
+        save_json_atomic(draft_path, draft.model_dump(mode="json"))
+    except Exception as exc:
+        print(f"rules extract 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        close = getattr(llm, "close", None)
+        if callable(close):
+            close()
+
+    # 规则库记录“哪版提示词、哪个模型”，便于审计同一需求的抽取口径。
+    prompt_info = rule_prompt_metadata(context, llm)
+
+    try:
+        previous = load_rule_set(rule_base) if rule_base.is_file() else None
+        result = import_rule_draft(
+            project=project.name,
+            context=context,
+            draft=draft,
+            previous=previous,
+            prompt=prompt_info,
+            dry_run=args.dry_run,
+            path=rule_base,
+        )
+    except Exception as exc:
+        print(f"rules extract 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    payload = {
+        "context_id": prepared.context_id,
+        "context_dir": str(prepared.context_dir),
+        "context": str(prepared.context_path),
+        "prompt": str(prepared.prompt_path),
+        "schema": str(prepared.schema_path),
+        "draft": str(draft_path),
+        "rule_base": str(rule_base),
+        "written": result.written,
+        "version": result.ruleset.version,
+        "business_rules": len(result.ruleset.rules),
+        "contract_rules": len(result.ruleset.contract_rules),
+        "questions": len(result.ruleset.questions),
+        "gaps": len(result.ruleset.gaps),
+        "conflicts": [conflict.topic for conflict in result.ruleset.conflicts],
+        "validation": result.validation.as_dict(),
+        "diff": result.diff.as_dict(),
+        "warnings": [
+            *(context.get("warnings") or []),
+            *result.validation.warnings,
+        ],
+    }
+    if result.written:
+        # 人工评审文档只读：用于和产品方对齐需求缺陷，不参与导入。
+        review_path = rule_base.with_suffix(".md")
+        review_path.write_text(
+            render_rule_set_markdown(result.ruleset), encoding="utf-8"
+        )
+        payload["review"] = str(review_path)
+
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if result.validation.errors:
+        return 1
+    return 0
+
+
 def _rules_prepare(args) -> int:
     project = Path(args.project).resolve()
     try:
@@ -696,6 +849,7 @@ def _rules_prepare(args) -> int:
             list(args.requirements),
             openapi=args.openapi,
             out=args.out,
+            prompt_path=args.prompt,
         )
     except Exception as exc:
         print(f"rules prepare 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -715,6 +869,8 @@ def _rules_prepare(args) -> int:
 
 
 def _rules_import(args) -> int:
+    from .agent.rule_analysis import rule_prompt_metadata
+
     project = Path(args.project).resolve()
     rule_base = _resolve_under_project(project, args.rule_base) or project / "ruleset.json"
     try:
@@ -726,7 +882,7 @@ def _rules_import(args) -> int:
             context=context,
             draft=draft,
             previous=previous,
-            prompt={"name": "a1_requirement_analysis", "version": "1"},
+            prompt=rule_prompt_metadata(context),
             dry_run=args.dry_run,
             path=rule_base,
         )
@@ -735,6 +891,14 @@ def _rules_import(args) -> int:
         return 1
     payload = result.as_dict()
     payload["rule_base"] = str(rule_base)
+    if result.written:
+        # 人工评审文档是本次抽取的只读视图：随规则库一起产出，
+        # 用来和产品方对齐需求缺陷；它不参与导入，也不能反向修改规则。
+        review_path = rule_base.with_suffix(".md")
+        review_path.write_text(
+            render_rule_set_markdown(result.ruleset), encoding="utf-8"
+        )
+        payload["review"] = str(review_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if result.validation.errors:
         return 1
@@ -780,15 +944,9 @@ def _rules_status(args) -> int:
         "questions": [item.model_dump(mode="json") for item in ruleset.questions],
         "gaps": [item.model_dump(mode="json") for item in ruleset.gaps],
         "conflicts": [
-            {
-                **item.model_dump(mode="json"),
-                "resolved": bool(item.resolved_at),
-            }
-            for item in ruleset.conflicts
+            item.model_dump(mode="json") for item in ruleset.conflicts
         ],
-        "unresolved_conflicts": sum(
-            1 for item in ruleset.conflicts if not item.resolved_at
-        ),
+        "conflict_count": len(ruleset.conflicts),
         "rule_drift_stale_cases": orphaned,
         "case_base": str(case_base) if caseset is not None else None,
         "coverage": coverage,
@@ -797,36 +955,37 @@ def _rules_status(args) -> int:
     return 0
 
 
-def _rules_resolve(args) -> int:
+def _rules_render(args) -> int:
     project = Path(args.project).resolve()
     rule_base = _resolve_under_project(project, args.rule_base) or project / "ruleset.json"
     try:
         ruleset = load_rule_set(rule_base)
-        updated = resolve_conflict(
-            ruleset=ruleset,
-            topic=args.topic,
-            choose=args.choose,
-            reviewer=args.reviewer,
-            decision=args.decision or "",
-            path=rule_base,
-        )
     except Exception as exc:
-        print(f"rules resolve 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"rules render 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
-    print(
-        json.dumps(
-            {
-                "rule_base": str(rule_base),
-                "version": updated.version,
-                "hash": rule_set_hash(updated),
-                "resolved_topic": args.topic,
-                "choose": args.choose,
-                "reviewer": args.reviewer,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+
+    markdown = render_rule_set_markdown(ruleset)
+    if args.stdout:
+        print(markdown)
+        return 0
+
+    out = _resolve_under_project(project, args.out) or rule_base.with_suffix(".md")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(markdown, encoding="utf-8")
+    payload = {
+        "rule_base": str(rule_base),
+        "out": str(out),
+        "version": ruleset.version,
+        "rules": len(ruleset.rules),
+        "conflicts": len(ruleset.conflicts),
+        "gaps": len(ruleset.gaps),
+        "questions": len(ruleset.questions),
+        "bytes": len(markdown.encode("utf-8")),
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"已渲染 {out}")
     return 0
 
 
@@ -1278,14 +1437,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.mock_command == "plan":
             return _mock_plan_command(args)
     if args.command == "rules":
+        if args.rules_command == "extract":
+            return _rules_extract(args)
         if args.rules_command == "prepare":
             return _rules_prepare(args)
         if args.rules_command == "import":
             return _rules_import(args)
         if args.rules_command == "status":
             return _rules_status(args)
-        if args.rules_command == "resolve":
-            return _rules_resolve(args)
+        if args.rules_command == "render":
+            return _rules_render(args)
     if args.command == "data":
         if args.data_command == "catalog":
             return _data_catalog(args)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import httpx
 
-from astsight.cases.context import ContextError, prepare_context
+from astsight.cases.context import prepare_context
 from astsight.cases.draft import load_draft
 from astsight.cases.proposal import approve_proposal, build_proposal, list_pending_proposals
 from astsight.cases.store import empty_case_set, load_case_set, requirement_coverage
@@ -259,15 +259,49 @@ def test_requirement_cases_review_approve_and_execute(tmp_path: Path) -> None:
         assert blocked["summary"]["final_pass"] == 4
 
 
-def test_prepare_rejects_missing_openapi(tmp_path: Path) -> None:
+def test_prepare_degrades_without_openapi_and_routes(tmp_path: Path) -> None:
     project = tmp_path / "empty"
     project.mkdir()
     (project / "docs").mkdir()
     (project / "docs" / "api.md").write_text("# API\n\n## POST /x\n\nhello\n", encoding="utf-8")
 
-    try:
-        prepare_context(project, ["docs/api.md"])
-    except ContextError as exc:
-        assert "OpenAPI" in str(exc)
-    else:
-        raise AssertionError("缺少 OpenAPI 时必须失败，不能猜测字段")
+    prepared = prepare_context(project, ["docs/api.md"], scan_routes=False)
+    context = prepared.context
+
+    assert context["openapi"] == {}
+    assert context["profiles"] == []
+    assert "openapi_missing" in context["warnings"]
+    assert "routes_missing" in context["warnings"]
+    assert context["interface_evidence"] == {
+        "openapi": "missing",
+        "routes": "none",
+        "contract_rules_available": False,
+    }
+
+
+def test_prepare_scans_code_routes_without_openapi(tmp_path: Path) -> None:
+    project = tmp_path / "order_service"
+    shutil.copytree(
+        EXAMPLE,
+        project,
+        ignore=shutil.ignore_patterns("__pycache__", ".astsight"),
+    )
+
+    prepared = prepare_context(
+        project,
+        ["docs/requirements.md"],
+        scan_routes=True,
+        codegraph="off",
+    )
+    context = prepared.context
+
+    assert "openapi_missing" in context["warnings"]
+    assert "routes_missing" not in context["warnings"]
+    assert context["interface_evidence"]["routes"] == "code"
+    by_endpoint = {profile["endpoint"]: profile for profile in context["profiles"]}
+    assert "POST /api/v1/orders" in by_endpoint
+    profile = by_endpoint["POST /api/v1/orders"]
+    assert profile["contract_incomplete"] is True
+    assert profile["contract_incomplete_reason"] == "openapi_missing"
+    assert profile["request_body"] == {}
+    assert profile["params"] == []

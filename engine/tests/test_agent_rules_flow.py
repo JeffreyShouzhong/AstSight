@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 from astsight.agent.flow import run_flow
+from astsight.cases.context import build_context
+from astsight.inventory import inventory_routes
 from astsight.rules.store import load_rule_set, rule_set_snapshot
 from test_agent_flow import (
     DOC,
@@ -17,6 +19,48 @@ from test_agent_flow import (
     _rules,
     _section,
 )
+
+
+def _code_context(project: Path) -> dict:
+    routes, _audit, _graph, _notes = inventory_routes(project, codegraph="off")
+    return build_context(project, [DOC], routes=routes)
+
+
+def _section_without_openapi(project: Path) -> str:
+    for document in _code_context(project)["documents"]:
+        for section in document["sections"]:
+            if section["section"].endswith("POST /api/v1/quotes"):
+                return section["section"]
+    raise AssertionError("section not found")
+
+
+def _dep_id_without_openapi(project: Path) -> str:
+    for profile in _code_context(project)["profiles"]:
+        if profile["endpoint"] == "POST /api/v1/quotes":
+            return profile["downstream_deps"][0]["dep_id"]
+    raise AssertionError("downstream dep not found")
+
+
+def test_rules_and_design_run_without_openapi(tmp_path: Path) -> None:
+    project = _copy_example(tmp_path)
+    (project / "openapi.json").unlink()
+    dep_id = _dep_id_without_openapi(project)
+    section = _section_without_openapi(project)
+    config = _config(project, 0, approve=None)
+    config.openapi = None
+    llm = ScriptedLLM(
+        [_rules(section), _mock_semantics(dep_id, section), _draft(dep_id, section)]
+    )
+
+    result = run_flow(config, llm=llm)
+
+    assert result.status == "pending_review", (result.steps, result.errors)
+    assert result.steps["scope"]["interface_evidence"] == "code_routes_only"
+    assert result.steps["scope"]["contract_incomplete"] >= 1
+    assert result.steps["rules"]["contract_rules"] == 0
+    assert any(warning.startswith("openapi_missing") for warning in result.warnings)
+    assert (project / "ruleset.json").is_file()
+    assert Path(result.steps["proposal"]["path"]).is_dir()
 
 
 def test_rules_and_mock_semantics_are_written_before_design(tmp_path: Path) -> None:
@@ -37,6 +81,9 @@ def test_rules_and_mock_semantics_are_written_before_design(tmp_path: Path) -> N
     assert len(ruleset.rules) == 2
     assert ruleset.contract_rules
     assert {rule.authority.value for rule in ruleset.rules} <= {"A", "B"}
+    review = Path(rules_step["review"])
+    assert review == project / "ruleset.md"
+    assert "## 2 规则表" in review.read_text(encoding="utf-8")
 
     mock_step = result.steps["mock_semantics"]
     assert mock_step["deps"] == 1

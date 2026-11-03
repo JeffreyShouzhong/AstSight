@@ -67,7 +67,7 @@ def _rule(
 
 def _ruleset(*rules: Rule) -> RuleSet:
     return RuleSet(
-        schema_version=1,
+        schema_version=2,
         ruleset_id="rs-mock",
         project="demo",
         version=1,
@@ -100,7 +100,7 @@ def test_error_rule_becomes_grounded_branch() -> None:
 def test_inactive_or_non_error_rules_do_not_create_branches() -> None:
     for ruleset in (
         _ruleset(_rule(status=RuleStatus.DEPRECATED)),
-        _ruleset(_rule(status=RuleStatus.DISPUTED)),
+        _ruleset(_rule(status=RuleStatus.UNGROUNDED)),
         _ruleset(_rule(type=RuleType.CALCULATION)),
     ):
         semantic = build_mock_semantic(_context(), ruleset)

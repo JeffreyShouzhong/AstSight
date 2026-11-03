@@ -1,13 +1,16 @@
 """C1/A1 规则层：上下文、草案校验、规则库、diff 与覆盖。"""
+from .conflicts import detect_constraint_conflicts
 from .contract import build_contract_rules
 from .context import (
     DEFAULT_RULES_OUT,
     RULES_CONTEXT_SCHEMA_VERSION,
+    RULES_PROMPT_VERSION,
     PreparedRulesContext,
     build_rules_context,
     context_sections,
     load_rules_context,
     prepare_rules_context,
+    prompt_digest,
     resolve_section,
     write_rules_context,
 )
@@ -22,13 +25,13 @@ from .draft import (
     RuleDraft,
     load_rule_draft,
 )
+from .render import render_rule_set_markdown
 from .store import (
     RuleImportResult,
     RuleStoreError,
     empty_rule_set,
     import_rule_draft,
     load_rule_set,
-    resolve_conflict,
     rule_set_hash,
     rule_set_snapshot,
     save_rule_set,
@@ -52,6 +55,7 @@ __all__ = [
     "DraftRuleSource",
     "PreparedRulesContext",
     "RULES_CONTEXT_SCHEMA_VERSION",
+    "RULES_PROMPT_VERSION",
     "RuleChange",
     "RuleCoverage",
     "RuleCoverageItem",
@@ -65,6 +69,7 @@ __all__ = [
     "build_rules_context",
     "context_sections",
     "contract_rule_key",
+    "detect_constraint_conflicts",
     "diff_rules",
     "drift_summary",
     "empty_rule_set",
@@ -74,7 +79,8 @@ __all__ = [
     "load_rules_context",
     "orphaned_rule_keys",
     "prepare_rules_context",
-    "resolve_conflict",
+    "prompt_digest",
+    "render_rule_set_markdown",
     "resolve_section",
     "rule_coverage",
     "rule_fingerprint",

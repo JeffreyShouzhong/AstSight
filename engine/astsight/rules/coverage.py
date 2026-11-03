@@ -49,9 +49,6 @@ class RuleCoverage:
             "deprecated": sum(
                 1 for item in items if item.status == RuleStatus.DEPRECATED.value
             ),
-            "disputed": sum(
-                1 for item in items if item.status == RuleStatus.DISPUTED.value
-            ),
             "ungrounded": sum(
                 1 for item in items if item.status == RuleStatus.UNGROUNDED.value
             ),

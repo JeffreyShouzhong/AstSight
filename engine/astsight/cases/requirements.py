@@ -13,14 +13,24 @@ from ..persistence import sha256_text
 
 _ALLOWED_SUFFIXES = {".md", ".markdown", ".txt"}
 _SKIP_DIRS = {".git", ".astsight", "__pycache__", ".mypy_cache", ".pytest_cache"}
+# 需求文档是不可信输入：先限制单文件大小与文件数，避免把整个仓库/超大日志
+# 读进 context，再指望 LLM 的 prompt 上限兜底。
+MAX_DOC_BYTES = 2 * 1024 * 1024
+MAX_DOC_FILES = 50
 _METADATA_WORDS = (
     "版本",
+    "版本信息",
+    "版本记录",
+    "版本历史",
+    "修订记录",
+    "修订历史",
     "变更记录",
     "变更日志",
     "更新记录",
     "目录",
     "附录",
     "术语",
+    "术语表",
     "名词解释",
     "背景",
     "范围",
@@ -31,6 +41,13 @@ _METADATA_WORDS = (
 )
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
+# Markdown 分割线（***、---、___）不是正文；留在 section 里只会进 prompt、
+# 污染 text_hash，对规则抽取没有任何信息量。fenced code 内的同类行保留。
+_THEMATIC_BREAK_RE = re.compile(r"^\s*(?:\*{3,}|-{3,}|_{3,})\s*$")
+_HEADING_NUMBER_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*[.、)]?\s*|[一二三四五六七八九十]+[、.)]\s*)"
+)
+_TRAILING_PAREN_RE = re.compile(r"\s*[（(][^）)]*[）)]\s*$")
 
 
 class DocumentSection(BaseModel):
@@ -60,7 +77,20 @@ def normalize_text(text: str) -> str:
 
 
 def _is_metadata(title: str) -> bool:
-    return any(word in title for word in _METADATA_WORDS)
+    """元数据标题按“去编号后的整词”判断，不用子串匹配。
+
+    子串匹配会把“目标库存策略”“背景音乐需求”这类真实需求一起排除，
+    直接缩小覆盖率分母；宁可漏排除一个元数据标题，也不能误删需求。
+    """
+    core = _HEADING_NUMBER_RE.sub("", title or "").strip()
+    core = _TRAILING_PAREN_RE.sub("", core).strip().rstrip("：:").strip()
+    if core in _METADATA_WORDS:
+        return True
+    # “附录A”“附录 2”之类：词根 + 字母/数字后缀。
+    return any(
+        re.fullmatch(rf"{re.escape(word)}[A-Za-z0-9]+", core)
+        for word in _METADATA_WORDS
+    )
 
 
 def _section_is_metadata(section: str) -> bool:
@@ -95,6 +125,8 @@ def parse_sections(text: str) -> list[DocumentSection]:
             in_fence = not in_fence
             current_lines.append(line)
             continue
+        if not in_fence and _THEMATIC_BREAK_RE.match(line):
+            continue
         heading = None if in_fence else _HEADING_RE.match(line)
         if heading:
             flush()
@@ -112,13 +144,22 @@ def parse_sections(text: str) -> list[DocumentSection]:
 
 
 def _resolve_input(raw: str, project: Path) -> Path:
+    """相对路径先按 project 解析，再退回 cwd。
+
+    `--project` 是显式给出的边界；如果 cwd 里恰好有同名文件，先取 cwd 会把
+    文档指到项目外，然后在 `_ensure_inside` 里报一个与真实原因无关的错误。
+    """
     candidate = Path(raw)
     if candidate.is_absolute():
         return candidate.resolve()
+    project_candidate = (project / candidate).resolve()
+    if project_candidate.exists():
+        return project_candidate
     cwd_candidate = (Path.cwd() / candidate).resolve()
     if cwd_candidate.exists():
         return cwd_candidate
-    return (project / candidate).resolve()
+    # 两处都不存在：返回 project 侧路径，让后续报“文档不存在”而不是越界。
+    return project_candidate
 
 
 def _ensure_inside(path: Path, project: Path) -> None:
@@ -160,9 +201,20 @@ def read_documents(inputs: list[str], project: str | Path) -> list[DocumentConte
             _ensure_inside(file_path.resolve(), project_path)
             seen[file_path.resolve()] = None
 
+    if len(seen) > MAX_DOC_FILES:
+        raise ValueError(f"需求文档过多: {len(seen)} 个 > 上限 {MAX_DOC_FILES}")
+
     documents: list[DocumentContent] = []
     for path in sorted(seen, key=lambda item: item.as_posix()):
-        text = path.read_text(encoding="utf-8-sig")
+        size = path.stat().st_size
+        if size > MAX_DOC_BYTES:
+            raise ValueError(
+                f"需求文档过大: {path} ({size} bytes > {MAX_DOC_BYTES})"
+            )
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"需求文档不是 UTF-8 文本: {path}") from exc
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         documents.append(
             DocumentContent(
@@ -172,6 +224,29 @@ def read_documents(inputs: list[str], project: str | Path) -> list[DocumentConte
             )
         )
     return documents
+
+
+def document_fingerprint(documents: list[DocumentContent]) -> list[dict]:
+    """context_id 用：文档 sha256 + 切分结果（路径/正文 hash/是否元数据）。
+
+    只把文件 sha256 放进 context_id，会让切分或元数据规则变化后的 context
+    沿用旧 id：同样的 id 对应两套 section，规则库和草案都无法察觉。
+    """
+    return [
+        {
+            "doc": document.doc,
+            "version": document.version,
+            "sections": [
+                {
+                    "path": section.section,
+                    "text_hash": section.text_hash,
+                    "include": section.include,
+                }
+                for section in document.sections
+            ],
+        }
+        for document in documents
+    ]
 
 
 def section_map(document: DocumentContent) -> dict[str, DocumentSection]:
@@ -185,6 +260,7 @@ def document_map(documents: list[DocumentContent]) -> dict[str, DocumentContent]
 __all__ = [
     "DocumentContent",
     "DocumentSection",
+    "document_fingerprint",
     "document_map",
     "normalize_text",
     "parse_sections",

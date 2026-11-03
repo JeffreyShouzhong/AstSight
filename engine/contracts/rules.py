@@ -7,11 +7,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .enums import Priority, RuleAuthority, RuleSourceKind, RuleStatus, RuleType, Transport
+from .enums import (
+    CheckDimension,
+    ConflictKind,
+    ConflictSeverity,
+    Priority,
+    RuleAuthority,
+    RuleOperator,
+    RuleSourceKind,
+    RuleStatus,
+    RuleType,
+    Transport,
+)
 
 
 def _canonical(value: Any) -> str:
@@ -20,6 +32,10 @@ def _canonical(value: Any) -> str:
 
 def _hash(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
 class RuleSource(BaseModel):
@@ -35,6 +51,59 @@ class RuleSource(BaseModel):
     quote: str | None = Field(default=None, description="规则原文片段")
 
 
+class RuleConstraint(BaseModel):
+    """规则中的结构化约束。
+
+    只用于确定性比较（grounding/冲突检测），不是运行时可执行表达式。
+    `values` 统一为字符串，避免模型输出 `1` 与 `"1"` 造成比较噪音。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = Field(default="", max_length=200, description="字段/对象，如 body.quantity")
+    operator: RuleOperator = Field(default=RuleOperator.OTHER)
+    values: list[str] = Field(default_factory=list, max_length=20)
+    condition: str = Field(default="", max_length=500, description="同一条件才比较冲突")
+    error_code: str = Field(default="", max_length=100)
+    exhaustive: bool | None = Field(
+        default=None,
+        description=(
+            "operator=in/not_in 时，values 是否为完整集合。"
+            "None 表示未声明（框架记录 warning，无法判断枚举是否闭合）；"
+            "False 表示确认不完整。二者不可混同。"
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stringify_values(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        values = data.get("values")
+        if values is None:
+            data["values"] = []
+        elif isinstance(values, (str, int, float)):
+            data["values"] = [str(values)]
+        else:
+            data["values"] = [str(value) for value in values]
+        if data.get("error_code") is not None:
+            data["error_code"] = str(data["error_code"])
+        return data
+
+    def content_payload(self) -> dict[str, Any]:
+        return {
+            "field": _norm(self.field),
+            "operator": self.operator.value,
+            "values": [_norm(value) for value in self.values],
+            "condition": _norm(self.condition),
+            "error_code": _norm(self.error_code),
+            # None 与 False 在指纹上等价：未声明不等于约束变了，
+            # 否则补一次 exhaustive 声明就会让所有相关规则 fingerprint 漂移。
+            "exhaustive": bool(self.exhaustive),
+        }
+
+
 class Rule(BaseModel):
     """一条业务规则（BR）。"""
 
@@ -46,6 +115,7 @@ class Rule(BaseModel):
     type: RuleType = Field(default=RuleType.BUSINESS_CONSTRAINT)
     entities: list[str] = Field(default_factory=list, max_length=50)
     fields: list[str] = Field(default_factory=list, max_length=50)
+    constraints: list[RuleConstraint] = Field(default_factory=list, max_length=50)
     source: RuleSource
     authority: RuleAuthority = Field(default=RuleAuthority.B)
     impact: str = Field(default="", max_length=1_000)
@@ -55,7 +125,7 @@ class Rule(BaseModel):
     status: RuleStatus = Field(default=RuleStatus.ACTIVE)
 
     def content_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "text": self.text,
             "type": self.type.value,
             "fields": sorted(self.fields),
@@ -67,6 +137,13 @@ class Rule(BaseModel):
             "authority": self.authority.value,
             "priority": self.priority.value,
         }
+        # 空约束不加 key：兼容加结构化约束之前保存的 ruleset fingerprint。
+        if self.constraints:
+            payload["constraints"] = sorted(
+                (item.content_payload() for item in self.constraints),
+                key=_canonical,
+            )
+        return payload
 
 
 class ContractRule(BaseModel):
@@ -102,6 +179,16 @@ class RuleQuestion(BaseModel):
     text: str = Field(min_length=1, max_length=1_000)
     reason: str = Field(default="", max_length=1_000)
     impact: str = Field(default="", max_length=1_000)
+    source: str = Field(
+        default="",
+        max_length=300,
+        description="出处（doc#section）；人工确认时据此回查原文",
+    )
+    related_rule_keys: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="该问题阻塞的规则；不回答则这些规则没有判定基准",
+    )
 
 
 class RuleGap(BaseModel):
@@ -113,19 +200,44 @@ class RuleGap(BaseModel):
     desc: str = Field(min_length=1, max_length=1_000)
     reason: str = Field(min_length=1, max_length=1_000)
     related_interfaces: list[str] = Field(default_factory=list, max_length=50)
+    check_dimension: CheckDimension | None = Field(
+        default=None,
+        description="覆盖查漏的 12 维度之一；为空说明这条 gap 不是按维度查出来的",
+    )
+    affected_rule_keys: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="受该缺口影响的规则；回写需求后据此算影响面",
+    )
 
 
 class RuleConflict(BaseModel):
-    """规则冲突；未裁决时相关规则应保持 disputed。"""
+    """规则冲突记录。
+
+    `kind` 决定处置路径而不是分类标签：semantic / cross_section / value /
+    unreachable 这几类只靠文档内部就能判定，属于缺陷，不需要业务方回答；
+    其余类型同理由规则组合推出。规则阶段不设人工裁决，冲突只作为证据保留，
+    在 A4 输入与用例审核文件中展示，由用例审核这一步统一确认。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     topic: str = Field(min_length=1, max_length=200)
+    kind: ConflictKind = Field(
+        default=ConflictKind.OTHER,
+        description="冲突类型；决定是否需要人回答",
+    )
+    severity: ConflictSeverity | None = Field(
+        default=None,
+        description="后果；用于排序，不作为结论",
+    )
     rule_keys: list[str] = Field(default_factory=list, max_length=20)
     docs: list[str] = Field(default_factory=list, max_length=20)
-    decision: str = Field(default="", max_length=2_000)
-    resolved_by: str | None = Field(default=None)
-    resolved_at: str | None = Field(default=None)
+    origin: str = Field(
+        default="model",
+        description="model / framework / model+framework",
+    )
+    reason: str = Field(default="", max_length=2_000)
 
 
 class RuleSet(BaseModel):
@@ -133,7 +245,7 @@ class RuleSet(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
+    schema_version: int = 2
     ruleset_id: str = Field(default="")
     project: str = Field(default="")
     version: int = Field(default=1, ge=1)
@@ -160,6 +272,7 @@ __all__ = [
     "ContractRule",
     "Rule",
     "RuleConflict",
+    "RuleConstraint",
     "RuleGap",
     "RuleQuestion",
     "RuleSet",

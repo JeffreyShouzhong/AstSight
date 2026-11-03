@@ -19,7 +19,9 @@ import httpx
 DEFAULT_MAX_PROMPT_CHARS = 400_000
 DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 DEFAULT_TIMEOUT = 120.0
-DEFAULT_MAX_TOKENS = 8_192
+# 推理型模型（如 deepseek-flash）会先输出 thinking 再输出正文，
+# 8192 常被思考阶段耗尽，导致没有任何 text block。默认给足一个结构化 JSON 的预算。
+DEFAULT_MAX_TOKENS = 16_384
 
 _PROVIDERS = {"openai", "anthropic"}
 _OPENAI_DEFAULT_BASE = "https://api.openai.com/v1"
@@ -48,6 +50,9 @@ class LLMConfig:
     api_key: str = field(repr=False)
     model: str
     base_url: str = ""
+    # Anthropic 协议有两种鉴权头：SDK 的 api_key → x-api-key，
+    # Claude Code 的 ANTHROPIC_AUTH_TOKEN → Authorization: Bearer。
+    auth_style: str = "x-api-key"
     timeout: float = DEFAULT_TIMEOUT
     max_tokens: int = DEFAULT_MAX_TOKENS
     temperature: float = 0.0
@@ -64,10 +69,17 @@ class LLMConfig:
             )
         self.api_key = str(self.api_key or "").strip()
         if not self.api_key:
-            raise LLMConfigError("llm_api_key_missing", "ASTSIGHT_LLM_API_KEY 为空")
+            raise LLMConfigError(
+                "llm_api_key_missing",
+                "未配置模型 key：ASTSIGHT_LLM_API_KEY / ANTHROPIC_AUTH_TOKEN / "
+                "ANTHROPIC_API_KEY 均为空",
+            )
         self.model = str(self.model or "").strip()
         if not self.model:
-            raise LLMConfigError("llm_model_missing", "ASTSIGHT_LLM_MODEL 为空")
+            raise LLMConfigError(
+                "llm_model_missing",
+                "未配置模型：ASTSIGHT_LLM_MODEL / ANTHROPIC_MODEL 均为空",
+            )
         self.base_url = str(self.base_url or "").strip().rstrip("/")
         if not self.base_url:
             self.base_url = (
@@ -75,6 +87,9 @@ class LLMConfig:
                 if self.provider == "anthropic"
                 else _OPENAI_DEFAULT_BASE
             )
+        self.auth_style = str(self.auth_style or "x-api-key").strip().lower()
+        if self.auth_style not in {"x-api-key", "bearer"}:
+            raise LLMConfigError("llm_auth_style_invalid", self.auth_style)
         if self.timeout <= 0:
             raise LLMConfigError("llm_timeout_invalid", str(self.timeout))
         if self.max_tokens <= 0:
@@ -88,6 +103,7 @@ class LLMConfig:
             "provider": self.provider,
             "model": self.model,
             "base_url": self.base_url,
+            "auth_style": self.auth_style,
             "timeout": self.timeout,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -134,17 +150,44 @@ def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
 
 
 def config_from_env(env: Mapping[str, str] | None = None) -> LLMConfig:
-    """从环境变量构造配置；未设置 provider 时按 key 前缀推断。"""
+    """从环境变量构造配置。
+
+    优先读 `ASTSIGHT_LLM_*`；未设置时兼容 Claude Code / Anthropic 兼容端点的
+    通用变量（如 DeepSeek 的 `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`）：
+    key → `ANTHROPIC_AUTH_TOKEN` > `ANTHROPIC_API_KEY`；
+    model → `ANTHROPIC_MODEL`；base_url → `ANTHROPIC_BASE_URL`。
+    未显式设置 provider 时，来自 Anthropic 变量或 `sk-ant-` 前缀的 key 判为 anthropic。
+    """
     values = os.environ if env is None else env
     key = str(values.get("ASTSIGHT_LLM_API_KEY") or "").strip()
+    from_anthropic_env = False
+    from_auth_token = False
+    if not key:
+        key = str(values.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+        from_anthropic_env = from_auth_token = bool(key)
+    if not key:
+        key = str(values.get("ANTHROPIC_API_KEY") or "").strip()
+        from_anthropic_env = bool(key)
     provider = str(values.get("ASTSIGHT_LLM_PROVIDER") or "").strip().lower()
     if not provider:
-        provider = "anthropic" if key.startswith("sk-ant-") else "openai"
+        provider = (
+            "anthropic"
+            if from_anthropic_env or key.startswith("sk-ant-")
+            else "openai"
+        )
+    anthropic_defaults = provider == "anthropic"
+    model = str(values.get("ASTSIGHT_LLM_MODEL") or "").strip() or (
+        str(values.get("ANTHROPIC_MODEL") or "").strip() if anthropic_defaults else ""
+    )
+    base_url = str(values.get("ASTSIGHT_LLM_BASE_URL") or "").strip() or (
+        str(values.get("ANTHROPIC_BASE_URL") or "").strip() if anthropic_defaults else ""
+    )
     return LLMConfig(
         provider=provider,
         api_key=key,
-        model=str(values.get("ASTSIGHT_LLM_MODEL") or "").strip(),
-        base_url=str(values.get("ASTSIGHT_LLM_BASE_URL") or "").strip(),
+        model=model,
+        base_url=base_url,
+        auth_style="bearer" if from_auth_token else "x-api-key",
         timeout=_env_float(values, "ASTSIGHT_LLM_TIMEOUT", DEFAULT_TIMEOUT),
         max_tokens=_env_int(values, "ASTSIGHT_LLM_MAX_TOKENS", DEFAULT_MAX_TOKENS),
         temperature=_env_float(values, "ASTSIGHT_LLM_TEMPERATURE", 0.0),
@@ -231,8 +274,13 @@ class LLMClient:
 
     def _headers(self) -> dict[str, str]:
         if self.config.provider == "anthropic":
+            auth = (
+                {"authorization": f"Bearer {self.config.api_key}"}
+                if self.config.auth_style == "bearer"
+                else {"x-api-key": self.config.api_key}
+            )
             return {
-                "x-api-key": self.config.api_key,
+                **auth,
                 "anthropic-version": _ANTHROPIC_VERSION,
                 "content-type": "application/json",
             }
@@ -292,6 +340,18 @@ class LLMClient:
                 int(usage.get("completion_tokens") or 0) or None,
             )
         if not isinstance(text, str) or not text.strip():
+            # 推理型模型会把 max_tokens 先花在 thinking 上：这不是“空响应”，
+            # 而是预算不够。两者必须区分，否则只会误导人去重试同一个配置。
+            truncated = payload.get("stop_reason") == "max_tokens" or any(
+                isinstance(choice, dict) and choice.get("finish_reason") == "length"
+                for choice in payload.get("choices") or []
+            )
+            if truncated:
+                raise LLMError(
+                    "llm_response_truncated",
+                    f"模型在输出正文前用尽 max_tokens={self.config.max_tokens}；"
+                    "提高 ASTSIGHT_LLM_MAX_TOKENS 后重试",
+                )
             raise LLMError("llm_response_empty", "模型返回空文本")
         return text, {"input_tokens": tokens[0], "output_tokens": tokens[1]}
 

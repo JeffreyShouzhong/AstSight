@@ -1,4 +1,8 @@
-"""`cases prepare`：把需求文档与 OpenAPI 整理成可离线消费的上下文包。"""
+"""`cases prepare`：把需求文档与接口事实整理成可离线消费的上下文包。
+
+OpenAPI 是可选增强：有则补字段/必填/枚举/错误码；没有则从代码扫描路由，
+画像标 `contract_incomplete`，字段留空，不猜。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,12 +12,12 @@ from typing import Any
 
 from contracts import RequirementDoc
 
-from ..inventory import discover_openapi
+from ..inventory import discover_openapi, inventory_routes
 from ..persistence import load_json, save_json_atomic, sha256_json, sha256_text
 from ..profile import build_profiles, load_spec, parse_operations
 from ..profile.openapi import normalize_path
 from .draft import CaseDraft
-from .requirements import DocumentContent, read_documents
+from .requirements import DocumentContent, document_fingerprint, read_documents
 
 CONTEXT_SCHEMA_VERSION = 1
 DEFAULT_PREPARE_OUT = ".astsight/casegen"
@@ -78,7 +82,7 @@ def _portable_source(source: str, project: Path) -> str:
 
 
 def _synthetic_routes(operations: list[Any]) -> list[dict[str, Any]]:
-    """OpenAPI 是 prepare 的唯一事实源；不依赖 CodeGraph/路由插件。"""
+    """从 OpenAPI operation 生成画像用的路由条目。"""
     routes: list[dict[str, Any]] = []
     for operation in operations:
         routes.append(
@@ -92,6 +96,24 @@ def _synthetic_routes(operations: list[Any]) -> list[dict[str, Any]]:
             }
         )
     return routes
+
+
+def _canonical_routes(routes: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """路由的稳定投影：用于 context_id，不把偶然顺序带进身份。"""
+    items = [
+        {
+            "method": str(route.get("method") or "").upper(),
+            "path": str(route.get("path") or ""),
+            "handler": str(route.get("handler") or ""),
+            "file": str(route.get("file") or ""),
+            "source": str(route.get("source") or ""),
+        }
+        for route in routes
+    ]
+    return sorted(
+        items,
+        key=lambda item: (item["method"], item["path"], item["handler"], item["file"]),
+    )
 
 
 def _attach_error_codes(profiles: list[dict[str, Any]], spec: dict[str, Any]) -> None:
@@ -140,42 +162,76 @@ def build_context(
     if not documents:
         raise ContextError("需求文档目录中没有 .md/.markdown/.txt 文件")
 
+    warnings: list[str] = []
     source = discover_openapi(
         project_path,
         _resolve_local_source(openapi, project_path) if openapi else None,
         base_url,
     )
-    if not source:
-        raise ContextError(
-            "未找到 OpenAPI（显式 --openapi、项目内自动发现、--base-url 均失败）；"
-            "契约是必需事实源，不降级猜测"
+    spec: dict[str, Any] = {}
+    operations: list[Any] = []
+    openapi_hash = ""
+    if source:
+        spec = load_spec(source)
+        operations = parse_operations(spec)
+        openapi_hash = sha256_json(spec)
+        if not spec.get("paths"):
+            warnings.append("openapi_empty:paths")
+        elif not operations:
+            warnings.append("openapi_empty:operations")
+    else:
+        # 需求阶段不依赖 OpenAPI：业务规则先成立，接口事实到 C3 再从代码补。
+        # 缺契约必须显式可见，不能让下游误以为字段已经校验过。
+        warnings.append("openapi_missing")
+
+    if routes:
+        effective_routes = list(routes)
+        routes_source = (
+            "openapi"
+            if all(
+                str(route.get("source") or "") == "openapi"
+                for route in effective_routes
+            )
+            else "code"
         )
-    spec = load_spec(source)
-    if not spec.get("paths"):
-        raise ContextError(f"OpenAPI 中没有 paths: {source}")
+    elif operations:
+        effective_routes = _synthetic_routes(operations)
+        routes_source = "openapi"
+    else:
+        effective_routes = []
+        routes_source = "none"
+    if not effective_routes:
+        warnings.append("routes_missing")
 
-    operations = parse_operations(spec)
-    if not operations:
-        raise ContextError(f"OpenAPI 中没有可解析的 operation: {source}")
-
-    effective_routes = list(routes) if routes else _synthetic_routes(operations)
     profiles, unmapped = build_profiles(
         effective_routes,
         operations,
         codegraph_client=codegraph_client,
         project_root=project_path,
     )
-    _attach_error_codes(profiles, spec)
-    openapi_hash = sha256_json(spec)
+    if spec:
+        _attach_error_codes(profiles, spec)
     document_payload = [document.model_dump(mode="json") for document in documents]
     doc_versions = {document.doc: document.version for document in documents}
+    routes_hash = sha256_json(_canonical_routes(effective_routes))
     context_id = sha256_json(
         {
             "schema_version": CONTEXT_SCHEMA_VERSION,
-            "documents": doc_versions,
+            "documents": document_fingerprint(documents),
             "openapi_sha256": openapi_hash,
+            "routes_sha256": routes_hash,
         }
     )
+
+    openapi_info: dict[str, Any] = {}
+    if source:
+        openapi_info = {
+            "source": _portable_source(source, project_path),
+            "sha256": openapi_hash,
+            "operation_count": len(operations),
+            "title": str((spec.get("info") or {}).get("title") or ""),
+            "version": str((spec.get("info") or {}).get("version") or ""),
+        }
 
     return {
         "schema_version": CONTEXT_SCHEMA_VERSION,
@@ -184,13 +240,13 @@ def build_context(
         "project": project_path.name,
         "documents": document_payload,
         "doc_versions": doc_versions,
-        "openapi": {
-            "source": _portable_source(source, project_path),
-            "sha256": openapi_hash,
-            "operation_count": len(operations),
-            "title": str((spec.get("info") or {}).get("title") or ""),
-            "version": str((spec.get("info") or {}).get("version") or ""),
+        "openapi": openapi_info,
+        "interface_evidence": {
+            "openapi": "present" if operations else ("empty" if source else "missing"),
+            "routes": routes_source,
+            "contract_rules_available": bool(operations),
         },
+        "warnings": warnings,
         "routes": effective_routes,
         "changed_apis": list(changed_apis or []),
         "profiles": profiles,
@@ -219,7 +275,7 @@ _FALLBACK_PROMPT = """# A4 用例设计（规则驱动）
 
 - context: {{CONTEXT_PATH}}
 - schema: {{SCHEMA_PATH}}
-- ruleset: `ruleset.json`（先用 `astsight rules import` 导入）
+- ruleset: `ruleset.json`（先用 `astsight rules extract` 从需求文档生成）
 - 输出到: {{DRAFT_PATH}}
 
 每条用例必须带 `case_key`、`level`、`rule_refs`；business 用例还需
@@ -249,7 +305,7 @@ def _render_prompt(context: dict[str, Any], context_dir: Path) -> str:
         f"- context: `{context_dir / 'context.json'}`\n"
         f"- schema: `{context_dir / 'cases.schema.json'}`\n"
         f"- documents: {documents or '（无）'}\n"
-        f"- ruleset: 项目级 `ruleset.json`（须先 `astsight rules import`）\n"
+        f"- ruleset: 项目级 `ruleset.json`（须先 `astsight rules extract`）\n"
         f"- 输出: `{draft_path}`\n\n"
         "---\n\n"
     )
@@ -267,7 +323,8 @@ def _render_readme(context: dict[str, Any], context_dir: Path) -> str:
 
 ## 下一步
 
-1. 确认项目级 `ruleset.json` 已由 `astsight rules import` 生成。
+1. 确认项目级 `ruleset.json` 已由 `astsight rules extract` 从需求文档生成
+   （模型在框架外运行时为 `rules prepare` + `rules import`）。
 2. 读取 `prompt.md`（A4 规则驱动契约）、`cases.schema.json` 和 `context.json`。
 3. 生成 `{draft_path.name}`（严格 JSON，符合 schema；引用规则库中的 `rule_key`）。
 4. 运行：
@@ -324,7 +381,28 @@ def prepare_context(
     routes: list[dict[str, Any]] | None = None,
     changed_apis: list[dict[str, Any]] | None = None,
     codegraph_client: Any | None = None,
+    scan_routes: bool = True,
+    codegraph: str = "auto",
+    codegraph_module_root: str | None = None,
+    full_index: bool | None = None,
 ) -> PreparedContext:
+    project_path = Path(project).resolve()
+    source = discover_openapi(
+        project_path,
+        _resolve_local_source(openapi, project_path) if openapi else None,
+        base_url,
+    )
+    if routes is None and scan_routes and not source:
+        # 没有 API 契约时，接口事实只能从代码补：路由插件/CodeGraph 给出
+        # method+path+handler，字段仍标 contract_incomplete，不猜。
+        scanned, _audit, scanned_client, _notes = inventory_routes(
+            project_path,
+            codegraph=codegraph,
+            codegraph_module_root=codegraph_module_root,
+            full_index=full_index,
+        )
+        routes = scanned or None
+        codegraph_client = codegraph_client or scanned_client
     context = build_context(
         project,
         requirements,

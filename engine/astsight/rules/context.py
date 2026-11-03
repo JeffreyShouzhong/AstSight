@@ -7,17 +7,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..cases.requirements import read_documents
+from ..cases.requirements import document_fingerprint, read_documents
 from ..inventory import discover_openapi
 from ..persistence import save_json_atomic
 from ..profile import load_spec, parse_operations
 
 RULES_CONTEXT_SCHEMA_VERSION = 1
+RULES_PROMPT_VERSION = "2"
 DEFAULT_RULES_OUT = ".astsight/rules"
 
 
@@ -119,11 +121,24 @@ def _operations_payload(operations: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
+def prompt_digest(prompt_path: str | Path | None = None) -> str:
+    """提示词内容 hash：提示词变了，context_id 必须变，旧上下文才会暴露为过期。"""
+    if prompt_path is None:
+        text = _prompt_template()
+    else:
+        path = Path(prompt_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"规则提示词不存在: {path}")
+        text = path.read_text(encoding="utf-8")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def build_rules_context(
     project: str | Path,
     requirements: list[str],
     *,
     openapi: str | None = None,
+    prompt_path: str | Path | None = None,
 ) -> dict[str, Any]:
     project_path = Path(project).resolve()
     if not project_path.is_dir():
@@ -155,13 +170,38 @@ def build_rules_context(
 
     document_payload = _documents_payload(documents)
     doc_versions = {document.doc: document.version for document in documents}
+    prompt_info = {
+        "name": "a1_requirement_analysis",
+        "version": RULES_PROMPT_VERSION,
+        "sha256": prompt_digest(prompt_path),
+    }
     context_id = _sha(
         {
             "schema_version": RULES_CONTEXT_SCHEMA_VERSION,
-            "documents": doc_versions,
+            # 文档 sha256 + section 切分/元数据判定结果；切分规则变了，id 必须变。
+            "documents": document_fingerprint(documents),
             "openapi_sha256": openapi_info.get("sha256", ""),
+            "prompt_sha256": prompt_info["sha256"],
         }
     )
+    warnings = [] if openapi_info else ["openapi_missing"]
+    for document in document_payload:
+        if not document["sections"]:
+            # 空文档不会报错，但也不该静默：没有 section 就没有可引用原文，
+            # 模型只能编造，必须在上下文里显式说明。
+            warnings.append(f"document_empty:{document['doc']}")
+        duplicates = sorted(
+            path
+            for path, count in Counter(
+                section["path"] for section in document["sections"]
+            ).items()
+            if count > 1
+        )
+        # 同名标题会让 path 引用有歧义（resolve_section 只取第一个）；
+        # 此时只有 number 能唯一定位，评审与排错都需要知道。
+        warnings.extend(
+            f"duplicate_section_path:{document['doc']}#{path}" for path in duplicates
+        )
     return {
         "schema_version": RULES_CONTEXT_SCHEMA_VERSION,
         "context_id": context_id,
@@ -170,12 +210,18 @@ def build_rules_context(
         "documents": document_payload,
         "doc_versions": doc_versions,
         "openapi": openapi_info,
+        "prompt": prompt_info,
         "operations": _operations_payload(operations),
-        "warnings": [] if openapi_info else ["openapi_missing"],
+        "warnings": warnings,
     }
 
 
-def _prompt_template() -> str:
+def _prompt_template(prompt_path: str | Path | None = None) -> str:
+    if prompt_path is not None:
+        path = Path(prompt_path)
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+        raise FileNotFoundError(f"规则提示词不存在: {path}")
     # prompts 与 engine 同级：AstSight/prompts
     path = Path(__file__).resolve().parents[3] / "prompts" / "a1_requirement_analysis.md"
     if path.is_file():
@@ -186,8 +232,12 @@ def _prompt_template() -> str:
     )
 
 
-def _render_prompt(context: dict[str, Any], context_dir: Path) -> str:
-    text = _prompt_template()
+def _render_prompt(
+    context: dict[str, Any],
+    context_dir: Path,
+    prompt_path: str | Path | None = None,
+) -> str:
+    text = _prompt_template(prompt_path)
     replacements = {
         "{{CONTEXT_ID}}": str(context.get("context_id") or ""),
         "{{CONTEXT_PATH}}": str(context_dir / "context.json"),
@@ -210,10 +260,13 @@ def _render_readme(context: dict[str, Any], context_dir: Path) -> str:
 - 文档: {", ".join(f"`{doc.get('doc')}`" for doc in context.get('documents') or [])}
 - OpenAPI: `{(context.get('openapi') or {}).get('source', '')}`
 
-## 下一步
+## 下一步（模型在框架外运行时）
+
+> 常规入口是 `astsight rules extract --requirements ...`，由框架内适配层调用模型；
+> 本目录是同一流程的两段式拆分，供 Skill / 人工 / 模型网关 / 离线批处理使用。
 
 1. 读取 `prompt.md`、`rules.schema.json` 和 `context.json`。
-2. 生成 `rules.draft.json`。
+2. 生成 `rules.draft.json`（模型只提交候选，不写规则库）。
 3. 运行：
 
 ```bash
@@ -222,7 +275,8 @@ python -m astsight rules import --project <project> \\
   --rule-base ruleset.json
 ```
 
-规则导入只写规则库；用例仍必须走 case proposal/人工审核。
+导入执行与 `rules extract` 完全相同的确定性校验、CR 合并与版本化；
+校验失败不写 `ruleset.json`。规则导入只写规则库；用例仍必须走 case proposal/人工审核。
 """
 
 
@@ -231,6 +285,7 @@ def write_rules_context(
     *,
     project: str | Path,
     out: str | Path = DEFAULT_RULES_OUT,
+    prompt_path: str | Path | None = None,
 ) -> PreparedRulesContext:
     from .draft import RuleDraft
 
@@ -243,7 +298,9 @@ def write_rules_context(
     save_json_atomic(context_dir / "context.json", context)
     save_json_atomic(context_dir / "rules.schema.json", RuleDraft.model_json_schema())
     (context_dir / "prompt.md").write_text(
-        _render_prompt(context, context_dir), encoding="utf-8", newline="\n"
+        _render_prompt(context, context_dir, prompt_path),
+        encoding="utf-8",
+        newline="\n",
     )
     (context_dir / "README.md").write_text(
         _render_readme(context, context_dir), encoding="utf-8", newline="\n"
@@ -261,9 +318,14 @@ def prepare_rules_context(
     *,
     openapi: str | None = None,
     out: str | Path = DEFAULT_RULES_OUT,
+    prompt_path: str | Path | None = None,
 ) -> PreparedRulesContext:
-    context = build_rules_context(project, requirements, openapi=openapi)
-    return write_rules_context(context, project=project, out=out)
+    context = build_rules_context(
+        project, requirements, openapi=openapi, prompt_path=prompt_path
+    )
+    return write_rules_context(
+        context, project=project, out=out, prompt_path=prompt_path
+    )
 
 
 def load_rules_context(path: str | Path) -> dict[str, Any]:
@@ -308,11 +370,13 @@ def resolve_section(
 __all__ = [
     "DEFAULT_RULES_OUT",
     "RULES_CONTEXT_SCHEMA_VERSION",
+    "RULES_PROMPT_VERSION",
     "PreparedRulesContext",
     "build_rules_context",
     "context_sections",
     "load_rules_context",
     "prepare_rules_context",
+    "prompt_digest",
     "resolve_section",
     "write_rules_context",
 ]

@@ -14,6 +14,7 @@ from contracts import (
     RuleAuthority,
     RuleConflict,
     RuleGap,
+    RuleOperator,
     RuleQuestion,
     RuleSet,
     RuleSource,
@@ -22,12 +23,12 @@ from contracts import (
 )
 
 from ..cases.requirements import normalize_text
+from .conflicts import detect_constraint_conflicts
 from .context import resolve_section
 from .draft import RuleDraft
+from .grounding import classify_grounding, rule_value_tokens
 
 _RULE_ID_RE = re.compile(r"^BR-\d{2,}$")
-_NUMBER_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
-_BACKTICK_RE = re.compile(r"`([^`]{2,80})`")
 _MAX_RULES = 500
 
 
@@ -64,6 +65,7 @@ class RuleValidation:
     questions: list[RuleQuestion] = field(default_factory=list)
     gaps: list[RuleGap] = field(default_factory=list)
     conflicts: list[RuleConflict] = field(default_factory=list)
+    framework_conflicts: list[RuleConflict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -81,23 +83,8 @@ class RuleValidation:
             "questions": len(self.questions),
             "gaps": len(self.gaps),
             "conflicts": len(self.conflicts),
+            "framework_conflicts": len(self.framework_conflicts),
         }
-
-
-def _ground_numbers(text: str, section_text: str) -> bool:
-    section_norm = normalize_text(section_text)
-    for token in _NUMBER_RE.findall(text or ""):
-        if token not in section_norm:
-            return False
-    return True
-
-
-def _ground_backticks(text: str, section_text: str) -> bool:
-    section_norm = normalize_text(section_text)
-    for token in _BACKTICK_RE.findall(text or ""):
-        if normalize_text(token) not in section_norm:
-            return False
-    return True
 
 
 def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValidation:
@@ -124,31 +111,54 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
                 f"{where}: 需求 section 不存在: {item.source.doc}#{section_ref}"
             )
             continue
+        if not section.get("include", True):
+            # 版本记录/背景/目录等元数据只用于理解上下文；拿它当规则来源，
+            # 规则会进入覆盖率分母之外，需求覆盖统计从此不可信。
+            result.errors.append(
+                f"{where}: source.section 是元数据 section（include=false），"
+                "不能作为规则来源"
+            )
+            continue
         canonical_section = str(section.get("path") or section.get("section") or "")
         section_text = str(section.get("text") or "")
         quote = normalize_text(item.source.quote)
+        section_norm = normalize_text(section_text)
         status = RuleStatus.ACTIVE
         authority = item.authority
         if len(quote) < 4:
             result.warnings.append(f"{where}: 缺少可核对 quote，规则标 ungrounded")
             status = RuleStatus.UNGROUNDED
             authority = RuleAuthority.B
-        elif quote not in normalize_text(section_text):
+        elif quote not in section_norm:
             result.errors.append(
                 f"{where}: quote 不在 section 原文中: {item.source.quote!r}"
             )
             continue
+
+        grounding = classify_grounding(
+            rule_value_tokens(item.text, item.constraints),
+            quote,
+            section_text,
+        )
+        if grounding.fabricated:
+            result.errors.append(
+                f"{where}: 规则值不在 section 原文中（疑似编造）: "
+                f"{grounding.fabricated}"
+            )
+            continue
+        if grounding.section_only:
+            result.warnings.append(
+                f"{where}: 规则值未在 quote 原文落地: {grounding.section_only}"
+            )
+            status = RuleStatus.UNGROUNDED
         if item.authority not in {RuleAuthority.A, RuleAuthority.B}:
             result.warnings.append(
                 f"{where}: A1 只允许 A/B，{item.authority.value} 已降为 B"
             )
             authority = RuleAuthority.B
-        if authority is RuleAuthority.A and (
-            not _ground_numbers(item.text, section_text)
-            or not _ground_backticks(item.text, section_text)
-        ):
+        if authority is RuleAuthority.A and grounding.section_only:
             result.warnings.append(
-                f"{where}: A 级规则中的数字/枚举未在 section 原文落地，降为 B"
+                f"{where}: A 级规则中的数字/枚举未在 quote 原文落地，降为 B"
             )
             authority = RuleAuthority.B
         key = rule_key(item.source.doc, canonical_section, item.text)
@@ -163,6 +173,7 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
             type=item.type,
             entities=list(dict.fromkeys(item.entities)),
             fields=list(dict.fromkeys(item.fields)),
+            constraints=list(item.constraints),
             source=RuleSource(
                 doc=item.source.doc,
                 section=canonical_section,
@@ -178,6 +189,17 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
             status=status,
         )
         rule.fingerprint = rule_fingerprint(rule)
+        for constraint_index, constraint in enumerate(rule.constraints):
+            # exhaustive=None（未声明）与 False（确认不完整）是两件事：
+            # 前者框架不知道该枚举是否闭合，后者是模型明确承认不全。
+            if (
+                constraint.operator in {RuleOperator.IN, RuleOperator.NOT_IN}
+                and constraint.exhaustive is None
+            ):
+                result.warnings.append(
+                    f"{where}: constraints[{constraint_index}] 使用 in/not_in "
+                    "但未声明 exhaustive，无法判断枚举是否闭合"
+                )
         result.rules.append(rule)
 
     # 稳定展示编号：优先保留合法 BR 编号，其余补号。
@@ -196,6 +218,20 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
         used_ids.add(rule.rule_id)
         next_id += 1
 
+    by_id = {rule.rule_id: rule for rule in result.rules}
+    by_key = {rule.rule_key: rule for rule in result.rules}
+
+    def _keys_of(rule_ids: list[str], where: str) -> list[str]:
+        """把模型给的 BR 编号换成框架算出的 rule_key；找不到的记 warning。"""
+        keys: list[str] = []
+        for rule_id in rule_ids:
+            rule = by_id.get(rule_id)
+            if rule is None:
+                result.warnings.append(f"{where}: 未找到规则 {rule_id!r}")
+            elif rule.rule_key not in keys:
+                keys.append(rule.rule_key)
+        return keys
+
     for item in draft.questions:
         result.questions.append(
             RuleQuestion(
@@ -203,6 +239,8 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
                 text=item.text,
                 reason=item.reason,
                 impact=item.impact,
+                source=item.source,
+                related_rule_keys=_keys_of(item.related_rule_ids, f"questions[{item.id or '?'}]"),
             )
         )
     for item in draft.gaps:
@@ -212,11 +250,12 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
                 desc=item.desc,
                 reason=item.reason,
                 related_interfaces=list(item.related_interfaces),
+                check_dimension=item.check_dimension,
+                affected_rule_keys=_keys_of(
+                    item.affected_rule_ids, f"gaps[{item.desc[:20]}]"
+                ),
             )
         )
-
-    by_id = {rule.rule_id: rule for rule in result.rules}
-    by_key = {rule.rule_key: rule for rule in result.rules}
     for index, item in enumerate(draft.conflicts):
         keys = list(item.rule_keys)
         for rule_id in item.rule_ids:
@@ -230,17 +269,18 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
         unknown = [key for key in keys if key not in by_key]
         if unknown:
             result.warnings.append(f"conflicts[{index}]: 未找到 rule_key: {unknown}")
-        for key in keys:
-            if key in by_key:
-                by_key[key].status = RuleStatus.DISPUTED
         result.conflicts.append(
             RuleConflict(
                 topic=item.topic,
+                kind=item.kind,
+                severity=item.severity,
                 rule_keys=keys,
                 docs=list(item.docs),
-                decision=item.decision,
+                origin="model",
+                reason=item.decision,
             )
         )
+    result.framework_conflicts = detect_constraint_conflicts(result.rules)
     return result
 
 
@@ -264,7 +304,6 @@ def build_rule_set(
         for doc in context.get("documents") or []
     ]
     return RuleSet(
-        schema_version=1,
         ruleset_id=ruleset_id
         or ("rs-" + _sha({"project": project, "context_id": context.get("context_id")})[:16]),
         project=project,

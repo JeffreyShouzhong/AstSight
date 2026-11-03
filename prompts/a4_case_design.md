@@ -22,7 +22,10 @@
 
 - `mode`：`full` 生成 `level=business`；`delta` 生成 `level=code`（变更回归）。
 - `profiles[]`：接口画像（`endpoint` 为 `METHOD /path`；`transport=http`；
-  `coverage_role`；`request_fields` / `response_fields`；`downstream_deps`）。
+  `coverage_role`；`params` / `request_body` / `body_required` / `response_fields`；
+  `contract_incomplete`；`downstream_deps`）。没有 OpenAPI 时 `params` 与
+  `request_body` 为空、`contract_incomplete=true`，这只表示“契约未知”，
+  不表示“没有字段”。
 - `ruleset.rules[]`：A1 业务规则与 CR 契约规则；只可引用其中的 `rule_key`。
 - `mock_semantics[]`：每个 `dep_id` 的可用 `branches[]`。
 - `data_catalog`：可用表、列、枚举和 `states[].state_key`；可能为 `null`。
@@ -95,7 +98,7 @@
 | `transport` | 只能 `http`；v1 不支持 gRPC/Dubbo，遇到直接跳过 |
 | `coverage_role` | 必须与画像一致（`primary` / `alias` / `independent`） |
 | `endpoint` | 必须原样取自画像 `endpoint`（`METHOD /path`） |
-| `rule_refs` | 至少 1 条；`rule_key` 必须存在于输入规则库；不得引用 `disputed` / `ungrounded` / `deprecated` 规则；不得只引用 C/D 级规则 |
+| `rule_refs` | 至少 1 条；`rule_key` 必须存在于输入规则库；不得引用 `ungrounded` / `deprecated` 规则；不得只引用 C/D 级规则 |
 | `requirement_refs` | business 用例至少 1 条；`quote` 必须是 section 原文连续子串 |
 | `change_refs` | code 用例至少 1 条；`changed_api` 取自 `changed_apis[].handler` |
 | `preconditions` | `state_key` 必须存在于 `data_catalog.states`；没有 catalog 时不要编造 |
@@ -103,7 +106,7 @@
 | `asserts` | 至少 1 条；`status_code` / `body_field` / `header`；值必须来自规则原文或契约 |
 | `assert_strength` | `L1` / `L2` / `L3`，默认 `L1` |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
-| `path_params` / `query` / `headers` / `body` | 字段名必须来自画像；body 嵌套不超过 20 层 |
+| `path_params` / `query` / `headers` / `body` | 字段名必须来自画像；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
 
 ---
 
@@ -116,11 +119,13 @@
    规则只说“返回 4xx”时，用 `{"kind":"status_code","op":"in","expect":[400,404,422]}` 之类
    的保守集合，不要猜单一值。
 4. **Mock 显式**：只绑定会实际触发的下游分支；规则不涉及下游时 `{}`。
-5. **覆盖角色**：`alias` 只做契约冒烟（成功 1 条 + 一个有依据的异常 1 条），不重复
+5. **冲突显式**：输入 `ruleset.conflicts` 列出规则冲突；不要自行裁决、合并或改写规则值。
+   为冲突规则生成用例时在 `note` 写明冲突 `topic`，由用例审核统一确认。
+6. **覆盖角色**：`alias` 只做契约冒烟（成功 1 条 + 一个有依据的异常 1 条），不重复
    `primary` 的业务覆盖；`primary` 承担全量业务规则；`independent` 按独立接口设计。
-6. **delta**：只生成与 `changed_apis` 直接相关的 code 用例，每条都写 `change_refs`；
+7. **delta**：只生成与 `changed_apis` 直接相关的 code 用例，每条都写 `change_refs`；
    仍须引用规则，不能只靠代码 diff 臆造期望。
-7. **不重复**：同一规则 + 同一前置状态 + 同一输入组合只生成一条。
+8. **不重复**：同一规则 + 同一前置状态 + 同一输入组合只生成一条。
 
 ---
 

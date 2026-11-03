@@ -52,9 +52,17 @@ def generate_rule_draft(
         {
             "context": _context_view(context),
             "schema": RuleDraft.model_json_schema(),
+            "output_mode": "json",
             "notes": [
                 "source.section 必须取自 context.documents[].sections[].path 或 number",
                 "source.quote 必须是该 section 原文的连续子串",
+                "规则 text 和 constraints 中的数字/枚举/错误码必须出现在 quote 中",
+                "同一字段尽量输出结构化 constraints，供框架做冲突检测",
+                "按四分流输出：文档内部可判定的矛盾进 conflicts，文档没写的进 gaps，"
+                "需要业务决策或外部事实的进 questions；不得把内部矛盾降级为 questions",
+                "conflicts 填 kind/severity；gaps 填 check_dimension；"
+                "questions 填 source 与 related_rule_ids",
+                "questions/gaps/conflicts 是本次抽取的完整结果，不沿用上一版",
                 "gaps 每项必须包含 reason",
                 "不要输出 ContractRule；CR 规则由框架从 OpenAPI 确定性生成",
             ],
@@ -79,6 +87,26 @@ def generate_rule_draft(
     return draft
 
 
+def rule_prompt_metadata(
+    context: dict[str, Any], llm: LLMClient | None = None
+) -> dict[str, Any]:
+    """规则库要记录的抽取口径：提示词版本/hash + 模型（若可得）。
+
+    模型在框架外运行时拿不到 llm，就只记录 context 里的提示词信息。
+    """
+    info = dict(context.get("prompt") or {})
+    info.setdefault("name", "a1_requirement_analysis")
+    info.setdefault("version", "2")
+    config = getattr(llm, "config", None)
+    redacted = (
+        config.redacted() if callable(getattr(config, "redacted", None)) else {}
+    )
+    for key in ("provider", "model"):
+        if redacted.get(key):
+            info[key] = redacted[key]
+    return info
+
+
 def import_rule_draft_for_flow(
     *,
     project: str,
@@ -98,11 +126,7 @@ def import_rule_draft_for_flow(
         context=context,
         draft=draft,
         previous=previous,
-        prompt=prompt
-        or {
-            "name": "a1_requirement_analysis",
-            "version": "2",
-        },
+        prompt=prompt or rule_prompt_metadata(context),
         dry_run=True,
     )
     if result.validation.errors:
@@ -122,4 +146,5 @@ __all__ = [
     "generate_rule_draft",
     "import_rule_draft_for_flow",
     "load_rule_prompt",
+    "rule_prompt_metadata",
 ]

@@ -6,7 +6,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts import Priority, RuleAuthority, RuleSourceKind, RuleType
+from contracts import (
+    CheckDimension,
+    ConflictKind,
+    ConflictSeverity,
+    Priority,
+    RuleAuthority,
+    RuleConstraint,
+    RuleSourceKind,
+    RuleType,
+)
 
 MAX_RULE_DRAFT_BYTES = 5 * 1024 * 1024
 MAX_RULES = 500
@@ -32,6 +41,7 @@ class DraftRule(BaseModel):
     type: RuleType = Field(default=RuleType.BUSINESS_CONSTRAINT)
     entities: list[str] = Field(default_factory=list, max_length=50)
     fields: list[str] = Field(default_factory=list, max_length=50)
+    constraints: list[RuleConstraint] = Field(default_factory=list, max_length=50)
     source: DraftRuleSource
     authority: RuleAuthority = Field(default=RuleAuthority.B)
     impact: str = Field(default="", max_length=1_000)
@@ -40,27 +50,60 @@ class DraftRule(BaseModel):
 
 
 class DraftQuestion(BaseModel):
+    """需要人工回答的问题；答案只能来自业务决策或文档之外的事实。"""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(default="", max_length=64)
     text: str = Field(min_length=1, max_length=1_000)
     reason: str = Field(default="", max_length=1_000)
     impact: str = Field(default="", max_length=1_000)
+    source: str = Field(
+        default="",
+        max_length=300,
+        description="出处（doc#section）；留空时人工确认需回翻全文",
+    )
+    related_rule_ids: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="该问题会阻塞哪些规则；用于算清不回答的代价",
+    )
 
 
 class DraftGap(BaseModel):
+    """文档缺口；`check_dimension` 为空表示这条 gap 不是查漏产出的。"""
+
     model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(default="implicit", max_length=64)
     desc: str = Field(min_length=1, max_length=1_000)
     reason: str = Field(min_length=1, max_length=1_000)
     related_interfaces: list[str] = Field(default_factory=list, max_length=50)
+    check_dimension: CheckDimension | None = Field(
+        default=None,
+        description="覆盖查漏的 12 维度之一；为空说明未按维度检查",
+    )
+    affected_rule_ids: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="该缺口影响哪些规则；回写需求后据此算影响面",
+    )
 
 
 class DraftConflict(BaseModel):
+    """冲突记录；kind 决定处置路径，severity 决定排序。"""
+
     model_config = ConfigDict(extra="forbid")
 
     topic: str = Field(min_length=1, max_length=200)
+    kind: ConflictKind = Field(
+        default=ConflictKind.OTHER,
+        description="冲突类型；semantic/cross_section/value 属可直接判定的缺陷",
+    )
+    severity: ConflictSeverity | None = Field(
+        default=None,
+        description="后果；为空表示模型无法判断影响面",
+    )
     rule_ids: list[str] = Field(default_factory=list, max_length=20)
     rule_keys: list[str] = Field(default_factory=list, max_length=20)
     docs: list[str] = Field(default_factory=list, max_length=20)

@@ -144,11 +144,13 @@ class RuleAuthority(str, Enum):
 
 
 class RuleStatus(str, Enum):
-    """规则在规则库中的状态。"""
+    """规则在规则库中的状态。
+
+    规则阶段没有人工审批：冲突只记录、不改变规则状态，由用例审核统一确认。
+    """
 
     ACTIVE = "active"
     DEPRECATED = "deprecated"
-    DISPUTED = "disputed"
     UNGROUNDED = "ungrounded"
 
 
@@ -169,6 +171,78 @@ class RuleSourceKind(str, Enum):
 
     EXPLICIT = "explicit"
     INFERRED = "inferred"
+
+
+class RuleOperator(str, Enum):
+    """结构化规则约束的运算符；只用于确定性比较，不执行表达式。"""
+
+    EQ = "eq"
+    NE = "ne"
+    IN = "in"
+    NOT_IN = "not_in"
+    MIN = "min"
+    MAX = "max"
+    BETWEEN = "between"
+    PATTERN = "pattern"
+    REQUIRED = "required"
+    FORBIDDEN = "forbidden"
+    TRANSITION = "transition"
+    OTHER = "other"
+
+
+class ConflictKind(str, Enum):
+    """冲突类型；决定处置路径，不只是分类标签。
+
+    前三类（semantic / cross_section / value）可由文档内部判定，属于缺陷，
+    不需要业务方回答；后两类（bidirectional / self_trigger）由规则组合推出，
+    同样是缺陷。unreachable 是分支不可达，处置是删除而不是修改。
+    """
+
+    SEMANTIC = "semantic"              # 词义与行为冲突（如“退回”却重置有效期）
+    CROSS_SECTION = "cross_section"    # 同一事实在多处写法不同
+    VALUE = "value"                    # 数值/阈值/状态码互相矛盾
+    ENUMERATION_CLOSED = "enumeration_closed"  # 枚举未闭合或状态缺失
+    UNREACHABLE = "unreachable"        # 分支前置条件不成立，永远不可达
+    BIDIRECTIONAL = "bidirectional"    # 同一规则对参数两端效应方向相反
+    SELF_TRIGGER = "self_trigger"      # 规则执行后重新满足自身触发条件
+    OTHER = "other"
+
+
+class ConflictSeverity(str, Enum):
+    """冲突后果；用于排序处置优先级，不作为结论。"""
+
+    LOSS = "loss"                # 资损（多给/少给钱或权益）
+    SILENT = "silent"            # 静默失效（监控、告警、兜底不再生效）
+    RIGHTS = "rights"            # 用户权益受损（与资损方向相反）
+    UNTESTABLE = "untestable"    # 不可测（判定基准无法成立）
+    MINOR = "minor"              # 表述瑕疵，不影响判定
+
+
+class GapKind(str, Enum):
+    """缺口类型；`RuleGap.kind` 仍接受自由文本，这里是推荐取值。"""
+
+    IMPLICIT = "implicit"              # 隐含假设：文档没写但规则默认成立
+    MISSING = "missing"                # 该写未写：覆盖查漏发现的整块缺失
+    QUANTITATIVE = "quantitative"      # 缺数量级/阈值/精度
+    CROSS_SYSTEM = "cross_system"      # 跨系统一致性约束
+    TECH_CHOICE = "tech_choice"        # 技术选型未定，不应写在需求里
+
+
+class CheckDimension(str, Enum):
+    """覆盖查漏的 12 个维度；gap 必须落到某个维度，否则视为走过场。"""
+
+    NORMAL_FLOW = "normal_flow"
+    EXCEPTION_FLOW = "exception_flow"
+    BOUNDARY = "boundary"
+    PERMISSION = "permission"
+    CONCURRENCY = "concurrency"
+    IDEMPOTENCY = "idempotency"
+    DATA_CONSISTENCY = "data_consistency"
+    STATE_TRANSITION = "state_transition"
+    UPSTREAM_DOWNSTREAM = "upstream_downstream"
+    INPUT_VALIDATION = "input_validation"
+    SECURITY = "security"
+    PERFORMANCE = "performance"
 
 
 class CaseLevel(str, Enum):

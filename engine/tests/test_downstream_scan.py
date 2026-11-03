@@ -245,8 +245,11 @@ def pay():
         project_root=tmp_path,
     )
 
-    assert unmapped[0]["reason"] == "openapi_operation_missing"
+    # 整个项目没有契约时，不按接口逐条刷 unmapped；缺口由 context 统一告警。
+    assert unmapped == []
     profile = profiles[0]
+    assert profile["contract_incomplete"] is True
+    assert profile["contract_incomplete_reason"] == "openapi_missing"
     assert profile["downstream_checked"] is True
     assert profile["downstream_unmapped"] is False
     assert profile["downstream_deps"][0]["dep_id"] == (

@@ -183,6 +183,40 @@ def test_parse_sections_excludes_metadata_and_ignores_fenced_headings() -> None:
     )
 
 
+def test_thematic_breaks_are_not_section_text() -> None:
+    sections = {
+        section.section: section
+        for section in parse_sections(
+            "# 文档\n\n正文 A\n\n***\n\n"
+            "## 规则\n\n正文 B\n\n---\n\n"
+            "```\n***\n```\n"
+        )
+    }
+    assert sections["文档"].text == "正文 A"
+    # fenced code 里的 *** 是内容，必须保留。
+    assert sections["文档 > 规则"].text.count("***") == 1
+
+
+def test_metadata_exclusion_does_not_swallow_real_requirements() -> None:
+    sections = {
+        section.section: section
+        for section in parse_sections(
+            "# 文档\n\n"
+            "## 目标库存策略\n\n库存低于 10 时告警。\n\n"
+            "## 商品版本信息\n\n版本信息取商品主表。\n\n"
+            "## 一、版本信息\n\n文档版本表。\n\n"
+            "## 3. 版本记录\n\n历史变更。\n\n"
+            "## 附录A\n\n参考资料。\n"
+        )
+    }
+    # 带修饰的“商品版本信息”是需求；“版本信息”单独出现才是文档元数据。
+    assert sections["文档 > 目标库存策略"].include is True
+    assert sections["文档 > 商品版本信息"].include is True
+    assert sections["文档 > 一、版本信息"].include is False
+    assert sections["文档 > 3. 版本记录"].include is False
+    assert sections["文档 > 附录A"].include is False
+
+
 def test_build_context_is_deterministic_and_writes_package(tmp_path: Path) -> None:
     project = _project(tmp_path)
     first = build_context(project, ["docs/api.md"])
@@ -208,6 +242,72 @@ def test_build_context_is_deterministic_and_writes_package(tmp_path: Path) -> No
     assert prepared.readme_path.is_file()
     loaded = load_context(prepared.context_dir)
     assert loaded["context_id"] == first["context_id"]
+
+
+def test_contract_incomplete_does_not_reject_request_fields(tmp_path: Path) -> None:
+    project = tmp_path / "code_only"
+    (project / "docs").mkdir(parents=True)
+    (project / "docs" / "api.md").write_text(API_DOC, encoding="utf-8")
+    routes = [
+        {
+            "method": "POST",
+            "path": "/orders",
+            "handler": "create_order",
+            "file": "app.py",
+            "source": "framework_plugin",
+            "confidence": "verified",
+        }
+    ]
+
+    context = build_context(project, ["docs/api.md"], routes=routes)
+
+    assert context["warnings"] == ["openapi_missing"]
+    assert context["interface_evidence"]["contract_rules_available"] is False
+    profile = context["profiles"][0]
+    assert profile["contract_incomplete"] is True
+    assert profile["contract_incomplete_reason"] == "openapi_missing"
+    draft = _draft(
+        context,
+        [
+            _case(
+                body={"customer_id": "cust_1", "quantity": 0, "unknown": 1},
+                query={"page": 1},
+            )
+        ],
+    )
+    result = validate_draft(draft, context, project=project)
+    codes = {item.code for item in result.errors}
+    assert "request.body_field_unknown" not in codes
+    assert "request.query_unknown" not in codes
+
+
+def test_cases_context_id_tracks_section_classification(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    before = build_context(project, ["docs/api.md"])
+    monkeypatch.setattr(
+        "astsight.cases.requirements._METADATA_WORDS", ("订单服务",)
+    )
+    after = build_context(project, ["docs/api.md"])
+    assert before["context_id"] != after["context_id"]
+
+
+def test_context_id_changes_with_routes(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    first = build_context(project, ["docs/api.md"])
+    routes = [
+        {
+            "method": "POST",
+            "path": "/orders",
+            "handler": "create_order",
+            "file": "app.py",
+            "source": "framework_plugin",
+            "confidence": "verified",
+        }
+    ]
+    second = build_context(project, ["docs/api.md"], routes=routes)
+    assert first["context_id"] != second["context_id"]
 
 
 def test_valid_draft_resolves_and_fingerprint_ignores_doc_version(tmp_path: Path) -> None:
@@ -321,6 +421,39 @@ def test_path_traversal_document_rejected(tmp_path: Path) -> None:
     outside.write_text("# outside\n", encoding="utf-8")
     with pytest.raises(ValueError):
         read_documents([str(outside)], project)
+
+
+def test_relative_requirements_resolve_inside_project_first(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """cwd 里有同名文档时，--project 内的文档仍优先。"""
+    project = tmp_path / "project"
+    (project / "docs").mkdir(parents=True)
+    (project / "docs" / "api.md").write_text(
+        "# 项目内\n\n项目内的需求\n", encoding="utf-8"
+    )
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "docs").mkdir(parents=True)
+    (elsewhere / "docs" / "api.md").write_text(
+        "# 项目外\n\n别的需求\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(elsewhere)
+
+    documents = read_documents(["docs/api.md"], project)
+
+    assert [section.section for section in documents[0].sections] == ["项目内"]
+
+
+def test_oversized_requirements_rejected(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    (project / "docs").mkdir(parents=True)
+    (project / "docs" / "api.md").write_text(
+        "# 订单\n\n" + "正文" * 100, encoding="utf-8"
+    )
+    monkeypatch.setattr("astsight.cases.requirements.MAX_DOC_BYTES", 64)
+
+    with pytest.raises(ValueError, match="需求文档过大"):
+        read_documents(["docs/api.md"], project)
 
 
 def test_draft_body_depth_limit(tmp_path: Path) -> None:

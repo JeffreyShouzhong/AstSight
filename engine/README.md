@@ -15,9 +15,10 @@ git diff → 变更符号 → 影响接口 → OpenAPI 画像 → 模板用例
          → pytest 编码 → collect 自检 → 执行 → 确定性归因 → 报告 + 门禁
 
 B. 需求驱动（规则驱动，canonical）
-需求/设计文档 + 契约源 → rules prepare（context/prompt/schema）
+需求/设计文档（+ 可选契约源）→ rules extract（唯一入口）
+                        → 确定性 context/prompt/schema
                         → A1 LLM 抽取 BR（a1_requirement_analysis）+ CR 确定性提取
-                        → rules import → ruleset.json（rule_key / authority / diff）
+                        → 校验通过写 ruleset.json（rule_key / authority / diff）+ ruleset.md
                         → C3.5.1 mock semantics（契约 success + 规则分支）
                         → C5a data catalog（有 DDL 时；确定性结构 + LLM 语义）
                         → A4 LLM 设计业务/代码两级草案（规则 + 画像 + Mock 语义 + 造数目录）
@@ -59,7 +60,7 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 | `codegraph/` 接入层 | ✅ | 代码嵌入客户端 + 路由前缀重建 + InMemory 替身 |
 | `astsight/changes/` C2 | ✅ | git 两点/三点 diff、AST 变更符号、直接命中 + 图谱反向追溯 |
 | `astsight/profile/` C3 | ✅ | OpenAPI 参数/请求体/响应字段/约束 → 画像；无契约标 `contract_incomplete`；Python 源码 AST 识别 `requests`/`httpx`/`urllib` 出站调用并生成 `dep_id` |
-| `astsight/cases/context.py` | ✅ | 需求 section 解析 + OpenAPI 端点目录 → 上下文包（prompt/schema） |
+| `astsight/cases/context.py` | ✅ | 需求 section 解析 + 接口目录 → 上下文包（prompt/schema）；有 OpenAPI 时取契约字段，没有时从代码扫描路由并标 `contract_incomplete` |
 | `astsight/cases/validate.py` | ✅ | 草案结构、端点/字段/断言、需求 quote 反幻觉、路径与大小限制 |
 | `astsight/cases/proposal.py` | ✅ | new/update/revive/deprecate/unchanged/kept_out_of_scope 六路 diff |
 | `astsight/cases/store.py` | ✅ | 项目级 `caseset.json`：版本、history、review_log、原子写与备份 |
@@ -69,7 +70,7 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 | `astsight/report/` C7.4 | ✅ | JSON + Markdown；用例库版本、待审、需求覆盖、drift 单列 |
 | `astsight/mock/` C3.5.5 | ◐ 核心+执行链路+计划+启动注入 | `dep_id` 唯一性/`route_key`、Host/路径路由、会话分支、drain、晚到调用归因、会话历史、`mock_not_used`、`mock_calls.jsonl`、内嵌 uvicorn；`run --mock-plan` 管理生命周期、写 `run_manifest.json`/`mock_injection.json`；`mock plan` 从 C3 调用点生成计划草案；`agent run` 用注入清单启动 SUT |
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
-| `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突裁决、原子写 `ruleset.json` |
+| `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
 | `astsight/data/` C5 | ✅（SQLite） | DDL/seed → `data_catalog.json`；批准后 → `data_plan.json`；参数化 SQL、FK 拓扑、apply/teardown；其他方言标 `unsupported_dialect` |
 | `astsight/agent/` | ✅ 首版 | A1 规则适配、C3.5.1 Mock 语义适配、C5a/C5b 造数适配、A4 用例设计、MockPlan、SUT 启动注入、A5 诊断、A6 有界修复与端到端编排 |
@@ -81,10 +82,13 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 
 ### 当前边界（不假装）
 
-- **LLM 是可选入口，不是默认执行层**：`rules prepare/import/status/resolve`、
+- **LLM 是可选入口，不是默认执行层**：`rules prepare/import/status`、
   `cases import/approve`、`data catalog/plan/apply` 的确定性部分与 `run` 保持零模型；
-  `agent run` 或显式调用适配层时才请求模型，且模型输出必须通过 endpoint/quote/dep_id/
-  branch/rule_key/FK 拓扑/断言的全套校验。密钥只从环境变量读取，不落盘、不进报告。
+  `rules extract`、`agent run` 或显式调用适配层时才请求模型，且模型输出必须通过
+  endpoint/quote/dep_id/branch/rule_key/FK 拓扑/断言的全套校验。密钥只从环境变量读取，
+  不落盘、不进报告。`rules extract` 是需求文档入口（框架内调用模型）；
+  `rules prepare` + 外部模型 + `rules import` 是同一流程的两段式拆分，
+  供 Claude Code Skill、人工、模型网关或离线批处理使用。
 - **Agent 自动批准是显式选择**：`--approve-as <reviewer>` 只自动批准 new/update/revive；
   `deprecate` 永远 reject，必须人工逐项批准。不提供 `--approve-as` 时流程停在待审 proposal。
 - **审核不能自动化**：`cases approve` 必须显式给 `--reviewer`；没有任何“自动全量批准”参数。
@@ -256,17 +260,25 @@ canonical 链路是规则驱动的；`cases prepare` 只生成端点/需求上�
 cd engine
 PROJECT=examples/order_service
 
-# 1. 生成规则上下文（需求文档 + OpenAPI）
-PYTHONPATH=. python -m astsight rules prepare \
+# 1. 需求文档 → 规则库（唯一入口；OpenAPI 可选，只补 CR 契约规则）
+#    确定性 context/prompt/schema + 模型抽 BR + 校验/降级/冲突/CR/版本化，
+#    一次产出 ruleset.json 与人工评审用 ruleset.md；校验失败不写规则库。
+PYTHONPATH=. python -m astsight rules extract \
   --project $PROJECT \
   --requirements $PROJECT/docs/api-design.md \
   --requirements $PROJECT/docs/requirements.md \
   --openapi $PROJECT/openapi.json
 
 # 产物：$PROJECT/.astsight/rules/<analysis_id>/
-#   context.json  prompt.md  rules.schema.json  README.md
+#   context.json  prompt.md  rules.schema.json  rules.draft.json  README.md
+#       $PROJECT/ruleset.json  $PROJECT/ruleset.md
+# 需求修复后重跑同一条命令：每次都是完整快照，旧 questions/gaps/conflicts 不残留。
 
-# 2. A1 LLM 读取 prompt/schema，写出 rules.draft.json；导入并合并 CR
+# 2.（可选）模型在框架外运行时的两段式：prepare 只写上下文，外部模型产出
+#    rules.draft.json，再 import 做同一套确定性校验与写库。
+PYTHONPATH=. python -m astsight rules prepare \
+  --project $PROJECT --requirements $PROJECT/docs/requirements.md \
+  --openapi $PROJECT/openapi.json
 PYTHONPATH=. python -m astsight rules import \
   --project $PROJECT \
   --context $PROJECT/.astsight/rules/<analysis_id> \
@@ -306,6 +318,9 @@ PYTHONPATH=. python -m astsight cases approve \
 PYTHONPATH=. python -m astsight rules status --project $PROJECT --json
 PYTHONPATH=. python -m astsight cases status --project $PROJECT --json
 
+# 8.1 import 已自动写出 ruleset.md；需要重渲染时（同一份 ruleset 的只读视图，不调用模型）
+PYTHONPATH=. python -m astsight rules render --project $PROJECT --out ruleset.md
+
 # 9. 有 DDL 时：C5a 目录 →（批准后）C5b 计划 → 执行
 PYTHONPATH=. python -m astsight data catalog --project $PROJECT \
   --ddl $PROJECT/schema.sql --out .astsight/data
@@ -321,13 +336,23 @@ PYTHONPATH=. python -m astsight run --project $PROJECT --mode cases \
 
 `rules` 命令参数：
 
-- `prepare --requirements PATH`：可重复；生成 `context.json`、`prompt.md`、`rules.schema.json`；
+- `extract --requirements PATH [--openapi PATH] [--rule-base PATH] [--dry-run]`：
+  **需求文档入口**。生成确定性上下文 → 调用模型抽 BR → 校验/降级/冲突/CR/版本化 →
+  写 `ruleset.json` + `ruleset.md`。`--dry-run` 只校验不写库；`--max-rules` 默认 500。
+- `prepare --requirements PATH`：可重复；只生成 `context.json`、`prompt.md`、
+  `rules.schema.json`，供模型在框架外运行（Skill / 人工 / 模型网关 / 离线批处理）；
   `context.json` 的 section 同时有稳定 `path` 与可读 `number`。
-- `import --context DIR --draft PATH [--rule-base PATH]`：逐项校验 quote/authority，
-  框架重算 `rule_key`/fingerprint，确定性合并 CR，原子写 `ruleset.json`；失败不改旧库。
+- `import --context DIR --draft PATH [--rule-base PATH]`：框架外模型的第二阶段；逐项校验
+  quote/authority，框架重算 `rule_key`/fingerprint，确定性合并 CR，原子写 `ruleset.json`；
+  失败不改旧库。同时把同一份规则库渲染成 `ruleset.md`（只读评审视图）。
 - `status --json`：版本、BR/CR 数量、未确认规则、questions/gaps/conflicts、drift/orphaned。
-- `resolve --topic TOPIC --choose RULE_KEY --reviewer NAME`：人工裁决冲突，未裁决规则
-  不能单独支撑用例批准。
+  冲突只记录并展示；规则阶段没有人工审核/裁决节点，冲突在用例审核时确认。
+- `render --out PATH`：手动重渲染评审文档；内容完全由 `ruleset.json` 派生，不调用模型。
+
+**规则闭环**：`ruleset.md` 中列出的冲突/缺口/待确认问题回写需求文档 → 重新
+`rules extract`（或框架外模式下重新 `prepare` + `import`）。每次抽取都是完整快照，
+上一版已修复的问题不会残留；`ruleset.json` 只能由 `rules extract/import` 写入，
+不支持手工编辑规则——要改规则就改需求原文后重抽，否则规则库会变成第二个人工维护的真相源。
 
 `data` 命令参数：
 
@@ -341,8 +366,11 @@ PYTHONPATH=. python -m astsight run --project $PROJECT --mode cases \
 `cases` 命令参数：
 
 - `prepare --requirements PATH`：可重复；目录会递归读取 `.md/.markdown/.txt`。
-  OpenAPI 必须能从 `--openapi`、项目内自动发现或 `--base-url` 拉取；都找不到则报错，
-  不猜测字段。
+  OpenAPI 依次从 `--openapi`、项目内自动发现、`--base-url` 获取；都没有时不中断，
+  改为扫描代码路由（`--no-scan-routes` 可关闭，`--codegraph auto|on|off` 控制图谱）。
+  此时画像标 `contract_incomplete=true`、`contract_incomplete_reason=openapi_missing`，
+  `context.json` 的 `warnings` 记录 `openapi_missing` / `routes_missing`；
+  找不到字段就留空，不猜测。
 - `import --context PATH --draft PATH`：校验失败退出非 0，且**不修改 store**；
   `--dry-run` 只输出校验与 diff。
 - `approve --proposal PATH --reviewer NAME`：必须显式 reviewer；重新校验草案、重新 diff、
@@ -494,9 +522,9 @@ python -m astsight mock plan --project examples/order_service --codegraph off \
 `astsight agent run` 把下面这条链路串起来：
 
 ```
-本地 OpenAPI + 需求文档 + 代码变更
-  → 路由/影响接口（full 或 delta）
-  → A1 规则：LLM 抽取 BR + 确定性 CR → rules import → ruleset.json
+需求文档 + 代码变更（OpenAPI 可选，有则补字段/必填/枚举/错误码）
+  → 路由/影响接口（full 或 delta；无 OpenAPI 时只用代码路由）
+  → A1 规则：LLM 抽取 BR + 确定性 CR → 校验/版本化 → ruleset.json
   → C3.5.1 Mock 语义：契约 success 确定性 + 规则分支 + 有依据的 LLM 候选
   → C5a 数据目录（提供 --ddl 时）：DDL/FK 确定性 + LLM 语义 → data_catalog.json
   → A4 用例设计（模型读规则 + 画像 + Mock 语义 + 造数目录，走 validate_draft）
@@ -509,12 +537,24 @@ python -m astsight mock plan --project examples/order_service --codegraph off \
 模型配置只从环境变量读取（不要把 key 写进仓库或报告）：
 
 ```bash
-export ASTSIGHT_LLM_API_KEY=...          # 不要粘贴进聊天/提交
+export ASTSIGHT_LLM_API_KEY=...           # 不要粘贴进聊天/提交
 export ASTSIGHT_LLM_MODEL=...             # 例如你的服务端 model id
 export ASTSIGHT_LLM_PROVIDER=openai       # openai | anthropic；缺省按 key 前缀推断
 export ASTSIGHT_LLM_BASE_URL=...          # OpenAI 兼容网关时填写；Anthropic 可不填
 # 可选：ASTSIGHT_LLM_TIMEOUT / ASTSIGHT_LLM_MAX_TOKENS / ASTSIGHT_LLM_MAX_RETRIES
 ```
+
+也兼容 Claude Code / Anthropic 兼容端点的通用变量（`ASTSIGHT_*` 优先）：
+
+```bash
+export ANTHROPIC_AUTH_TOKEN=...           # 或 ANTHROPIC_API_KEY
+export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+export ANTHROPIC_MODEL=deepseek-flash
+```
+
+推荐先单独跑 `rules extract` 验证连通与输出质量，再进入 `agent run`。
+推理型模型（如 `deepseek-flash`）会先输出 thinking，默认 `max_tokens=16384`
+已为此留出预算；若仍报 `llm_response_truncated`，提高 `ASTSIGHT_LLM_MAX_TOKENS`。
 
 下游 Mock 示例（报价服务 → 价格服务；`PRICING_BASE_URL` 会被自动覆盖）：
 
@@ -539,7 +579,10 @@ python examples/demo_agent_flow.py --keep --no-auto-approve   # 停在待审 pro
 
 边界：
 
-- 分析阶段 SUT 还没启动，因此**必须提供本地 OpenAPI**（或在项目内可发现），不能从 `--base-url` 拉取；
+- OpenAPI 不是前置条件：没有本地契约时用代码路由构建画像，CR 契约规则为空，
+  字段格式/必填类用例无法生成；分析阶段 SUT 还没启动，因此不能从 `--base-url` 拉取契约。
+  一个可用接口都扫不到时，仍会完成 A1 规则抽取并落盘 `ruleset.json`，然后以
+  `not_run` 结束并给出 `routes_missing`，不生成猜测性用例；
 - C5 造数在 `agent run` 中只有提供 `--ddl` 才生成目录；提供 `--db-url` 才执行 apply/teardown。
   没有 plan/DB 时带 `preconditions` 的用例标 `blocked`，不会静默跳过；
 - A6 默认关闭（`--max-repair-rounds 0`）；只修 `path_params/query/headers/body/asserts`，
@@ -666,7 +709,7 @@ python -m pytest -q
   待审 proposal 的 warning/degraded/blocker 行为。
 - `test_case_orchestration.py`：A4.5 审核门前置阻断与 code-only 旁路。
 - `test_rules_store.py` / `test_rules_import_diff.py`：`rule_key`/fingerprint 重算、
-  A→B 降级、quote 校验、冲突裁决、CR 确定性提取、六路规则 diff 与漂移/orphan。
+  A→B 降级、quote 校验、冲突记录、CR 确定性提取、六路规则 diff 与漂移/orphan。
 - `test_mock_semantics.py`：契约 `success` 确定性生成、规则映射分支、无依据分支拒绝、
   未知 dep/rule 拒绝、success stub 覆写的证据降级。
 - `test_data_plan.py` / `test_data_apply_sqlite.py`：FK 拓扑、状态展开、未知表/列拒绝、
@@ -685,7 +728,7 @@ python -m pytest -q
 - C5 已打通 SQLite：下一步补 MySQL/PostgreSQL 方言、DB 反射/DBML 与更复杂的跨表业务态；
   在此之前其他方言保持 `unsupported_dialect`。
 - 断言强度升级：在已审核用例上增加 L2/L3 判定（字段约束、状态迁移）。
-- 文档接入扩展：PDF/Word、跨文档冲突裁决。
+- 文档接入扩展：PDF/Word、跨文档冲突识别。
 - 用例库并发写保护与数据库后端（当前为单进程 JSON + 原子替换）。
 - 路由插件扩到 Spring（当前 Spring 路由只有 CodeGraph 单源、证据 `inferred`）。
 - 仍静态不可知的 Python 路由：Django 函数视图 method（函数体内按

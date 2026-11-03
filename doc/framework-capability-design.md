@@ -239,11 +239,12 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 | 实体 | 关键字段 | 说明 |
 | --- | --- | --- |
 | `RuleSet` | schema_version, ruleset_id, project, version, generated_at, prompt{name, version, model}, documents[], rules[], contract_rules[], questions[], gaps[], conflicts[] | 当前规则库快照；`ruleset_id` = 文档 hash + 契约源 hash + prompt 版本 |
-| `Rule` | rule_key, rule_id, text, type, entities[], fields[], source{doc, version(sha256), doc_version, section, kind}, authority, impact, priority, reasoning, fingerprint | BR 业务规则；字段对齐 a1 提示词输出契约（`version` 回填为文档 hash） |
+| `Rule` | rule_key, rule_id, text, type, entities[], fields[], constraints[], source{doc, version(sha256), doc_version, section, kind}, authority, impact, priority, reasoning, fingerprint | BR 业务规则；字段对齐 a1 提示词输出契约（`version` 回填为文档 hash） |
+| `RuleConstraint` | field, operator(eq/ne/in/not_in/min/max/between/pattern/required/forbidden/transition/other), values[], condition, error_code, exhaustive | 结构化约束；只用于 quote 落地与确定性冲突检测，不是运行时表达式 |
 | `ContractRule` | rule_key, rule_id, transport, endpoint, field, constraint, source, authority=A | CR 契约规则；由契约源（HTTP：OpenAPI / Spring MVC 注解；gRPC：proto/descriptor；Dubbo：接口源码）确定性生成，不调用 LLM |
 | `RuleQuestion` | id, text, reason, impact | 文档没写清、必须人工澄清的问题；不参与判定 |
 | `RuleGap` | kind(implicit/quantity/cross_system), desc, reason, related_interfaces[] | 抽不出的规则；不占 BR 编号，不计入覆盖率分母 |
-| `RuleConflict` | topic, rule_keys[], docs[] | 两份文档冲突的规则对，人工裁决前为 `disputed` |
+| `RuleConflict` | topic, rule_keys[], docs[], origin(model/framework/model+framework), reason | 模型自报或框架确定性检测到的规则冲突；只记录，不改变规则状态，在用例审核中确认 |
 
 **身份与字段规则**：
 
@@ -259,8 +260,9 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
   `priority` 原样保留。`source.kind` 只有 `explicit` / `inferred` 两值；`reasoning` 仅 P0
   与高风险规则输出（提示词声明下游可忽略），框架保留用于审核阅读与审计，不进入
   fingerprint、不进入执行。
-- `Rule.fingerprint` 覆盖 `text / type / fields / source(doc, section, kind) / authority /
-  priority`；不覆盖 `rule_id / reasoning / source.version / source.doc_version / 生成时间`。
+- `Rule.fingerprint` 覆盖 `text / type / fields / constraints / source(doc, section, kind) /
+  authority / priority`；不覆盖 `rule_id / reasoning / source.version / source.doc_version /
+  生成时间`。空约束不写入 fingerprint payload，兼容加结构化约束之前保存的规则库。
   文档 hash 变化但规则文本与 section 未变时不算规则变更，只记 `doc_version_drift`。
 - `authority` 只允许 A/B/C/D；A1 的输入只有文档，因此只产出 A/B。C（代码反推）与
   D（历史缺陷）只能来自其他导入通道，且**不得单独作为 oracle**。
@@ -269,34 +271,50 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 
 - `rule_key` 在 `RuleSet` 内唯一；`rules` 内不得混入 `questions`/`gaps`。
 - 同一 `source.section` 可对应多条规则；一条规则只能有一个 `source`。
-- `RuleConflict` 中的规则在裁决前标 `disputed`；`disputed` 规则不得成为用例的唯一依据。
+- `RuleConflict` 只记录冲突，不改变规则 `status`；参与冲突的规则仍可被 A4 引用，
+  冲突进入 A4 输入与用例审核文件，由用例审核这一步统一确认。
 - `gaps` 不是规则：报告单列“规则缺口”，不并入规则覆盖率分子/分母。
 - 加载时重算 `rule_key` 与 fingerprint；不匹配即拒绝加载。
 
 #### 3.1.2 生成与导入
 
+**唯一用户入口：需求文档。**
+
 ```
-rules prepare --project <repo> --requirements <docs> [--openapi ...]
+rules extract --project <repo> --requirements <docs> [--openapi ...]
   → .astsight/rules/<analysis_id>/
       context.json      # 文档 section/quote/hash + 契约端点目录（HTTP：OpenAPI/Spring MVC；gRPC：proto/descriptor；Dubbo：接口源码）+ transport
       prompt.md         # a1_requirement_analysis.md 的实例化
-      rules.schema.json # RuleSet / Rule 输出 schema
-      README.md         # 下一步命令
-
-外部 LLM（Claude Code Skill / 人工 / 未来 API 适配器）读取 context + prompt
-  → rules.draft.json   # { questions: [], rules: [], gaps: [] }
-
-rules import --context <analysis_id> --draft rules.draft.json
-  → 校验 → 与当前 ruleset 做 rule_key diff → ruleset.json (version + 1)
+      rules.schema.json # RuleDraft 输出 schema
+      rules.draft.json  # 本次模型输出（先落盘再校验）
+  → 确定性校验 → rule_key diff → ruleset.json (version + 1) + ruleset.md
 ```
 
-- **框架不内置 LLM SDK**：C1 只提供上下文包、提示词、schema 与导入校验；实际分析由 Skill/
-  人工/适配器完成。`ruleset.json` 记录 `prompt.version` 与 `model`，保证“哪版提示词、哪个
-  模型”可审计；同一输入重跑可能得到不同规则，**人工审核用例是最终稳定器**。
-- **规则不单独走审批命令**：规则是设计期材料，只有在被至少一条 approved 用例引用后才成为
-  “已确认规则”。`questions`/`gaps`/`disputed` 在报告与审核文件中显式展示。
-- `rules import` 不修改 `caseset.json`；规则变化对用例的影响通过 `rule_drift` 标记与
-  重新审核解决（见 3.1.3）。
+需求修复后重跑同一条命令；每次抽取都是完整快照。
+
+**模型在框架外运行（同一流程的两段式）**：需要把模型调用从框架里拿出去时，使用：
+
+```
+rules prepare --project <repo> --requirements <docs> [--openapi ...]
+  → .astsight/rules/<analysis_id>/（context/prompt/schema/README）
+
+Claude Code Skill / 人工 / 企业模型网关 / 离线批处理读取 context + prompt
+  → rules.draft.json   # { questions: [], rules: [], gaps: [], conflicts: [] }
+
+rules import --context <analysis_id> --draft rules.draft.json
+  → 与 extract 完全相同的校验 → rule_key diff → ruleset.json + ruleset.md
+```
+
+- **模型只是候选来源**：无论模型在框架内（`rules extract` 的适配层）还是框架外运行，
+  `rule_key`、fingerprint、A 级落地、冲突检测、CR 契约规则与版本号都由框架重算；
+  校验失败不写 `ruleset.json`。框架内模式是可选适配器，核心 `rules/` 包保持零模型。
+  `ruleset.json` 记录 `prompt.version` 与 `model`，保证“哪版提示词、哪个模型”可审计；
+  同一输入重跑可能得到不同规则，**人工审核用例是最终稳定器**。
+- **规则阶段没有人工审核节点**：规则导入只做确定性校验并直接落库；规则在被至少一条
+  approved 用例引用后才成为“已确认规则”。`questions`/`gaps`/`conflicts` 在报告与
+  用例审核文件中显式展示，全流程唯一的人工门禁是用例审核。
+- `rules extract`/`rules import` 不修改 `caseset.json`；规则变化对用例的影响通过
+  `rule_drift` 标记与重新审核解决（见 3.1.3）。
 
 #### 3.1.3 规则 diff、生命周期与漂移
 
@@ -311,11 +329,11 @@ rules import --context <analysis_id> --draft rules.draft.json
 | `source.section` 或文档 hash 变化但规则未变 | 只记 `doc_version_drift`，不要求重审 |
 | `questions`/`gaps` 变化 | 报告展示，不改变已有用例状态 |
 
-生命周期只有 `active` / `deprecated` / `disputed` 三态，没有规则级审批流：
+生命周期只有 `active` / `deprecated` / `ungrounded` 三态，没有规则级审批流：
 
-- `active`：可用于设计用例；
+- `active`：可用于设计用例；参与冲突的规则仍为 `active`；
 - `deprecated`：新分析中消失；引用它的用例保留并标 `rule_orphaned`；
-- `disputed`：冲突未裁决；不得作为用例的唯一依据。
+- `ungrounded`：quote/来源不足以支撑规则值，需修正草案后重新导入；不得作为用例依据。
 
 `rule_drift` 的处理：`full`/`delta` 默认把受影响的 approved 用例视为 `stale` 并阻断，
 要求重新审核或显式 `--allow-stale-cases` 降级为 warning + `degraded`；`cases` 模式只告警。
@@ -330,12 +348,21 @@ rules import --context <analysis_id> --draft rules.draft.json
 | C | 代码反推 | **禁止** | 只能作差分参考；引用它的用例必须有 A/B 依据 |
 | D | 历史缺陷归纳 | 仅作回归断言 | 必须标 provenance，且不能替代 A/B |
 
-**A 级落地校验（确定性）**：规则 `text` 中出现的错误码、枚举值、数值阈值，必须能在
-`source.section` 原文中找到；找不到则自动降级为 B（inferred）并写 `authority_downgraded`
-warning。该检查只保证“数字有出处”，不证明语义正确——语义仍由用例审核确认。
+**规则值落地校验（确定性）**：规则 `text` 中的数字、反引号内容、错误码，以及结构化
+`constraints.values` / `constraints.error_code`，必须能在 `source.quote` 中逐字找到。
+值只在 `source.section` 其他位置出现时标 `ungrounded`（A 级同时降 B）；section 中完全
+不存在则视为编造并拒绝导入。该检查只保证“值有出处”，不证明语义正确——语义仍由用例审核确认。
 
-**冲突处理**：`RuleConflict` 未裁决时，引用任一冲突规则的用例不能批准；审核人必须先
-记录裁决（选择哪条、依据哪份文档），再重新 import/approve。
+**结构化约束与冲突检测**：`Rule.constraints`（`field/operator/values/condition/error_code/
+exhaustive`）只用于确定性比较，不是运行时表达式。框架对同一 `(field, condition)` 的结构化
+约束做范围、枚举、必填/禁止、错误码冲突检测，生成 `RuleConflict(origin="framework")`；
+模型自报的冲突标 `origin="model"`，二者可合并为 `model+framework`。冲突只记录，不改变
+规则状态，也不阻断导入。
+
+**冲突处理**：规则阶段不设人工裁决。`RuleConflict` 进入 A4 输入和用例审核文件；
+A4 不得自行合并或改写冲突规则，引用冲突规则的用例带 `rule.conflict` warning；
+审核人在唯一的用例审核节点决定接受、修改或拒绝相关用例。执行报告把冲突列为待确认项，
+不作为 blocker。
 
 #### 3.1.5 规则覆盖
 
@@ -357,8 +384,9 @@ warning。该检查只保证“数字有出处”，不证明语义正确——�
 | 契约源 | 每个被支持端点至少一种：OpenAPI / Spring MVC 注解 / gRPC proto / Dubbo 2.7+ 接口 | 全缺失时 CR 为空、标 `contract_incomplete`，阻断契约断言用例；`unsupported` 端点单列 |
 | 规则库可加载 | schema 受支持；`rule_key`/fingerprint 重算一致 | 否则拒绝加载 |
 | 来源可定位 | `source.section` 解析成功 | 解析失败标 `ungrounded`，不得为 A |
-| A 级落地 | 数字/枚举能在 section 原文找到 | 否则降级 B + warning |
-| 冲突裁决 | `disputed` 规则不得被用例单独引用 | approve 时阻断 |
+| 规则值落地 | 数字/枚举/错误码能在 `source.quote` 找到 | 只在 section 其他位置：ungrounded/降 B；哪儿都没有：拒绝 |
+| 结构化冲突 | 同 `(field, condition)` 的范围/枚举/错误码矛盾时记录 | 自动生成 `RuleConflict`，不阻断导入 |
+| 冲突展示 | 所有冲突进入 A4 输入与用例审核文件 | 缺失时报告不完整；用例审核确认 |
 | C/D 规则 | 不得单独作 oracle | approve 时阻断 |
 | 规则覆盖 | 可选阈值（BR/CR 分开） | 未覆盖规则必须列出 |
 | 规则缺口 | 报告展示；`--fail-on-rule-gaps` 可升级为 blocker | 默认 warning |
@@ -383,7 +411,7 @@ warning。该检查只保证“数字有出处”，不证明语义正确——�
 | 判定 | **不作 oracle** | **唯一 oracle** |
 | 变更 | `rule_key` + fingerprint diff | `(endpoint, case_key)` + fingerprint diff |
 | 覆盖 | 规则覆盖（BR/CR 分列） | 需求 section / 变更 / 执行覆盖 |
-| 失效 | `deprecated` / `disputed` / `ungrounded` | `approved` / `deprecated` / `superseded` |
+| 失效 | `deprecated` / `ungrounded` | `approved` / `deprecated` / `superseded` |
 
 一句判据：**删掉生成它的 Skill/模型，已批准用例仍能独立执行并判定 → 合格；离开模型就
 无法执行或判定 → 不合格。规则库可以丢，用例库不能丢。**
@@ -549,7 +577,7 @@ L3 关系式与 L4 跨实体不变量尚未实现；草案若只能给出 L1/L2 
 | --- | --- | --- |
 | 用例库可加载 | schema / fingerprint 版本受支持，fingerprint 重算一致 | 否则拒绝加载 |
 | 两级用例完整性 | business：`rule_refs`+`requirement_refs` 非空；code：`rule_refs`+`change_refs` 非空 | 缺失拒绝导入 |
-| 规则引用有效 | `rule_key` 可解析；非 `disputed`/`ungrounded`；C/D 不得单独作 oracle | approve 时阻断 |
+| 规则引用有效 | `rule_key` 可解析；非 `ungrounded`；C/D 不得单独作 oracle | approve 时阻断；引用冲突规则只告警 |
 | 规则漂移 | 引用 `rule_drift` 规则的用例标 `stale` | full/delta 默认阻断，可 `--allow-stale-cases` |
 | 无可执行用例 | `cases` 模式 blocker | 不编码、不执行 |
 | 待审 proposal | warning + `degraded` | `--fail-on-pending-proposals` 升级为 blocker |
@@ -691,8 +719,9 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 | 项  | 内容 |
 | -- | -- |
 | 职责 | 把需求/设计文档 + 契约源组织成分析上下文，调用 LLM（prompt=`a1_requirement_analysis.md`）产出业务规则；同时确定性提取契约规则；完成规则校验、diff 与版本化 |
-| 输入 | 需求/设计文档（`.md/.markdown/.txt`，目录递归）；契约源：OpenAPI（显式指定、项目内发现或 `--base-url` 拉取）、Spring MVC 注解、gRPC `.proto`/descriptor、Dubbo 2.7+ 接口（源码可见） |
-| 输出 | `.astsight/rules/<analysis_id>/`：`context.json`、`prompt.md`、`rules.schema.json`、`README.md`；经 `rules import` 写入项目级 `ruleset.json` |
+| 输入 | 需求文档是入口；契约源为可选增强：OpenAPI（显式指定、项目内发现或 `--base-url` 拉取）、Spring MVC 注解、gRPC `.proto`/descriptor、Dubbo 2.7+ 接口（源码可见） |
+| 输出 | `.astsight/rules/<analysis_id>/`：`context.json`、`prompt.md`、`rules.schema.json`、`rules.draft.json`、`README.md`；经 `rules extract`（框架内模型）或 `rules import`（框架外模型）写入项目级 `ruleset.json`，并渲染只读 `ruleset.md` |
+| 入口 | `astsight rules extract --requirements ...`；模型在框架外运行时拆为 `rules prepare` + 外部产出草案 + `rules import` |
 
 > 规则层的引入/删除/恢复过程见 [`决策记录.md`](决策记录.md) §2。
 
@@ -700,7 +729,7 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 
 ```json
 {
-  "context_id": "sha256(docs + contract + schema_version + prompt_version)",
+  "context_id": "sha256(docs + sections(path/text_hash/include) + contract/routes + schema_version + prompt_version)",
   "documents": [{"doc": "requirements.md", "version": "sha256", "sections": [{"path": "订单 > 创建", "text": "..."}]}],
   "excluded_sections": ["文档说明", "变更记录"],
   "endpoints": [
@@ -722,15 +751,20 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
    - **gRPC**：读取仓库 `.proto` 或 descriptor；无 descriptor 且 server reflection 不可用 → `unsupported`
    - **Dubbo 2.7+**：接口类 + 标准注解/XML；接口类必须在仓库源码内，只在依赖 jar 或 Dubbo 2.6 → `unsupported`
 
-   对应形态的契约源全部缺失时 `contract_incomplete=true`、CR 规则为空，报告显式标注；**任何情况下都不猜字段**
-5. 实例化 `a1_requirement_analysis.md` 为 `prompt.md`（注入文档 section 与端点目录），生成 `rules.schema.json`；**框架不调用模型**，由 Skill/人工/适配器产出 `rules.draft.json`
-6. `rules import` 校验草案：schema/大小/路径安全；`questions/rules/gaps` 三数组分离；`rule_id` 连续；`source.doc/section` 必须可解析到 context；`authority` 显式；`text` 中的数字/枚举做 A 级落地检查（不通过降级 B）；重复 `rule_key` 拒绝
+   对应形态的契约源全部缺失时 `contract_incomplete=true`、CR 规则为空，报告显式标注；**任何情况下都不猜字段**。C1 不因缺 OpenAPI 中断：业务规则只依赖文档原文；接口事实可由 C3 从代码路由补，缺失字段留给 `contract_incomplete` 显式降级
+5. 实例化 `a1_requirement_analysis.md` 为 `prompt.md`（注入文档 section 与端点目录），生成 `rules.schema.json`。**框架内入口 `rules extract`** 直接调用适配层模型产出 `rules.draft.json`；**框架外模式**由 `rules prepare` 只写上下文，模型由 Skill/人工/模型网关/离线批处理执行，产出同一份 `rules.draft.json`
+6. `rules extract`/`rules import` 用同一套校验：schema/大小/路径安全；`rules/questions/gaps/conflicts` 四数组分离；`rule_id` 连续；`source.doc/section` 必须可解析到 context；`authority` 显式；`operator=in/not_in` 必须显式声明 `exhaustive`（未声明记 warning，枚举是否闭合并不能靠猜）；`text` 中的数字/枚举做 A 级落地检查（不通过降级 B）；重复 `rule_key` 拒绝
 7. 确定性提取 `CR-NN` 契约规则（required/type/enum/min/max/format），与 BR 合并进 `RuleSet`
-8. 按 `rule_key` 与当前 `ruleset.json` diff，计算 `rule_drift` / `rule_orphaned`，写新版本；规则导入失败不改动现有 ruleset
+8. 按 `rule_key` 与当前 `ruleset.json` diff，计算 `rule_drift` / `rule_orphaned`，写新版本并渲染 `ruleset.md`；校验失败不改动现有 ruleset
 
 **关键设计决策**：
 
-- **提示词即契约**：`prompts/a1_requirement_analysis.md` 是 A1 的分析提示词；其输出字段（`id/text/type/entities/fields/source/authority/impact/priority/reasoning` + `questions/gaps`）与 3.1.1 对齐，导入时 `id` → `rule_id`。`source.section` 按 context 的稳定 section 路径解释（可附原文章节号）
+- **提示词即契约**：`prompts/a1_requirement_analysis.md` 是 A1 的分析提示词；其输出字段（`id/text/type/entities/fields/source/authority/impact/priority/reasoning` + `questions/gaps/conflicts`）与 3.1.1 对齐，导入时 `id` → `rule_id`。`source.section` 按 context 的稳定 section 路径解释（可附原文章节号）
+- **四数组按"能不能只靠文档内部判定"分流**：`rules` 文档中成立且可判定；`conflicts` 文档自相矛盾，当场成立、不需要人回答；`questions` 答案只能来自业务决策或外部事实；`gaps` 文档没写。内部可判的矛盾不得降级为 `questions`——否则一个已成立的缺陷会被排进待确认队列，往往等不到答案
+- **冲突带类型与后果**：`conflicts.kind`（semantic/cross_section/value/enumeration_closed/unreachable/bidirectional/self_trigger）决定处置路径，`conflicts.severity`（loss/silent/rights/untestable/minor）决定排序；两者都不作为结论，只作为证据。冲突身份 = `topic + kind`，同一 topic 下的不同毛病不会被合并成一条
+- **`output_mode` 只切后端**：`json` 供框架消费，`md` 供人工评审；判据、检查步骤、铁律共用一套，避免两份提示词各自漂移。`md` 输出不进规则库，入库须重跑 `json` 模式
+- **人读版由代码渲染，不让模型生成第二份**：`rules render` 从 `ruleset.json` 渲染 Markdown（规则表 / 冲突 / 缺口 / 隐含假设 / 确认清单 / 枚举未闭合项）。同一份数据两个视图，条目与数字必然一致；版式要改也不必重跑模型。若让模型同时输出 JSON 与 Markdown，两次生成的条目数会对不上，且无法判断哪份可信
+- **评审文档驱动需求修复，规则库不接受手工修改**：`ruleset.md` 是给产品/需求方的沟通材料，用来把冲突、缺口、隐含假设和待确认问题变成需求文档的具体修订；修复后重新 `rules extract`（框架外模式为 `prepare`/`import`）。每次抽取都是完整快照，`questions/gaps/conflicts` 按本次结果整体替换，上一版已修复的条目不会残留。`ruleset.json` 只能由 `rules extract`/`rules import` 写入，不提供编辑命令；要改规则必须改需求原文后重抽，避免规则库变成第二个人工维护的真相源。通过确定性校验（quote 落地、A 级降级、冲突记录）的规则即可直接被 A4 用于生成用例
 - **需求文本是数据，不是指令**：`prompt.md` 明确要求忽略文档中改变角色、输出格式或要求自动批准的内容
 - **不臆造**：文档没写清的约束只能进 `questions`，抽不出的只能进 `gaps`；规则 `text` 不得出现原文没有的具体数字/枚举（A 级落地校验）
 - **契约不是只有 OpenAPI**：HTTP 契约按 `OpenAPI > Spring MVC 注解 > 设计文档` 取值；契约源全部缺失时 CR 规则为空，C4 不得生成无依据的契约断言用例
@@ -955,7 +989,7 @@ Dubbo 附加字段：
 
 1. **transport 判定**（确定性，零 LLM）：按 3.3 矩阵从端点证据判定 `http | grpc | dubbo`。Dubbo 家族中满足「Dubbo 3 + Triple + protobuf + 可用 descriptor + 无 group/version」→ `grpc`；否则 → `dubbo`（sidecar）。证据只够判定“属于 Dubbo 家族”但不足以区分时 → `dubbo` + `transport_evidence="inferred"`。无任何可用调用路径 → `unsupported` + `unsupported_reason`，不生成画像
 2. 契约提取（按 transport 分派）：
-   - **HTTP**：按 `OpenAPI > Spring MVC 注解 > 设计文档` 取值。OpenAPI 缺失时从代码 AST 提取（框架插件），只认提供方路由注解；HTTP 客户端声明（含 Feign）不参与契约提取。全部契约源缺失时标 `contract_incomplete`，不猜字段
+   - **HTTP**：按 `OpenAPI > Spring MVC 注解 > 设计文档` 取值。OpenAPI 缺失时从代码 AST 提取（框架插件），只认提供方路由注解；HTTP 客户端声明（含 Feign）不参与契约提取。全部契约源缺失时标 `contract_incomplete`，不猜字段；C3 仍产出 method/path/handler 画像，流程不因缺契约中断
    - **gRPC**：从仓库 `.proto` / descriptor 提取 service/method 与 message 字段、类型、`repeated/optional`。无 descriptor 且 server reflection 不可用 → `unsupported`（`no_descriptor`），不靠猜
    - **Dubbo**：接口源码 + `@DubboService`/`@DubboReference`（全限定名）或 XML `dubbo:service`/`dubbo:reference` 提取 `interface/method/param_types/return_type/group/version`；接口只在依赖 jar 或动态代理/反射/`getBean` → `unsupported`（`interface_in_jar` / `dynamic_lookup`）。Dubbo 2.6 → `unsupported`（`dubbo_2_6`）
 3. DB 映射：字段名匹配 + 命名约定（驼峰/下划线归一）+ 设计文档表映射章节
@@ -1876,9 +1910,9 @@ Dubbo 草案片段：
 
 1. 结构校验：JSON/Pydantic schema；文件大小、用例数、断言数、body 深度、preconditions 数量
    上限；拒绝绝对路径、`..`、指向项目外的 symlink
-2. 规则校验：`rule_refs` 非空且 `rule_key` 存在于当前 ruleset；不得引用 `disputed`/
-   `ungrounded`；C/D 规则不得作为唯一依据；business 至少 1 条 A/B 规则，code 至少 1 条
-   A/B 或 CR 规则
+2. 规则校验：`rule_refs` 非空且 `rule_key` 存在于当前 ruleset；不得引用 `ungrounded`；
+   C/D 规则不得作为唯一依据；引用冲突规则只告警并在审核文件中展示；business 至少 1 条
+   A/B 规则，code 至少 1 条 A/B 或 CR 规则
 3. 端点校验：`endpoint` 必须存在于 context（先精确匹配，再按 `normalize_path` 对齐参数写法），
    `transport` 必须与画像一致；HTTP 校验 `path_params` 覆盖全部占位符且无多余，query/header/body
    顶层字段在契约中；gRPC 校验 `service/method` 与 proto 一致、`request` 字段在 message 中、
@@ -2388,7 +2422,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | ------------ | ------ | -------- | ------------------------------------------------------------- |
 | Context      | C1     | C3/C4    | context_id, documents[].sections, endpoints（含 transport）, profiles, limits |
 | RuleSet      | C1     | C4/报告   | ruleset_id, version, prompt{name,version,model}, rules[], questions[], gaps[], conflicts[] |
-| Rule         | C1     | C4/报告   | rule_key, rule_id, text, type, fields, source, authority, priority, fingerprint |
+| Rule         | C1     | C4/报告   | rule_key, rule_id, text, type, fields, constraints, source, authority, priority, fingerprint |
 | ContractRule | C1     | C4/报告   | rule_key, rule_id, endpoint, field, constraint, authority=A   |
 | CaseSet      | C4     | C6/C7/报告 | schema_version, store_version, ruleset{version,hash,id}, cases[], history[], review_log[], requirements[], uncovered_reasons |
 | CaseEntry    | C4     | C6/C7    | id, case_key, level, transport, endpoint, coverage_role, request（按 transport）, preconditions, mock_bindings（http/dubbo）, asserts（按 transport）, assert_strength, rule_refs, requirement_refs, change_refs, status, version, fingerprint |
@@ -2538,7 +2572,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 
 | 能力     | 门禁指标                                  | 验证方式           |
 | ------ | ------------------------------------- | -------------- |
-| 3.1 规则库 | ruleset 可加载；来源 section 可定位；A 级数字/枚举有原文依据；`disputed` 规则不得单独引用 | ruleset 审计 |
+| 3.1 规则库 | ruleset 可加载；来源 section 可定位；规则值有 quote 依据；冲突记录并展示（无人工裁决节点） | ruleset 审计 |
 | 3.1 规则覆盖 | BR/CR 覆盖率分列；未覆盖规则与 gaps 必须列出；规则漂移用例标 `stale` | 规则覆盖统计 |
 | 3.2 用例库 | 无可执行用例（`cases` 模式）阻断；待审 proposal 可见并标 `degraded`；approve 无 pending、乐观锁匹配；两级 `rule_refs`/`change_refs` 完整 | caseset / proposal 审计 |
 | 3.2 断言保真 | 无 L3/L4 → L1/L2 降级（逐条列出） | C6 断言扫描 |

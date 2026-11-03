@@ -110,35 +110,55 @@ gRPC：proto/descriptor；Dubbo 2.7+：接口源码 + 标准注解/XML）组织�
 │ 1. 文档切块节点（确定性）          │  section 路径 + 原文 + sha256
 │ 2. 元数据排除节点（确定性）        │  版本/目录/术语等不计入覆盖率分母
 │ 3. 契约端点目录（确定性）          │  按 transport 解析参数/响应；unsupported 单列
-│ 4. 分析上下文固化（确定性）        │  context_id = docs + 契约 hash + prompt 版本
+│ 4. 分析上下文固化（确定性）        │  context_id = docs + section 切分 + 契约/路由 hash + prompt 版本
 │ 5. LLM 规则分析节点（Agent）       │  a1_requirement_analysis.md
-│    输出 questions/rules/gaps       │  BR-NN + authority A/B + source
-│ 6. 规则导入校验（确定性）          │  schema/来源 section/A 级落地/rule_key
+│    输出 rules/conflicts/gaps/      │  BR-NN + authority A/B + source；
+│    questions 四分流                │  内部可判矛盾不得降级为 questions
+│ 6. 规则导入校验（确定性）          │  schema/来源 section/quote 落地/结构化冲突/rule_key
 │ 7. CR 契约规则提取（确定性）       │  契约源 required/type/enum/min/max
-│ 8. 规则库 diff（确定性）           │  new/updated/deprecated/disputed
+│ 8. 规则库 diff（确定性）           │  new/updated/deprecated + 冲突记录
+│ 9. 评审文档渲染（确定性）          │  ruleset.md：只读视图，不调用模型
 └─────────────────────────────────┘
       │
       ▼
-输出：ruleset.json（version/hash）+ rules import 校验报告
+输出：ruleset.json（version/hash）+ ruleset.md + 导入校验报告
 ```
+
+**入口与执行模式**：
+- **需求文档是唯一入口**：`astsight rules extract --requirements ...` 一次完成
+  上下文准备、模型抽取、确定性校验、CR 合并、版本化与 `ruleset.md` 渲染；
+  需求修复后重跑同一条命令即可。
+- **模型可以跑在框架内，也可以跑在框架外**：`rules extract` 由框架内适配层按
+  `ASTSIGHT_LLM_*` 调用模型；框架外模式把同一流程拆成两段——`rules prepare` 只产出
+  `context.json`/`prompt.md`/`rules.schema.json`，由 Claude Code Skill、人工、
+  企业模型网关或离线批处理产出 `rules.draft.json`，再由 `rules import` 做完全相同的
+  确定性校验与写库。两种模式共用同一套校验、`rule_key`、diff 与版本号，模型永远不写规则库。
 
 **关键决策**：
 - **A1 是框架内唯一的“需求理解”LLM 节点**：它只产出规则，不产出用例；用例草案在 A4 的输入侧
   由 Skill/人工/适配器生成
-- **LLM 节点在框架外执行**：框架只负责 `rules prepare`（context/prompt/schema）与
-  `rules import`（校验/diff/版本化），默认不引入模型 SDK；Claude Code Skill、人工或未来
-  适配器产出 `rules.draft.json`，与 C4 草案同一模式
+- **模型输出一律是候选**：无论模型在框架内还是框架外运行，`rule_key`、A 级落地、
+  冲突检测、CR 契约规则与规则库版本都由框架重算；校验失败不写 `ruleset.json`
 - **提示词即契约**：输出字段与 `framework-capability-design.md` 3.1.1 对齐；
   `source.section` 按稳定 section 路径解释（可附原文章节号）
 - **不臆造**：文档没写清的进 `questions`，抽不出的进 `gaps`；`rules` 中不得出现原文没有的
   具体数字/枚举，A 级落地校验失败自动降级 B
 - **规则不入运行时**：C7 不读 `ruleset.json` 做判定；规则只用于 C4 设计、变更选择、覆盖统计与漂移
 - **无独立规则审批**：规则被 approved 用例引用后才算确认；A4.5 审核文件展示规则依据
+- **评审文档驱动需求修复**：`ruleset.md` 是给产品/需求方的沟通材料，列出规则、冲突、
+  缺口、隐含假设与待确认问题；修复需求后重新 `rules extract`（框架外模式为
+  `prepare`/`import`）。每次抽取是完整快照，上一版已修复的 `conflicts/questions/gaps`
+  不残留，闭环才能收敛
+- **规则库只由 `rules extract`/`rules import` 写入**：不提供手工编辑；要改规则只能改需求
+  原文后重抽，避免规则库变成第二个人工维护的真相源。确定性校验通过的规则直接供 A4 生成用例
 - **可重跑但非确定**：记录 prompt 版本与 model；同一输入可能得到不同规则，由用例审核收敛
 - **契约源按 transport 取值，不强制 OpenAPI**：HTTP 按 `OpenAPI > Spring MVC 注解 > 文档`；
   gRPC 用仓库 proto/descriptor；Dubbo 用 2.7+ 接口源码 + 标准注解/XML。HTTP 全部缺失时 CR 为空、标
   `contract_incomplete`；gRPC/Dubbo 无可用契约 → `unsupported`（`no_descriptor` /
   `interface_in_jar` 等），不猜字段，A4 不得生成对应契约断言用例
+- **OpenAPI 不是流程入口条件**：没有契约时 S1/C3 仍从代码扫描 method+path+handler 建画像，
+  context 输出 `openapi_missing`/`routes_missing` 与 `interface_evidence`；规则阶段照常完成。
+  一个接口都扫不到时 `agent run` 先产出规则库，再以 `not_run` 收尾，不生成只会打 200 的假用例
 - **HTTP 客户端不作契约源**：`@FeignClient` 等客户端声明只是消费方，不参与端点与契约提取；
   A1/S1 不为任何客户端框架写专用解析分支，解析不出的部分标 `inferred`，不臆造
 - **Dubbo/gRPC 端点识别零 LLM**：只认 proto/descriptor 与全限定注解/XML；2.6、接口在 jar、
@@ -167,7 +187,7 @@ gRPC：proto/descriptor；Dubbo 2.7+：接口源码 + 标准注解/XML）组织�
 | 不可 Mock 下游 | 依赖 SUT → gRPC 下游的用例已显式排除或标 `blocked`，且审核文件展示原因 | 静默放行 → 阻断 |
 | gRPC Mock（v4.4） | 绑定 gRPC 下游时，执行计划声明 `mock.strategy="grpc_server"`、Mock 服务器 endpoint 与 descriptor 来源；审核文件展示 `wire_roundtrip` 与已知 int64 匹配限制 | 未声明 / descriptor 缺失 / 服务器未就绪 → 阻断 |
 | Dubbo agent 前提 | 用例绑定 Dubbo 下游时，执行计划必须声明 agent 加载方式（`javaagent`/`classpath`）与兼容矩阵；`serialization_verified=false` 必须在审核文件展示 | 未声明 / 矩阵未覆盖 → 阻断 |
-| 规则引用有效 | `rule_key` 可解析；非 `disputed`/`ungrounded`；C/D 不得单独作 oracle | 阻断 |
+| 规则引用有效 | `rule_key` 可解析；非 `ungrounded`；C/D 不得单独作 oracle；冲突规则已展示 | `ungrounded`/C-D-only 阻断；冲突只告警 |
 | 规则漂移 | 引用 `rule_drift` 规则的用例未标 `stale`，或已显式降级 | 阻断 |
 | 乐观锁 | `base_store_version` + `base_store_hash` 匹配 | 阻断，要求重新 import |
 | 审核人 | `--reviewer` 非空 | 拒绝批准 |
@@ -454,7 +474,7 @@ State（全局共享状态）：
 
 **关键设计**：
 - **入口分流**：框架有两个变更源——**需求/设计文档或契约变更**（触发 A1 需求分析 → 规则导入 → A4 业务级用例导入）和**代码分支变更**（触发 S2 → S3 → A4 代码级用例导入）。二者可独立发生，也可同时发生。纯代码变更（如改了个 bug）不触发 A1，直接走 S2 这条线，代码级用例只补 business 未覆盖的缺口。
-- **A4.5 人工断点**：A4 `cases import` 只生成 proposal。Orchestrator 检查**是否存在未决的 actionable 项**（pending）、**是否至少有 1 条 approved 用例**、`rule_refs`/`change_refs` 是否完整可解析、是否有 `disputed`/C-D-only 规则或 `stale` 用例，以及 `base_store_version`/`base_store_hash` 是否匹配。任一不满足即**阻断**，不得进入 C6。批准后的 approved 用例汇入 State，供 C6/C7 消费；规则本身不进入执行 State。
+- **A4.5 人工断点**：A4 `cases import` 只生成 proposal。Orchestrator 检查**是否存在未决的 actionable 项**（pending）、**是否至少有 1 条 approved 用例**、`rule_refs`/`change_refs` 是否完整可解析、是否有 `ungrounded`/C-D-only 规则或 `stale` 用例，以及 `base_store_version`/`base_store_hash` 是否匹配。任一不满足即**阻断**，不得进入 C6。批准后的 approved 用例汇入 State，供 C6/C7 消费；规则本身不进入执行 State。
 - **执行子图（C7）**：冲突检测 + 并行调度 + 执行 + 归因 + 重试，整体封装为一个 LangGraph 子图（详见 5.1），主流程只看到"执行子图"这一层。子图内部有自己的状态机（scheduled→executing→diagnosing→retrying→reporting），重试回环**只回子图内的"执行"节点**，不冒出到主流程。
 - **条件分支**：执行子图内 A5 诊断出"可重试" → 回环到子图内执行节点；诊断出"终态" → 子图返回主流程，进入报告
 - **失败即中止**：事实源环节（S2/S3 与 C5 的 DDL/FK/校验核心）失败 → 直接终止，不回退硬跑；C5 的 LLM 语义候选失败只降级为 `unmapped`/`inferred`，不污染已校验结构
@@ -724,7 +744,7 @@ State：changed_apis / profiles / ruleset / data_plan / cases / report / 门禁�
 | 资产 | 内容 | 维护方式 | 消费方 |
 |---|---|---|---|
 | 术语表 | 业务术语/字段语义 | 人工维护，随项目演进 | C3 语义附着、C4 校验 |
-| 规则库 `ruleset.json` | 业务规则 BR / 契约规则 CR、`rule_key`、questions/gaps/conflicts、prompt/model 版本 | 只能由 `rules import` 写入；规则被 approved 用例引用后才算确认 | C4 设计/选择、覆盖与漂移报告 |
+| 规则库 `ruleset.json` | 业务规则 BR / 契约规则 CR、`rule_key`、questions/gaps/conflicts、prompt/model 版本 | 只能由 `rules extract`/`rules import` 写入；规则被 approved 用例引用后才算确认 | C4 设计/选择、覆盖与漂移报告 |
 | 用例库 `caseset.json` | 已审核可执行用例（`TC-NNNN`、`level`、`rule_refs`、版本、fingerprint、review_log、history） | 只能由 `cases approve` 写入；proposal 不自动入库 | C6 编码、C7 判定、报告 |
 | Mock 语义模板 | 下游依赖的语义分支枚举 | 人工维护 | C3.5.1 语义绑定、C7 执行 |
 

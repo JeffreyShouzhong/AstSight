@@ -62,6 +62,7 @@ from ..profile.openapi import normalize_path
 from ..rules import (
     build_rules_context,
     load_rule_set,
+    render_rule_set_markdown,
     save_rule_set,
     write_rules_context,
 )
@@ -72,7 +73,11 @@ from .errors import AgentError
 from .mock_semantics import generate_mock_semantic_candidates
 from .mockplan import build_mock_plan
 from .repair import propose_repairs
-from .rule_analysis import generate_rule_draft, import_rule_draft_for_flow
+from .rule_analysis import (
+    generate_rule_draft,
+    import_rule_draft_for_flow,
+    rule_prompt_metadata,
+)
 from .sut import start_sut
 
 _APPROVE_ACTIONS = {"new", "update", "revive"}
@@ -534,15 +539,17 @@ def run_flow(
     data_plan_file: Path | None = None
     try:
         # ── 1. 路由 + 变更范围 ────────────────────────────────
+        # 契约不是流程前置条件：需求先产出规则，接口事实从代码路由补；
+        # 有 OpenAPI 才额外获得字段/必填/枚举/错误码等契约事实。
         openapi_source = discover_openapi(project, config.openapi, None)
-        if not openapi_source:
-            raise AgentError(
-                "openapi_missing",
-                "Agent 流程需要本地 OpenAPI（分析阶段 SUT 尚未启动，不能从 base-url 拉取）；"
-                "请提供 --openapi 或把契约放在项目内",
+        operations: list[Any] = []
+        if openapi_source:
+            operations = parse_operations(load_spec(openapi_source))
+        else:
+            result.warnings.append(
+                "openapi_missing: 未提供/未发现 OpenAPI；本轮只使用代码路由构建画像，"
+                "CR 契约规则为空，字段格式类用例无法生成"
             )
-        spec = load_spec(openapi_source)
-        operations = parse_operations(spec)
 
         routes, route_audit, graph_client, graph_notes = inventory_routes(
             project,
@@ -551,8 +558,6 @@ def run_flow(
             full_index=config.full_index,
             openapi_source=openapi_source,
         )
-        if not routes:
-            raise AgentError("no_routes", "未发现任何路由，不能进入语义分析")
         supplement = (route_audit or {}).get("openapi_supplement") or {}
         route_audit = {
             **(route_audit or {}),
@@ -585,11 +590,17 @@ def run_flow(
             "routes": len(routes),
             "changed_apis": [api.get("handler") for api in changed_apis],
             "openapi": openapi_source,
+            "interface_evidence": "openapi" if operations else "code_routes_only",
         }
-        if not changed_apis:
+        if not changed_apis and (config.mode != "full" or routes):
             result.warnings.append("本次变更未命中任何接口，流程结束")
             result.status = "not_run"
             return result
+        if not routes:
+            result.warnings.append(
+                "routes_missing: 未从代码或 OpenAPI 发现可用接口；"
+                "本轮先完成需求规则抽取，不生成用例"
+            )
 
         # ── 2. 用例上下文（画像）────────────────────────────
         context = build_context(
@@ -601,6 +612,15 @@ def run_flow(
             codegraph_client=graph_client,
         )
         run_dir.write_json("context.json", context)
+        result.warnings.extend(
+            f"context:{warning}" for warning in context.get("warnings") or []
+        )
+        steps["scope"]["profiles"] = len(context.get("profiles") or [])
+        steps["scope"]["contract_incomplete"] = sum(
+            1
+            for profile in context.get("profiles") or []
+            if profile.get("contract_incomplete")
+        )
 
         # ── 3. A1 规则抽取（LLM 候选 + 确定性导入）──────────
         rules_context = build_rules_context(
@@ -620,20 +640,23 @@ def run_flow(
             context=rules_context,
             draft=rule_draft,
             previous_path=rule_base if rule_base.is_file() else None,
+            prompt=rule_prompt_metadata(rules_context, client),
         )
         save_rule_set(rule_base, imported.ruleset)
+        # 人工评审文档随规则库产出：用于和产品方对齐需求缺陷，只读、不参与导入。
+        rules_review_path = rule_base.with_suffix(".md")
+        rules_review_path.write_text(
+            render_rule_set_markdown(imported.ruleset), encoding="utf-8"
+        )
         result.warnings.extend(imported.validation.warnings)
-        unresolved = [
-            conflict.topic
-            for conflict in imported.ruleset.conflicts
-            if not conflict.resolved_at
-        ]
-        if unresolved:
+        conflicted = [conflict.topic for conflict in imported.ruleset.conflicts]
+        if conflicted:
             result.warnings.append(
-                f"规则冲突未裁决: {', '.join(unresolved[:5])}"
+                f"规则冲突（将在用例审核中确认）: {', '.join(conflicted[:5])}"
             )
         steps["rules"] = {
             "ruleset": str(rule_base),
+            "review": str(rules_review_path),
             "context_dir": str(rules_context_dir.context_dir),
             "context_id": rules_context_dir.context_id,
             "business_rules": len(imported.ruleset.rules),
@@ -641,10 +664,15 @@ def run_flow(
             "diff": imported.diff.as_dict(),
             "questions": len(imported.ruleset.questions),
             "gaps": len(imported.ruleset.gaps),
-            "unresolved_conflicts": unresolved,
+            "conflicts": conflicted,
             "warnings": imported.validation.warnings,
         }
         ruleset = load_rule_set(rule_base)
+
+        if not routes:
+            # 没有接口事实就不能生成可执行用例；规则库仍然完整产出并落盘。
+            result.status = "not_run"
+            return result
 
         # ── 4. C3.5.1 Mock 语义（契约层 + 规则映射）──────────
         mock_semantic = build_mock_semantic(context, ruleset)

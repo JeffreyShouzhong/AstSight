@@ -4,7 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from astsight.rules.context import prepare_rules_context, resolve_section
+from astsight.rules.context import (
+    build_rules_context,
+    prepare_rules_context,
+    resolve_section,
+)
 from astsight.rules.contract import build_contract_rules
 from astsight.rules.diff import diff_rules, orphaned_rule_keys
 from astsight.rules.draft import RuleDraft
@@ -221,3 +225,83 @@ def test_roundtrip_ruleset_hash_is_stable(tmp_path: Path) -> None:
     loaded = load_rule_set(tmp_path / "ruleset.json")
     assert rule_set_hash(loaded) == rule_set_hash(result.ruleset)
     assert loaded.version == 1
+
+
+def test_context_id_changes_with_prompt_and_writes_it(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    (project / "docs").mkdir(parents=True)
+    (project / "docs" / "req.md").write_text(REQUIREMENT, encoding="utf-8")
+    prompt_a = tmp_path / "a.md"
+    prompt_b = tmp_path / "b.md"
+    prompt_a.write_text("# PROMPT-A\n", encoding="utf-8")
+    prompt_b.write_text("# PROMPT-B\n", encoding="utf-8")
+
+    first = build_rules_context(project, [DOC], prompt_path=prompt_a)
+    again = build_rules_context(project, [DOC], prompt_path=prompt_a)
+    other = build_rules_context(project, [DOC], prompt_path=prompt_b)
+
+    assert first["context_id"] == again["context_id"]
+    assert first["context_id"] != other["context_id"]
+    assert first["prompt"]["sha256"] != other["prompt"]["sha256"]
+
+    prepared = prepare_rules_context(
+        project, [DOC], out=".astsight/rules", prompt_path=prompt_a
+    )
+    assert "PROMPT-A" in prepared.prompt_path.read_text(encoding="utf-8")
+
+
+def test_empty_document_is_warned_not_silently_accepted(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    (project / "docs").mkdir(parents=True)
+    (project / "docs" / "empty.md").write_text("", encoding="utf-8")
+
+    context = build_rules_context(project, ["docs/empty.md"])
+
+    # 没有 section 就没有可引用原文；不能等模型编造后才发现输入是空的。
+    assert "document_empty:docs/empty.md" in context["warnings"]
+    assert "openapi_missing" in context["warnings"]
+
+
+def test_duplicate_section_path_is_warned_and_number_still_locates(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "proj"
+    (project / "docs").mkdir(parents=True)
+    (project / "docs" / "req.md").write_text(
+        "# 订单\n\n## 规则\n\n第一条规则。\n\n## 规则\n\n第二条规则。\n",
+        encoding="utf-8",
+    )
+
+    context = build_rules_context(project, ["docs/req.md"])
+
+    assert "duplicate_section_path:docs/req.md#订单 > 规则" in context["warnings"]
+    # 同名 path 有歧义，但 number 唯一，仍能定位到第二条。
+    assert resolve_section(context, "docs/req.md", "2")["text"] == "第二条规则。"
+
+
+def test_context_id_tracks_section_classification(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = tmp_path / "proj"
+    (project / "docs").mkdir(parents=True)
+    (project / "docs" / "req.md").write_text(REQUIREMENT, encoding="utf-8")
+
+    before = build_rules_context(project, [DOC])
+    # 文件字节没变，只是元数据判定变了；context_id 必须跟着变，
+    # 否则同一个 id 会对应两套 include 语义。
+    monkeypatch.setattr(
+        "astsight.cases.requirements._METADATA_WORDS", ("订单规则",)
+    )
+    after = build_rules_context(project, [DOC])
+
+    assert before["context_id"] != after["context_id"]
+
+
+def test_metadata_section_cannot_source_a_rule() -> None:
+    from astsight.rules.validate import validate_rule_draft
+
+    context = _context()
+    context["documents"][0]["sections"][0]["include"] = False
+    result = validate_rule_draft(_draft(_rule()), context)
+
+    assert any("include=false" in error for error in result.errors)

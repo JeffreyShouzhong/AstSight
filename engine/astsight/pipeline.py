@@ -383,22 +383,19 @@ def _rules_state(
         and snapshot.get("hash")
         and snapshot.get("hash") != current_snapshot.get("hash")
     )
-    unresolved = [
-        conflict.model_dump(mode="json")
-        for conflict in ruleset.conflicts
-        if not conflict.resolved_at
-    ]
+    conflicts = [conflict.model_dump(mode="json") for conflict in ruleset.conflicts]
     blockers: list[str] = []
     warnings: list[str] = []
-    if unresolved:
-        blockers.append(f"规则库存在 {len(unresolved)} 个未裁决冲突")
+    if conflicts:
+        # 规则阶段没有人工裁决，冲突在用例审核时确认；这里只提示，不阻断执行。
+        warnings.append(f"规则库记录了 {len(conflicts)} 个待确认冲突")
     if orphaned:
         warnings.append(
             f"{len(orphaned)} 个用例引用的规则已不在规则库中（rule_orphaned）"
         )
     if stale_rule_cases:
         warnings.append(
-            f"{len(stale_rule_cases)} 条用例引用非 active 规则（drift/disputed/ungrounded）"
+            f"{len(stale_rule_cases)} 条用例引用非 active 规则（drift/ungrounded）"
         )
     if drift_changed:
         message = "规则库 hash 与用例库快照不一致，已批准用例可能过期"
@@ -430,7 +427,6 @@ def _rules_state(
         "conflicts": [
             item.model_dump(mode="json") for item in ruleset.conflicts
         ],
-        "unresolved_conflicts": unresolved,
         "orphaned_rule_keys": orphaned,
         "stale_rule_cases": stale_rule_cases,
         "rule_drift": {

@@ -332,6 +332,27 @@ def _render_review_md(
         "|---|---|---|---|---|---|",
         ]
     )
+    if ruleset is not None and ruleset.conflicts:
+        rule_index = ruleset.rule_index()
+        lines.extend(["## 规则冲突（请在本次用例审核中确认）", ""])
+        for conflict in ruleset.conflicts:
+            labels = []
+            for key in conflict.rule_keys:
+                rule = rule_index.get(key)
+                labels.append(
+                    f"`{rule.rule_id}` `{key}`" if rule is not None else f"`{key}`"
+                )
+            origin = {
+                "framework": "框架确定性检测",
+                "model": "模型自报",
+                "model+framework": "模型自报 + 框架检测",
+            }.get(conflict.origin, conflict.origin)
+            lines.append(
+                f"- **{conflict.topic}**（{origin}）：{', '.join(labels)}"
+            )
+            if conflict.reason:
+                lines.append(f"  - {conflict.reason}")
+        lines.append("")
     for index, item in enumerate(proposal["items"], 1):
         lines.append(
             f"| {index} | {item['action']} | `{item['endpoint']}` | "

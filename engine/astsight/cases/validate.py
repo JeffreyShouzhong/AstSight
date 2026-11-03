@@ -476,8 +476,10 @@ def _check_request(
                 )
             )
 
+    # 无契约时 params 为空，不能据此断言“参数未声明”——那是把缺失当成了否定。
+    contract_known = not bool(profile.get("contract_incomplete"))
     query_names = _query_names(profile)
-    unknown_query = sorted(set(case.query) - query_names)
+    unknown_query = sorted(set(case.query) - query_names) if contract_known else []
     if unknown_query:
         result.errors.append(
             _issue(
@@ -490,10 +492,15 @@ def _check_request(
             )
         )
     header_names = _header_names(profile)
-    unknown_headers = sorted(
-        name
-        for name in case.headers
-        if name.lower() not in header_names and name.lower() not in _ALLOWED_HEADERS
+    unknown_headers = (
+        sorted(
+            name
+            for name in case.headers
+            if name.lower() not in header_names
+            and name.lower() not in _ALLOWED_HEADERS
+        )
+        if contract_known
+        else []
     )
     if unknown_headers:
         result.errors.append(
@@ -656,6 +663,9 @@ def _check_rule_refs(
         )
         return
     index = ruleset.rule_index()
+    conflict_keys = {
+        key for conflict in ruleset.conflicts for key in conflict.rule_keys
+    }
     authorities: list[RuleAuthority] = []
     for ref in draft_case.rule_refs:
         rule = index.get(ref.rule_key)
@@ -672,18 +682,19 @@ def _check_rule_refs(
             )
             continue
         authorities.append(rule.authority)
-        if rule.status is RuleStatus.DISPUTED:
-            result.errors.append(
+        if ref.rule_key in conflict_keys:
+            result.warnings.append(
                 _issue(
-                    "error",
-                    "rule.disputed",
-                    f"规则存在未裁决冲突: {rule.rule_id} ({rule.rule_key})",
+                    "warning",
+                    "rule.conflict",
+                    f"规则参与未解决的冲突，审核时需确认: "
+                    f"{rule.rule_id} ({rule.rule_key})",
                     case_key=case_key,
                     endpoint=endpoint,
                     path=path,
                 )
             )
-        elif rule.status is RuleStatus.UNGROUNDED:
+        if rule.status is RuleStatus.UNGROUNDED:
             result.errors.append(
                 _issue(
                     "error",

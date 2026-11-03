@@ -461,8 +461,7 @@ def render_markdown(report: dict) -> str:
             lines.append(
                 f"- 待确认：问题 {len(rules.get('questions') or [])} / "
                 f"缺口 {len(rules.get('gaps') or [])} / "
-                f"冲突 {len(rules.get('conflicts') or [])}"
-                f"（未裁决 {len(rules.get('unresolved_conflicts') or [])}）"
+                f"冲突 {len(rules.get('conflicts') or [])}（用例审核时确认）"
             )
             drift = rules.get("rule_drift") or {}
             lines.append(
