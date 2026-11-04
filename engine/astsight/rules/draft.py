@@ -38,7 +38,14 @@ class DraftRule(BaseModel):
 
     rule_id: str | None = Field(default=None, max_length=64)
     text: str = Field(min_length=1, max_length=MAX_RULE_TEXT)
-    type: RuleType = Field(default=RuleType.BUSINESS_CONSTRAINT)
+    # 存成 str 是为了让非法枚举值进到逐条校验：已知的 check_dimension 维度
+    # 映射后记 warning，真正未知的类型只拒该条，不因一个标签丢弃整份草案。
+    # json_schema_extra 仍把枚举写进 schema，模型侧看到的约束不变。
+    type: str = Field(
+        default=RuleType.BUSINESS_CONSTRAINT.value,
+        description="规则类型；只允许 RuleType 枚举值",
+        json_schema_extra={"enum": [member.value for member in RuleType]},
+    )
     entities: list[str] = Field(default_factory=list, max_length=50)
     fields: list[str] = Field(default_factory=list, max_length=50)
     constraints: list[RuleConstraint] = Field(default_factory=list, max_length=50)

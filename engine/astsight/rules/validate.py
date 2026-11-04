@@ -31,6 +31,22 @@ from .grounding import classify_grounding, rule_value_tokens
 _RULE_ID_RE = re.compile(r"^BR-\d{2,}$")
 _MAX_RULES = 500
 
+# 模型常把 gaps[].check_dimension 的维度名填进 rules[].type。两者是不同枚举，
+# 但整份草案不该因为一个分类标签被丢弃：已知维度按语义映射并记 warning，
+# 真正未知的类型只拒该条规则。
+_TYPE_ALIASES: dict[str, RuleType] = {
+    "idempotency": RuleType.DATA_CONSISTENCY,
+    "permission": RuleType.BUSINESS_CONSTRAINT,
+    "security": RuleType.BUSINESS_CONSTRAINT,
+    "concurrency": RuleType.DATA_CONSISTENCY,
+    "input_validation": RuleType.VALIDATION,
+    "boundary": RuleType.VALIDATION,
+    "normal_flow": RuleType.BUSINESS_CONSTRAINT,
+    "exception_flow": RuleType.ERROR_HANDLING,
+    "upstream_downstream": RuleType.OTHER,
+    "performance": RuleType.OTHER,
+}
+
 
 def _sha(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -166,11 +182,27 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
             result.errors.append(f"{where}: rule_key 与 rules[{seen[key]}] 重复: {key}")
             continue
         seen[key] = index
+        rule_type = item.type
+        try:
+            RuleType(rule_type)
+        except ValueError:
+            mapped = _TYPE_ALIASES.get(rule_type)
+            if mapped is None:
+                result.errors.append(
+                    f"{where}: 不支持的规则类型 {rule_type!r}，"
+                    f"只允许 {[member.value for member in RuleType]}"
+                )
+                continue
+            result.warnings.append(
+                f"{where}: type={rule_type!r} 是 check_dimension 维度，"
+                f"按 {mapped.value} 处理"
+            )
+            rule_type = mapped.value
         rule = Rule(
             rule_key=key,
             rule_id=item.rule_id or "",
             text=normalize_text(item.text),
-            type=item.type,
+            type=rule_type,
             entities=list(dict.fromkeys(item.entities)),
             fields=list(dict.fromkeys(item.fields)),
             constraints=list(item.constraints),

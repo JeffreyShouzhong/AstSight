@@ -279,6 +279,54 @@ def test_duplicate_section_path_is_warned_and_number_still_locates(
     assert resolve_section(context, "docs/req.md", "2")["text"] == "第二条规则。"
 
 
+def test_collapsed_document_warns_on_structure_and_uncovered_scope(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "proj"
+    (project / "docs").mkdir(parents=True)
+    body = (
+        "覆盖页面：P-03 合伙人注册、P-04 审核状态、P-05 首页工作台\n\n"
+        "6.2.1 P-03 合伙人注册：姓名 2–20 个字符，手机号 11 位，"
+        "身份证 18 位，协议默认未勾选。\n"
+    )
+    # 没有标题的 Word 表格会被解析成一个大 section；正文够长才触发结构告警。
+    (project / "docs" / "req.md").write_text(
+        body + "注册字段校验与异常处理。" * 200, encoding="utf-8"
+    )
+
+    context = build_rules_context(project, [DOC])
+    warnings = context["warnings"]
+
+    assert "sections_collapsed:docs/req.md" in warnings
+    assert "section_path_flat:docs/req.md" in warnings
+    # 声明了三页，但没有任何 P-xx 标题的详情小节。
+    assert "declared_scope_uncovered:docs/req.md:P-03,P-04,P-05" in warnings
+
+
+def test_structured_document_has_no_structure_warnings(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    (project / "docs").mkdir(parents=True)
+    detail = "该页面的字段校验、异常提示与状态迁移规则必须逐条可判定。" * 12
+    (project / "docs" / "req.md").write_text(
+        "# 文档\n\n"
+        "## 5.1 本次做\n\nP-03、P-04、P-05\n\n"
+        f"## P-03 合伙人注册\n\n{detail}\n\n"
+        f"## P-04 审核状态\n\n{detail}\n\n"
+        f"## P-05 首页工作台\n\n{detail}\n",
+        encoding="utf-8",
+    )
+
+    context = build_rules_context(project, [DOC])
+    warnings = context["warnings"]
+
+    assert not any(
+        warning.startswith(
+            ("sections_collapsed:", "section_path_flat:", "declared_scope_uncovered:")
+        )
+        for warning in warnings
+    )
+
+
 def test_context_id_tracks_section_classification(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -295,6 +343,34 @@ def test_context_id_tracks_section_classification(
     after = build_rules_context(project, [DOC])
 
     assert before["context_id"] != after["context_id"]
+
+
+def test_check_dimension_type_is_mapped_with_warning() -> None:
+    from astsight.rules.validate import validate_rule_draft
+
+    result = validate_rule_draft(
+        _draft(_rule(type="idempotency", source={"doc": DOC, "number": "1", "quote": SECTION_TEXT})),
+        _context(),
+    )
+
+    assert result.errors == []
+    assert result.rules[0].type.value == "data_consistency"
+    assert any("check_dimension" in warning for warning in result.warnings)
+
+
+def test_unknown_rule_type_rejects_only_that_rule() -> None:
+    from astsight.rules.validate import validate_rule_draft
+
+    good = _rule(source={"doc": DOC, "number": "1", "quote": SECTION_TEXT})
+    bad = _rule(
+        text="同一订单最多使用 1 张优惠券",
+        type="nonsense",
+        source={"doc": DOC, "number": "1", "quote": SECTION_TEXT},
+    )
+    result = validate_rule_draft(_draft(good, bad), _context())
+
+    assert any("不支持的规则类型" in error for error in result.errors)
+    assert len(result.rules) == 1
 
 
 def test_metadata_section_cannot_source_a_rule() -> None:

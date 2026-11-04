@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +20,7 @@ from ..persistence import save_json_atomic
 from ..profile import load_spec, parse_operations
 
 RULES_CONTEXT_SCHEMA_VERSION = 1
-RULES_PROMPT_VERSION = "2"
+RULES_PROMPT_VERSION = "6"
 DEFAULT_RULES_OUT = ".astsight/rules"
 
 
@@ -100,6 +101,76 @@ def _documents_payload(documents: list[Any]) -> list[dict[str, Any]]:
             }
         )
     return payload
+
+
+_PAGE_ID_RE = re.compile(r"P-\d{2}")
+_SCOPE_PATH_HINTS = ("本次做", "本次不做", "需求范围")
+_DETAIL_MIN_CHARS = 200
+_STRUCTURE_MIN_CHARS = 2_000
+
+
+def _declared_pages(sections: list[dict[str, Any]]) -> set[str]:
+    """从「本次做」或「覆盖页面」声明中提取页面编号。
+
+    只读取声明段落，不扫全文；否则「本次不做」里的 P-08/P-11 会被误当成
+    本次范围，覆盖检查会永远通过。
+    """
+    scope_text = ""
+    for section in sections:
+        path = str(section.get("path") or section.get("section") or "")
+        if "本次做" in path:
+            scope_text += "\n" + str(section.get("text") or "")
+    if not scope_text and sections:
+        raw = str(sections[0].get("text") or "")
+        match = re.search(r"覆盖页面[：:]\s*(.{0,300})", raw)
+        if match:
+            scope_text = match.group(1)
+    return {match.group(0) for match in _PAGE_ID_RE.finditer(scope_text)}
+
+
+def _detailed_pages(sections: list[dict[str, Any]]) -> set[str]:
+    """从功能小节标题中提取页面编号。
+
+    正文里顺带提到页面编号不算详情；只有标题带 P-xx 且内容达到最小长度的
+    section 才算该页有详细说明。阈值用于排除只有一句跳转说明的占位标题。
+    """
+    pages: set[str] = set()
+    for section in sections:
+        path = str(section.get("path") or section.get("section") or "")
+        text = str(section.get("text") or "")
+        if len(text) < _DETAIL_MIN_CHARS:
+            continue
+        if any(hint in path for hint in _SCOPE_PATH_HINTS):
+            continue
+        pages.update(match.group(0) for match in _PAGE_ID_RE.finditer(path))
+    return pages
+
+
+def _structure_warnings(doc: str, sections: list[dict[str, Any]]) -> list[str]:
+    """输入结构缺陷：章节塌缩、层级缺失、声明覆盖但正文没有详情。"""
+    warnings: list[str] = []
+    if not sections:
+        return warnings
+    total_chars = sum(len(str(section.get("text") or "")) for section in sections)
+    paths = [
+        str(section.get("path") or section.get("section") or "")
+        for section in sections
+    ]
+    if len(sections) == 1 and total_chars >= _STRUCTURE_MIN_CHARS:
+        # 整篇只有一个 section 时，quote 很容易退化成“全文任意子串”，
+        # 反幻觉校验仍在，但证据粒度已经失真，必须让模型知道。
+        warnings.append(f"sections_collapsed:{doc}")
+    if total_chars >= _STRUCTURE_MIN_CHARS and not any(
+        " > " in path for path in paths
+    ):
+        warnings.append(f"section_path_flat:{doc}")
+    declared = _declared_pages(sections)
+    missing = sorted(declared - _detailed_pages(sections))
+    if missing:
+        warnings.append(
+            f"declared_scope_uncovered:{doc}:{','.join(missing)}"
+        )
+    return warnings
 
 
 def _operations_payload(operations: list[Any]) -> list[dict[str, Any]]:
@@ -201,6 +272,9 @@ def build_rules_context(
         # 此时只有 number 能唯一定位，评审与排错都需要知道。
         warnings.extend(
             f"duplicate_section_path:{document['doc']}#{path}" for path in duplicates
+        )
+        warnings.extend(
+            _structure_warnings(document["doc"], document["sections"])
         )
     return {
         "schema_version": RULES_CONTEXT_SCHEMA_VERSION,

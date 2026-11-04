@@ -96,7 +96,7 @@ def rule_prompt_metadata(
     """
     info = dict(context.get("prompt") or {})
     info.setdefault("name", "a1_requirement_analysis")
-    info.setdefault("version", "2")
+    info.setdefault("version", "6")
     config = getattr(llm, "config", None)
     redacted = (
         config.redacted() if callable(getattr(config, "redacted", None)) else {}
