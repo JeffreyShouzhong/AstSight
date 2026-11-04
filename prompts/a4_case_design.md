@@ -99,7 +99,7 @@
 | `coverage_role` | 必须与画像一致（`primary` / `alias` / `independent`） |
 | `endpoint` | 必须原样取自画像 `endpoint`（`METHOD /path`） |
 | `rule_refs` | 至少 1 条；`rule_key` 必须存在于输入规则库；不得引用 `ungrounded` / `deprecated` 规则；不得只引用 C/D 级规则 |
-| `requirement_refs` | business 用例至少 1 条；`quote` 必须是 section 原文连续子串 |
+| `requirement_refs` | business 用例至少 1 条；`quote` 必须是所填 `section` 的原文连续子串；流程图/概览里的句子不能挂到功能点 section |
 | `change_refs` | code 用例至少 1 条；`changed_api` 取自 `changed_apis[].handler` |
 | `preconditions` | `state_key` 必须存在于 `data_catalog.states`；没有 catalog 时不要编造 |
 | `category` | 小写标识，如 `positive` / `negative` / `boundary` / `change_regression` |
@@ -132,7 +132,8 @@
 ## 铁律
 
 1. 不新增输入里没有的规则、接口、字段、表、列、状态或下游。
-2. `requirement_refs[].quote` 必须逐字来自 `documents[].sections[].text`。
+2. `requirement_refs[].quote` 必须逐字来自所填 `section` 的 `text`；跨 section 借用原文
+   （例如把产品流程图里的句子挂到 P-05）会被校验直接拒绝。
 3. 不把 `rule_key` 写成 `rule_id`；不要编造 `RK-` 值。
 4. 不输出带 `TC-NNNN` 的 `id`；编号由审核阶段分配。
 5. 无法构造前置状态或无法确定断言值时，跳过并写入 `uncovered_requirements`，
