@@ -102,8 +102,20 @@ PYTHONPATH=. python -m astsight codegraph status
 
 ### 4.1 模型配置
 
-`rules c1`、`agent run` 和显式调用模型适配层时需要模型。密钥只从环境变量读取，
-不要写进命令、脚本、报告或仓库。
+`rules c1`、`agent run` 和显式调用模型适配层时需要模型。推荐用配置文件：
+
+```bash
+cd engine
+cp llm.example.json llm.json     # llm.json 已 gitignore
+```
+
+查找顺序为 `--llm-config PATH` / `ASTSIGHT_LLM_CONFIG` → `./llm.json` →
+`~/.astsight/llm.json`。`llm.json` 支持 `provider`、`model`、`base_url`、
+`auth_style`（Anthropic 的 `x-api-key` / `bearer`）、`api_key`、`api_key_env`、
+`timeout`、`max_tokens`、`temperature`、`max_retries`；未知字段会直接报错，便于发现拼写错误。
+
+密钥不要写进命令、脚本、报告或仓库：建议保持 `api_key` 为空，用 `api_key_env`
+指向环境变量（如 `ASTSIGHT_LLM_API_KEY`）。环境变量始终覆盖文件值。
 
 | 用途 | 优先变量 | 兼容变量 |
 |---|---|---|
@@ -111,9 +123,11 @@ PYTHONPATH=. python -m astsight codegraph status
 | Base URL | `ASTSIGHT_LLM_BASE_URL` | `ANTHROPIC_BASE_URL` |
 | 模型 | `ASTSIGHT_LLM_MODEL` | `ANTHROPIC_MODEL` |
 | Provider | `ASTSIGHT_LLM_PROVIDER` | - |
+| 鉴权头 | `ASTSIGHT_LLM_AUTH_STYLE` | - |
 | 超时 | `ASTSIGHT_LLM_TIMEOUT` | - |
 | 最大输出 | `ASTSIGHT_LLM_MAX_TOKENS` | - |
 | 最大重试 | `ASTSIGHT_LLM_MAX_RETRIES` | - |
+| 配置文件 | `ASTSIGHT_LLM_CONFIG` | - |
 
 示例只写变量名，实际值由运行环境注入：
 
@@ -132,8 +146,9 @@ export ANTHROPIC_BASE_URL=...
 export ANTHROPIC_MODEL=...
 ```
 
-`ASTSIGHT_*` 优先于 `ANTHROPIC_*`。没有模型环境时，使用 C1 的两段式流程，
-或只运行确定性命令（`run`、`cases import/approve`、`data catalog/plan/apply`）。
+环境变量 `ASTSIGHT_*` 优先于配置文件，配置文件优先于 `ANTHROPIC_*`。
+没有模型配置时，使用 C1 的两段式流程，或只运行确定性命令
+（`run`、`cases import/approve`、`data catalog/plan/apply`）。
 
 ### 4.2 数据库
 

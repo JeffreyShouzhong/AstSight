@@ -85,7 +85,7 @@ def test_rules_extract_cli_is_the_requirements_entry(
 ) -> None:
     project = _copy_example(tmp_path)
     llm = _ExtractLLM()
-    monkeypatch.setattr("astsight.cli._rules_llm", lambda: llm)
+    monkeypatch.setattr("astsight.cli._rules_llm", lambda *_args, **_kwargs: llm)
 
     code = main(
         [
@@ -120,7 +120,7 @@ def test_rules_extract_dry_run_does_not_write_ruleset(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
     project = _copy_example(tmp_path)
-    monkeypatch.setattr("astsight.cli._rules_llm", lambda: _ExtractLLM())
+    monkeypatch.setattr("astsight.cli._rules_llm", lambda *_args, **_kwargs: _ExtractLLM())
 
     code = main(
         [
@@ -152,7 +152,7 @@ def test_rules_c1_accepts_optional_design_and_openapi(
     design.write_text("# 设计\n\n注册接口返回 200。\n", encoding="utf-8")
     # 明确验证“无 OpenAPI 也能完成 C1”，而不触发项目内自动发现。
     (project / "openapi.json").unlink()
-    monkeypatch.setattr("astsight.cli._rules_llm", lambda: _ExtractLLM())
+    monkeypatch.setattr("astsight.cli._rules_llm", lambda *_args, **_kwargs: _ExtractLLM())
 
     code = main(
         [

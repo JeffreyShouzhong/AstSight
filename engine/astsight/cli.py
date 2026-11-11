@@ -293,6 +293,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     mock_semantics.add_argument("--prompt", default=None, help="覆盖 C3.5.1 提示词路径")
     mock_semantics.add_argument(
+        "--llm-config",
+        default=None,
+        metavar="PATH",
+        help="模型配置文件（默认 ./llm.json 或 ~/.astsight/llm.json；"
+        "也可用 ASTSIGHT_LLM_CONFIG）",
+    )
+    mock_semantics.add_argument(
         "--out", default=None, help="默认 .astsight/mock_semantics.json（相对 project）"
     )
     mock_semantics.add_argument("--json", action="store_true")
@@ -330,6 +337,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rules_extract.add_argument(
         "--prompt", default=None, help="覆盖 A1 提示词路径（默认 prompts/a1_requirement_analysis.md）"
+    )
+    rules_extract.add_argument(
+        "--llm-config",
+        default=None,
+        metavar="PATH",
+        help="模型配置文件（默认 ./llm.json 或 ~/.astsight/llm.json；"
+        "也可用 ASTSIGHT_LLM_CONFIG）",
     )
     rules_extract.add_argument("--dry-run", action="store_true", help="只校验，不写规则库")
     rules_extract.add_argument("--json", action="store_true")
@@ -411,6 +425,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--context", default=None, help="casegen/rules context；--llm 时提供需求原文"
     )
     data_semantics.add_argument("--prompt", default=None, help="覆盖 C5a 提示词路径")
+    data_semantics.add_argument(
+        "--llm-config",
+        default=None,
+        metavar="PATH",
+        help="模型配置文件（默认 ./llm.json 或 ~/.astsight/llm.json；"
+        "也可用 ASTSIGHT_LLM_CONFIG）",
+    )
     data_semantics.add_argument("--ruleset", default=None)
     data_semantics.add_argument("--out", default=None)
     data_semantics.add_argument("--json", action="store_true")
@@ -462,11 +483,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     agent_sub = agent_parser.add_subparsers(dest="agent_command", required=True)
     agent_run = agent_sub.add_parser(
-        "run", help="从代码变更跑到自我修复；模型密钥只从环境变量读取"
+        "run", help="从代码变更跑到自我修复；模型配置读 llm.json 或环境变量"
     )
     agent_run.add_argument("--project", required=True)
     agent_run.add_argument("--requirements", action="append", required=True, metavar="PATH")
     agent_run.add_argument("--openapi", default=None, help="本地 OpenAPI；缺省自动发现")
+    agent_run.add_argument(
+        "--llm-config",
+        default=None,
+        metavar="PATH",
+        help="模型配置文件（默认 ./llm.json 或 ~/.astsight/llm.json；"
+        "也可用 ASTSIGHT_LLM_CONFIG）",
+    )
     agent_run.add_argument("--mode", choices=("full", "delta"), default="full")
     agent_run.add_argument("--base", default="main")
     agent_run.add_argument("--target", default="HEAD")
@@ -857,11 +885,11 @@ def _cases_status(args) -> int:
     return 0
 
 
-def _rules_llm():
-    """按环境变量构造模型客户端；测试通过 monkeypatch 替换。"""
-    from .llm import LLMClient, config_from_env
+def _rules_llm(config_path: str | None = None):
+    """按配置文件 + 环境变量构造模型客户端；测试通过 monkeypatch 替换。"""
+    from .llm import LLMClient, load_config
 
-    return LLMClient(config_from_env())
+    return LLMClient(load_config(config_path=config_path))
 
 
 def _rule_source_documents(args) -> list[str]:
@@ -896,7 +924,7 @@ def _rules_extract(args) -> int:
     draft_path = prepared.context_dir / "rules.draft.json"
     llm = None
     try:
-        llm = _rules_llm()
+        llm = _rules_llm(getattr(args, "llm_config", None))
         draft = generate_rule_draft(
             context,
             llm=llm,
@@ -1193,7 +1221,7 @@ def _data_semantics(args) -> int:
         ruleset = _load_optional_ruleset(project, args.ruleset)
         if args.llm:
             from .agent.data_prep import generate_data_semantics
-            from .llm import LLMClient, config_from_env
+            from .llm import LLMClient, load_config
 
             context = None
             if args.context:
@@ -1201,7 +1229,7 @@ def _data_semantics(args) -> int:
                 context = load_json(context_path)
             _draft, result = generate_data_semantics(
                 catalog,
-                llm=LLMClient(config_from_env()),
+                llm=LLMClient(load_config(config_path=args.llm_config)),
                 ruleset=ruleset,
                 context=context if isinstance(context, dict) else None,
                 prompt_path=args.prompt,
@@ -1499,13 +1527,13 @@ def _mock_semantics_command(args) -> int:
 
         if args.llm:
             from .agent.mock_semantics import generate_mock_semantic_candidates
-            from .llm import LLMClient, config_from_env
+            from .llm import LLMClient, load_config
 
             applied = generate_mock_semantic_candidates(
                 context,
                 semantic,
                 ruleset=ruleset,
-                llm=LLMClient(config_from_env()),
+                llm=LLMClient(load_config(config_path=args.llm_config)),
                 prompt_path=args.prompt,
             )
             if applied is not None:
@@ -1598,6 +1626,7 @@ def _agent_command(args) -> int:
             project=str(Path(args.project).resolve()),
             requirements=list(args.requirements),
             openapi=args.openapi,
+            llm_config=args.llm_config,
             mode=args.mode,
             base=args.base,
             target=args.target,

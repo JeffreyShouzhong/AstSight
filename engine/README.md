@@ -5,6 +5,7 @@
 > 设计依据：`framework-capability-design.md`（能力设计）+ `agent-architecture.md`（Agent 架构）。
 > **运行环境基线：Linux（服务器 / CI 容器）**；Windows 仅用于开发机本地调试，不作为部署与验收环境。
 >
+> 第一次使用见 [AstSight 快速上手指南](../doc/AstSight-快速上手指南.md)；
 > 全项目安装、配置、命令与排错见 [AstSight 使用文档](../doc/AstSight-使用文档.md)。
 
 ## 当前进度：M1 确定性闭环 + 规则驱动用例
@@ -87,8 +88,8 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 - **LLM 是可选入口，不是默认执行层**：`rules prepare/import/status`、
   `cases import/approve`、`data catalog/plan/apply` 的确定性部分与 `run` 保持零模型；
   `rules extract`、`agent run` 或显式调用适配层时才请求模型，且模型输出必须通过
-  endpoint/quote/dep_id/branch/rule_key/FK 拓扑/断言的全套校验。密钥只从环境变量读取，
-  不落盘、不进报告。`rules extract`（别名 `rules c1`）是需求/设计文档入口（框架内调用模型）；
+  endpoint/quote/dep_id/branch/rule_key/FK 拓扑/断言的全套校验。密钥只从环境变量或
+  未提交的本地 `llm.json` 读取，不落盘到运行产物、不进报告。`rules extract`（别名 `rules c1`）是需求/设计文档入口（框架内调用模型）；
   `rules prepare` + 外部模型 + `rules import` 是同一流程的两段式拆分，
   供 Claude Code Skill、人工、模型网关或离线批处理使用。
 - **Agent 自动批准是显式选择**：`--approve-as <reviewer>` 只自动批准 new/update/revive；
@@ -579,22 +580,61 @@ python -m astsight mock semantics --project $PROJECT \
   → A6 修复建议（可选、只改请求/断言）→ 新 proposal → 有界重跑
 ```
 
-模型配置只从环境变量读取（不要把 key 写进仓库或报告）：
+模型配置可以写配置文件，也可以用环境变量。推荐把模板复制成不含密钥的本地配置：
 
 ```bash
-export ASTSIGHT_LLM_API_KEY=...           # 不要粘贴进聊天/提交
-export ASTSIGHT_LLM_MODEL=...             # 例如你的服务端 model id
-export ASTSIGHT_LLM_PROVIDER=openai       # openai | anthropic；缺省按 key 前缀推断
-export ASTSIGHT_LLM_BASE_URL=...          # OpenAI 兼容网关时填写；Anthropic 可不填
-# 可选：ASTSIGHT_LLM_TIMEOUT / ASTSIGHT_LLM_MAX_TOKENS / ASTSIGHT_LLM_MAX_RETRIES
+cd engine
+cp llm.example.json llm.json
 ```
 
-也兼容 Claude Code / Anthropic 兼容端点的通用变量（`ASTSIGHT_*` 优先）：
+`llm.json` 字段（`llm.example.json` 是可直接使用的模板）：
 
-```bash
-export ANTHROPIC_AUTH_TOKEN=...           # 或 ANTHROPIC_API_KEY
-export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-export ANTHROPIC_MODEL=deepseek-flash
+```json
+{
+  "schema_version": 1,
+  "provider": "anthropic",
+  "model": "claude-sonnet-5-5",
+  "base_url": "https://api.anthropic.com",
+  "auth_style": "x-api-key",
+  "api_key": "",
+  "api_key_env": "ASTSIGHT_LLM_API_KEY",
+  "timeout": 120,
+  "max_tokens": 16384,
+  "temperature": 0.0,
+  "max_retries": 1
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `provider` | `openai`（OpenAI 兼容接口）或 `anthropic`（Messages API） |
+| `model` | 服务端 model id |
+| `base_url` | 网关地址；Anthropic 缺省 `https://api.anthropic.com`，OpenAI 缺省 `https://api.openai.com/v1` |
+| `auth_style` | Anthropic 鉴权头：`x-api-key`（SDK 风格）或 `bearer`（兼容网关） |
+| `api_key` / `api_key_env` | 直接写 key，或指向保存 key 的环境变量名（推荐后者） |
+| `timeout` / `max_tokens` / `temperature` / `max_retries` | 调用参数；推理型模型建议保持 `max_tokens` ≥ 16384 |
+
+- **不要把 key 写进仓库**：`llm.json` 已加入 `.gitignore`；建议保持 `api_key` 为空，
+  用 `api_key_env` 指向环境变量（例如 `export ASTSIGHT_LLM_API_KEY=...`）。
+- 查找顺序：`--llm-config PATH` / `ASTSIGHT_LLM_CONFIG` → `./llm.json` →
+  `~/.astsight/llm.json`。显式路径不存在时直接报错，不会静默回退。
+- 环境变量 `ASTSIGHT_LLM_*` 始终覆盖文件值，CI 可以只注入环境变量；
+  `ASTSIGHT_LLM_AUTH_STYLE` 也可覆盖文件里的 `auth_style`。
+- 未配置 `api_key_env` 时仍兼容 Claude Code / Anthropic 兼容端点的通用变量：
+  `ANTHROPIC_AUTH_TOKEN`（映射为 Bearer）/ `ANTHROPIC_API_KEY`、
+  `ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL`。
+
+OpenAI 兼容网关（DeepSeek 等）的配置示例：
+
+```json
+{
+  "schema_version": 1,
+  "provider": "openai",
+  "model": "deepseek-chat",
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key_env": "DEEPSEEK_API_KEY",
+  "max_tokens": 16384
+}
 ```
 
 推荐先单独跑 `rules extract` 验证连通与输出质量，再进入 `agent run`。

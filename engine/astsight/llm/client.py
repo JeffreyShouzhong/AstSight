@@ -1,7 +1,7 @@
 """模型访问层：OpenAI-compatible / Anthropic Messages，结构化 JSON 输出。
 
 边界：
-- API key 只从环境变量读取，不写入日志、报告或异常文本；
+- API key 只从环境变量或未提交的本地 `llm.json` 读取，不写入日志、报告或异常文本；
 - 只接受有限大小的请求/响应，调用次数由上层流程严格控制；
 - 模型输出永远是不可信输入，必须由调用方再做 schema/证据校验。
 """
@@ -12,6 +12,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping
 
 import httpx
@@ -29,6 +30,24 @@ _ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com"
 _ANTHROPIC_VERSION = "2023-06-01"
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.I)
+# 配置文件给用户直接编辑；模板见 engine/llm.example.json。
+DEFAULT_CONFIG_FILE_NAME = "llm.json"
+_CONFIG_FILE_KEYS = {
+    "schema_version",
+    "provider",
+    "model",
+    "base_url",
+    "auth_style",
+    "api_key",
+    "api_key_env",
+    "timeout",
+    "max_tokens",
+    "temperature",
+    "max_retries",
+}
+_STR_CONFIG_KEYS = ("provider", "model", "base_url", "auth_style", "api_key", "api_key_env")
+_NUMBER_CONFIG_KEYS = ("timeout", "temperature")
+_INT_CONFIG_KEYS = ("max_tokens", "max_retries")
 
 
 class LLMError(RuntimeError):
@@ -71,8 +90,8 @@ class LLMConfig:
         if not self.api_key:
             raise LLMConfigError(
                 "llm_api_key_missing",
-                "未配置模型 key：ASTSIGHT_LLM_API_KEY / ANTHROPIC_AUTH_TOKEN / "
-                "ANTHROPIC_API_KEY 均为空",
+                "未配置模型 key：llm.json 的 api_key/api_key_env、ASTSIGHT_LLM_API_KEY、"
+                "ANTHROPIC_AUTH_TOKEN、ANTHROPIC_API_KEY 均为空",
             )
         self.model = str(self.model or "").strip()
         if not self.model:
@@ -149,8 +168,186 @@ def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
         raise LLMConfigError("llm_config_invalid", f"{name}={raw!r}") from exc
 
 
+def resolve_config_path(
+    config_path: str | Path | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
+    home: Path | None = None,
+) -> Path | None:
+    """定位模型配置文件。
+
+    显式参数与 `ASTSIGHT_LLM_CONFIG` 必须存在（否则报错，避免静默用了错的配置）；
+    自动发现按 `./llm.json` → `~/.astsight/llm.json` 的顺序，找不到返回 None。
+    """
+    values = os.environ if env is None else env
+    explicit = str(config_path or "").strip() or str(
+        values.get("ASTSIGHT_LLM_CONFIG") or ""
+    ).strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_file():
+            raise LLMConfigError("llm_config_missing", f"配置文件不存在: {path}")
+        return path
+    cwd_path = Path.cwd() if cwd is None else Path(cwd)
+    home_path = Path.home() if home is None else Path(home)
+    candidates = (
+        cwd_path / DEFAULT_CONFIG_FILE_NAME,
+        home_path / ".astsight" / DEFAULT_CONFIG_FILE_NAME,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def load_config_file(path: str | Path) -> dict[str, Any]:
+    """读取并校验 `llm.json`，返回未脱敏的字段字典。"""
+    resolved = Path(path)
+    try:
+        raw = json.loads(resolved.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise LLMConfigError(
+            "llm_config_unreadable", f"{resolved}: {exc.strerror or exc}"
+        ) from exc
+    except ValueError as exc:
+        raise LLMConfigError(
+            "llm_config_invalid", f"{resolved}: 不是合法 JSON（{exc}）"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise LLMConfigError("llm_config_invalid", f"{resolved}: 顶层必须是对象")
+    version = raw.get("schema_version", 1)
+    if version != 1:
+        raise LLMConfigError(
+            "llm_config_version_unsupported",
+            f"{resolved}: schema_version={version!r}，仅支持 1",
+        )
+    unknown = sorted(set(raw) - _CONFIG_FILE_KEYS)
+    if unknown:
+        raise LLMConfigError(
+            "llm_config_unknown_keys",
+            f"{resolved}: 未知字段 {unknown}；允许字段 {sorted(_CONFIG_FILE_KEYS)}",
+        )
+    for name in _STR_CONFIG_KEYS:
+        value = raw.get(name)
+        if value is not None and not isinstance(value, str):
+            raise LLMConfigError(
+                "llm_config_invalid", f"{resolved}: {name} 必须是字符串"
+            )
+    for name in _NUMBER_CONFIG_KEYS:
+        value = raw.get(name)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+        ):
+            raise LLMConfigError("llm_config_invalid", f"{resolved}: {name} 必须是数字")
+    for name in _INT_CONFIG_KEYS:
+        value = raw.get(name)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int)
+        ):
+            raise LLMConfigError("llm_config_invalid", f"{resolved}: {name} 必须是整数")
+    return raw
+
+
+def _file_value(
+    file_values: Mapping[str, Any], name: str, default: Any
+) -> Any:
+    value = file_values.get(name)
+    return default if value is None else value
+
+
+def _build_config(
+    values: Mapping[str, str], file_values: Mapping[str, Any]
+) -> LLMConfig:
+    """环境变量优先、配置文件兜底；key 可由 `api_key_env` 间接读取。"""
+    provider = str(values.get("ASTSIGHT_LLM_PROVIDER") or "").strip().lower() or str(
+        file_values.get("provider") or ""
+    ).strip().lower()
+
+    key = str(values.get("ASTSIGHT_LLM_API_KEY") or "").strip()
+    key_source = "env" if key else ""
+    if not key:
+        key = str(file_values.get("api_key") or "").strip()
+        key_source = "file" if key else ""
+    api_key_env = str(file_values.get("api_key_env") or "").strip()
+    if not key and api_key_env:
+        key = str(values.get(api_key_env) or "").strip()
+        key_source = "file_env" if key else ""
+    if not key:
+        key = str(values.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+        key_source = "anthropic_auth_token" if key else ""
+    if not key:
+        key = str(values.get("ANTHROPIC_API_KEY") or "").strip()
+        key_source = "anthropic_api_key" if key else ""
+
+    from_anthropic_env = key_source in {"anthropic_auth_token", "anthropic_api_key"}
+    bearer_from_file = key_source == "file_env" and api_key_env == "ANTHROPIC_AUTH_TOKEN"
+    if not provider:
+        provider = (
+            "anthropic"
+            if from_anthropic_env or bearer_from_file or key.startswith("sk-ant-")
+            else "openai"
+        )
+    anthropic_defaults = provider == "anthropic"
+    model = (
+        str(values.get("ASTSIGHT_LLM_MODEL") or "").strip()
+        or str(file_values.get("model") or "").strip()
+        or (
+            str(values.get("ANTHROPIC_MODEL") or "").strip()
+            if anthropic_defaults
+            else ""
+        )
+    )
+    base_url = (
+        str(values.get("ASTSIGHT_LLM_BASE_URL") or "").strip()
+        or str(file_values.get("base_url") or "").strip()
+        or (
+            str(values.get("ANTHROPIC_BASE_URL") or "").strip()
+            if anthropic_defaults
+            else ""
+        )
+    )
+    auth_style = (
+        str(values.get("ASTSIGHT_LLM_AUTH_STYLE") or "").strip()
+        or str(file_values.get("auth_style") or "").strip()
+    )
+    if not auth_style:
+        auth_style = (
+            "bearer"
+            if key_source == "anthropic_auth_token" or bearer_from_file
+            else "x-api-key"
+        )
+    return LLMConfig(
+        provider=provider,
+        api_key=key,
+        model=model,
+        base_url=base_url,
+        auth_style=auth_style,
+        timeout=_env_float(
+            values,
+            "ASTSIGHT_LLM_TIMEOUT",
+            float(_file_value(file_values, "timeout", DEFAULT_TIMEOUT)),
+        ),
+        max_tokens=_env_int(
+            values,
+            "ASTSIGHT_LLM_MAX_TOKENS",
+            int(_file_value(file_values, "max_tokens", DEFAULT_MAX_TOKENS)),
+        ),
+        temperature=_env_float(
+            values,
+            "ASTSIGHT_LLM_TEMPERATURE",
+            float(_file_value(file_values, "temperature", 0.0)),
+        ),
+        max_retries=_env_int(
+            values,
+            "ASTSIGHT_LLM_MAX_RETRIES",
+            int(_file_value(file_values, "max_retries", 1)),
+        ),
+    )
+
+
 def config_from_env(env: Mapping[str, str] | None = None) -> LLMConfig:
-    """从环境变量构造配置。
+    """只从环境变量构造配置（不读取配置文件，保持测试与 CI 的确定性）。
 
     优先读 `ASTSIGHT_LLM_*`；未设置时兼容 Claude Code / Anthropic 兼容端点的
     通用变量（如 DeepSeek 的 `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`）：
@@ -159,40 +356,23 @@ def config_from_env(env: Mapping[str, str] | None = None) -> LLMConfig:
     未显式设置 provider 时，来自 Anthropic 变量或 `sk-ant-` 前缀的 key 判为 anthropic。
     """
     values = os.environ if env is None else env
-    key = str(values.get("ASTSIGHT_LLM_API_KEY") or "").strip()
-    from_anthropic_env = False
-    from_auth_token = False
-    if not key:
-        key = str(values.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
-        from_anthropic_env = from_auth_token = bool(key)
-    if not key:
-        key = str(values.get("ANTHROPIC_API_KEY") or "").strip()
-        from_anthropic_env = bool(key)
-    provider = str(values.get("ASTSIGHT_LLM_PROVIDER") or "").strip().lower()
-    if not provider:
-        provider = (
-            "anthropic"
-            if from_anthropic_env or key.startswith("sk-ant-")
-            else "openai"
-        )
-    anthropic_defaults = provider == "anthropic"
-    model = str(values.get("ASTSIGHT_LLM_MODEL") or "").strip() or (
-        str(values.get("ANTHROPIC_MODEL") or "").strip() if anthropic_defaults else ""
-    )
-    base_url = str(values.get("ASTSIGHT_LLM_BASE_URL") or "").strip() or (
-        str(values.get("ANTHROPIC_BASE_URL") or "").strip() if anthropic_defaults else ""
-    )
-    return LLMConfig(
-        provider=provider,
-        api_key=key,
-        model=model,
-        base_url=base_url,
-        auth_style="bearer" if from_auth_token else "x-api-key",
-        timeout=_env_float(values, "ASTSIGHT_LLM_TIMEOUT", DEFAULT_TIMEOUT),
-        max_tokens=_env_int(values, "ASTSIGHT_LLM_MAX_TOKENS", DEFAULT_MAX_TOKENS),
-        temperature=_env_float(values, "ASTSIGHT_LLM_TEMPERATURE", 0.0),
-        max_retries=_env_int(values, "ASTSIGHT_LLM_MAX_RETRIES", 1),
-    )
+    return _build_config(values, {})
+
+
+def load_config(
+    *,
+    env: Mapping[str, str] | None = None,
+    config_path: str | Path | None = None,
+) -> LLMConfig:
+    """从配置文件 + 环境变量构造配置，供 CLI 使用。
+
+    查找顺序见 `resolve_config_path`；环境变量 `ASTSIGHT_LLM_*` 覆盖文件值，
+    因此 CI 可以用环境变量覆盖本地 `llm.json` 而不必改动文件。
+    """
+    values = os.environ if env is None else env
+    path = resolve_config_path(config_path, env=values)
+    file_values = load_config_file(path) if path is not None else {}
+    return _build_config(values, file_values)
 
 
 def _redact(text: str, secret: str) -> str:
@@ -434,6 +614,7 @@ class LLMClient:
 
 
 __all__ = [
+    "DEFAULT_CONFIG_FILE_NAME",
     "DEFAULT_MAX_PROMPT_CHARS",
     "DEFAULT_MAX_RESPONSE_BYTES",
     "DEFAULT_MAX_TOKENS",
@@ -445,4 +626,7 @@ __all__ = [
     "LLMUsage",
     "config_from_env",
     "extract_json",
+    "load_config",
+    "load_config_file",
+    "resolve_config_path",
 ]

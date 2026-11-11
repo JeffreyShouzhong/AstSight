@@ -60,6 +60,7 @@ astsight run --mode cases   --project order-svc   # 只执行项目级用例库�
 | `implementation-feasibility.md` | 立项前可行性调研（四来源交叉验证） | 历史 |
 | `api-test-platform-feasibility.md` | 腾讯云方案可行性专项研究 | 历史 |
 | `similar-articles.md` | 同类文章与开源项目清单 | 参考 |
+| `AstSight-快速上手指南.md` | **30 分钟上手**：跑 demo、配置大模型（`llm.json` / 环境变量）、需求→用例→审核→执行三条路线、产物位置与常见报错 | 快速上手 |
 | `AstSight-使用文档.md` | **全项目使用文档**：安装/配置、C1 规则、A4 用例、C5 造数、Mock、三种运行模式、CodeGraph、Agent、产物与门禁、排错与命令速查 | 使用文档 |
 | `C1-规则生成使用文档.md` | C1 专题深入：单命令与两段式流程、需求/设计/OpenAPI 输入、`ruleset` 产物、校验门禁、重复执行与排错 | 专题 |
 | `engine/README.md` | 正式实现进度（M1 delta 闭环 / 规则→审核用例→版本化 / C5 造数 / CodeGraph 抽象） | 代码 |

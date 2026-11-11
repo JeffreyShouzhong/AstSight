@@ -52,7 +52,7 @@ from ..inventory import (
     inventory_routes,
     route_inventory_health,
 )
-from ..llm import LLMClient, config_from_env
+from ..llm import LLMClient, load_config
 from ..mock import MockPlanError, start_mock_plan
 from ..mock.semantic import build_mock_semantic
 from ..persistence import load_json, save_json_atomic
@@ -89,6 +89,7 @@ class FlowConfig:
     project: str
     requirements: list[str]
     openapi: str | None = None
+    llm_config: str | None = None
     mode: str = "full"                 # full | delta
     base: str = "main"
     target: str = "HEAD"
@@ -521,7 +522,7 @@ def run_flow(
         raise AgentError("requirements_missing", "至少提供一个 --requirements")
 
     owned_llm = llm is None
-    client = llm or LLMClient(config_from_env())
+    client = llm or LLMClient(load_config(config_path=config.llm_config))
 
     run_id = new_run_id("agent")
     out_root = (

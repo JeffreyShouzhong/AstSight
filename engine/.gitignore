@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 .astsight/
 examples/**/.astsight/
+
+# 本地模型配置（含密钥，不要提交）；模板见 llm.example.json
+llm.json

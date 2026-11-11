@@ -1,5 +1,6 @@
 """LLM 访问层（OpenAI-compatible / Anthropic）。"""
 from .client import (
+    DEFAULT_CONFIG_FILE_NAME,
     LLMClient,
     LLMConfig,
     LLMConfigError,
@@ -7,9 +8,13 @@ from .client import (
     LLMUsage,
     config_from_env,
     extract_json,
+    load_config,
+    load_config_file,
+    resolve_config_path,
 )
 
 __all__ = [
+    "DEFAULT_CONFIG_FILE_NAME",
     "LLMClient",
     "LLMConfig",
     "LLMConfigError",
@@ -17,4 +22,7 @@ __all__ = [
     "LLMUsage",
     "config_from_env",
     "extract_json",
+    "load_config",
+    "load_config_file",
+    "resolve_config_path",
 ]

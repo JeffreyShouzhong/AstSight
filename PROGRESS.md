@@ -24,6 +24,7 @@
 | C5b 造数计划 | ✅ 已生成 | `.astsight/data/data_plan.json`：4 个 plan（TC-0006/0008/0012/0013）；0 rejected / 0 warning |
 | 示例服务 V1.1 | ✅ 已实现 | `app.py` / `schema.sql` / `db.py` / `downstreams.py` / `openapi.json`：验证码时效与 5 次作废、短信 503、CITY_LIST 503、协议元数据、幂等请求体比较、并发重查、姓名/身份证规范化 |
 | C6/C7 执行 | ✅ 2026-11-11 | 运行 `20261111-155348-795-cases`：38/38 通过（100%），门禁 PASS；Mock 26 次调用全部 ok，0 unbound |
+| 模型配置文件 | ✅ 新增 | `engine/llm.example.json` 模板；`llm.json` 自动发现（cwd → `~/.astsight/llm.json`）或 `--llm-config` / `ASTSIGHT_LLM_CONFIG`；环境变量覆盖文件 |
 
 ## 本轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -105,6 +106,12 @@
 - A4 上下文（v3）：`.astsight/casegen/9bc8d1ccd52f00f89015d331ac6a6e9fd772791808346ad717d2a3a11f324a5c/`
 - A4 草案（v3）：`engine/examples/partner_onboarding/cases.draft.json`（38 cases / 31 uncovered；
   其中 7 条多请求用例）
+- 用户快速上手：`doc/AstSight-快速上手指南.md`（demo → 模型配置 → 三条使用路线 →
+  产物位置 → 常见报错）
+- 模型配置模板：`engine/llm.example.json`（`schema_version` / `provider` / `model` /
+  `base_url` / `auth_style` / `api_key` / `api_key_env` / 调用参数）；`engine/llm.json`
+  已 gitignore，配置文件按 `--llm-config` → `ASTSIGHT_LLM_CONFIG` → `./llm.json` →
+  `~/.astsight/llm.json` 查找，环境变量 `ASTSIGHT_LLM_*` 覆盖文件值
 - 已批准用例库：`engine/examples/partner_onboarding/caseset.json` v4
   （store hash `164b2593…`；38 approved；批准人 `JeffreyShouzhong2`，2026-11-11）
 - 已批准文本版（按接口）：`engine/examples/partner_onboarding/cases.approved.md`
@@ -239,6 +246,17 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-11**：新增面向用户的《AstSight 快速上手指南》
+  （`doc/AstSight-快速上手指南.md`）：30 分钟跑 demo、`llm.json`/环境变量配置、
+  三条使用路线（`agent run` / 分步 rules→cases→审核→执行 / delta）、产物位置与
+  常见报错；README 文档索引与 `engine/README.md` 增加入口。`demo_agent_flow.py`
+  改为读取 `llm.json`（`load_config`），与 CLI 行为一致。
+- **2026-11-11**：新增模型配置文件支持：`engine/llm.example.json` 模板；
+  `load_config()` 按 `--llm-config` / `ASTSIGHT_LLM_CONFIG` → `./llm.json` →
+  `~/.astsight/llm.json` 查找，环境变量 `ASTSIGHT_LLM_*` 覆盖文件值；支持
+  `api_key_env` 间接读取密钥、未知字段报错、JSON/类型/版本校验。`rules extract`、
+  `data semantics --llm`、`mock semantics --llm`、`agent run` 均接受 `--llm-config`；
+  `llm.json` 加入 `.gitignore`。新增 7 个配置测试，全量 274 passed。
 - **2026-11-11**：示例服务升级到设计 V1.1 并完成 C6/C7 执行：
   `app.py` 实现验证码 5 分钟时效 / 5 次失败作废 / 重发重置、短信通道 503
   `SMS_CHANNEL_UNAVAILABLE`、`CITY_LIST` 配置失败 503、幂等请求体比较

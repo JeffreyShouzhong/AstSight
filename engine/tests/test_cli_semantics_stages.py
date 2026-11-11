@@ -155,7 +155,7 @@ def test_data_semantics_cli_runs_llm_stage(tmp_path: Path, monkeypatch, capsys) 
     monkeypatch.setattr(
         "astsight.agent.data_prep.generate_data_semantics", fake_generate
     )
-    monkeypatch.setattr("astsight.llm.config_from_env", lambda: object())
+    monkeypatch.setattr("astsight.llm.load_config", lambda *_a, **_k: object())
     monkeypatch.setattr("astsight.llm.LLMClient", _DummyLLM)
 
     code = main(

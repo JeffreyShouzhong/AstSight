@@ -32,7 +32,7 @@ if str(ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(ENGINE_ROOT))
 
 from astsight.agent import FlowConfig, run_flow  # noqa: E402
-from astsight.llm import LLMConfigError, config_from_env  # noqa: E402
+from astsight.llm import LLMConfigError, load_config  # noqa: E402
 
 EXAMPLE = Path(__file__).resolve().parent / "downstream_service"
 
@@ -68,12 +68,13 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        llm_config = config_from_env()
+        llm_config = load_config()
     except LLMConfigError as exc:
         print(f"模型未配置: {exc}", file=sys.stderr)
         print(
-            "请先设置 ASTSIGHT_LLM_API_KEY 与 ASTSIGHT_LLM_MODEL；"
-            "必要时设置 ASTSIGHT_LLM_PROVIDER / ASTSIGHT_LLM_BASE_URL。",
+            "请先复制 engine/llm.example.json 为 engine/llm.json 并填写模型，"
+            "或设置 ASTSIGHT_LLM_API_KEY / ASTSIGHT_LLM_MODEL（必要时再设 "
+            "ASTSIGHT_LLM_PROVIDER / ASTSIGHT_LLM_BASE_URL）。",
             file=sys.stderr,
         )
         return 2
