@@ -196,6 +196,22 @@ class Assertion(BaseModel):
     expect: Any = Field(default=None, description="期望值")
 
 
+class CaseStep(BaseModel):
+    """多请求用例中的一步；`method/path` 由 context 回填，不接受草案自报。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="步骤名，用例内唯一；用于响应引用")
+    endpoint: str = Field(description="接口标识，如 'GET /api/v1/products'")
+    method: str = Field(description="HTTP 方法")
+    path: str = Field(description="请求路径（含路径参数占位）")
+    path_params: dict[str, Any] = Field(default_factory=dict)
+    query: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    body: Any = Field(default=None, description="请求体（JSON）")
+    asserts: list[Assertion] = Field(default_factory=list)
+
+
 class TestCase(BaseModel):
     """用例的数据形态（不落代码），C4 产出、C6 编译为 pytest。
 
@@ -229,6 +245,10 @@ class TestCase(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     body: Any = Field(default=None, description="请求体（JSON）")
     asserts: list[Assertion] = Field(default_factory=list)
+    steps: list[CaseStep] = Field(
+        default_factory=list,
+        description="多请求步骤；非空时按顺序执行，顶层请求/断言必须为空",
+    )
     source: str = Field(description="溯源：openapi / route / requirement:<doc>#<section>")
     assert_strength: AssertStrength = Field(default=AssertStrength.L1)
     note: str | None = Field(default=None, description="生成说明/降级原因")

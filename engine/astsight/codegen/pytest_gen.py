@@ -28,9 +28,11 @@ _CONFTEST = '''"""AstSight 生成物：HTTP 客户端与用例隔离。
 """
 import json
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -269,6 +271,41 @@ def data_state(request):
             raise RuntimeError(f"data_teardown_failed: {close_error}")
 
 
+def _resolve_step_refs(value, responses):
+    """递归替换 {'$ref': 'step.field'}；引用缺失时让用例显式失败。"""
+    if isinstance(value, dict):
+        if set(value) == {"$ref"}:
+            ref = value["$ref"]
+            if not isinstance(ref, str) or "." not in ref:
+                raise AssertionError(f"invalid step ref: {ref!r}")
+            step, _, field = ref.partition(".")
+            if step not in responses:
+                raise AssertionError(f"unknown step ref: {ref!r}")
+            current = responses[step]
+            for part in field.split("."):
+                if not isinstance(current, dict) or part not in current:
+                    raise AssertionError(f"missing step ref field: {ref!r}")
+                current = current[part]
+            return current
+        return {
+            key: _resolve_step_refs(item, responses) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_resolve_step_refs(item, responses) for item in value]
+    return value
+
+
+def _render_step_path(path, params):
+    def replace(match):
+        name = match.group(1) or match.group(2) or match.group(3)
+        if name not in params:
+            return match.group(0)
+        return quote(str(params[name]), safe="")
+
+    pattern = r"\\{([^}/]+)\\}|<[^:>]+:([^>]+)>|<([^>]+)>"
+    return re.sub(pattern, replace, path)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -298,6 +335,16 @@ def client(base_url: str):
 @pytest.fixture()
 def mock_session():
     return _open_mock_session
+
+
+class _StepTools:
+    refs = staticmethod(_resolve_step_refs)
+    path = staticmethod(_render_step_path)
+
+
+@pytest.fixture()
+def step_tools():
+    return _StepTools()
 
 
 # ASTSIGHT MANUAL BEGIN
@@ -333,65 +380,220 @@ def _render_path(path: str, path_params: dict) -> str:
     return _PATH_PARAM_RE.sub(replace, path)
 
 
-def _assert_line(assertion, case: TestCase) -> str:
+def _value_has_ref(value: Any) -> bool:
+    if isinstance(value, dict):
+        if "$ref" in value:
+            return True
+        return any(_value_has_ref(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_value_has_ref(item) for item in value)
+    return False
+
+
+def _ref_steps(value: Any) -> list[str]:
+    """收集值中 ``$ref`` 指向的步骤名。"""
+    out: list[str] = []
+    if isinstance(value, dict):
+        if set(value) == {"$ref"} and isinstance(value["$ref"], str):
+            out.append(value["$ref"].partition(".")[0])
+            return out
+        for item in value.values():
+            out.extend(_ref_steps(item))
+    elif isinstance(value, list):
+        for item in value:
+            out.extend(_ref_steps(item))
+    return out
+
+
+def _expect_expr(expect: Any, responses_expr: str) -> str:
+    if _value_has_ref(expect):
+        return f"step_tools.refs({expect!r}, {responses_expr})"
+    return repr(expect)
+
+
+def _assert_line(
+    assertion,
+    *,
+    resp_var: str = "resp",
+    body_var: str = "body",
+    responses_expr: str = "{}",
+) -> str:
     kind = assertion.kind
     op = assertion.op
     expect = assertion.expect
+    expect_expr = _expect_expr(expect, responses_expr)
     if kind == "status_code":
         if op == "in":
             return (
-                f"        assert resp.status_code in {expect!r}, "
-                f"f\"expected status in {expect!r}, got {{resp.status_code}}: {{resp.text[:500]}}\""
+                f"        assert {resp_var}.status_code in {expect!r}, "
+                f"f\"expected status in {expect!r}, got {{{resp_var}.status_code}}: "
+                f"{{{resp_var}.text[:500]}}\""
             )
         if op == "between":
             low, high = expect
             return (
-                f"        assert {low} <= resp.status_code <= {high}, "
-                f"f\"expected status in [{low}, {high}], got {{resp.status_code}}: {{resp.text[:500]}}\""
+                f"        assert {low} <= {resp_var}.status_code <= {high}, "
+                f"f\"expected status in [{low}, {high}], got {{{resp_var}.status_code}}: "
+                f"{{{resp_var}.text[:500]}}\""
             )
         return (
-            f"        assert resp.status_code == {expect!r}, "
-            f"f\"expected status {expect!r}, got {{resp.status_code}}: {{resp.text[:500]}}\""
+            f"        assert {resp_var}.status_code == {expect!r}, "
+            f"f\"expected status {expect!r}, got {{{resp_var}.status_code}}: "
+            f"{{{resp_var}.text[:500]}}\""
         )
 
     if kind == "body_field":
         target = assertion.target or ""
         if op == "exists":
-            return f"        assert {target!r} in body, f\"missing response field {target}\""
+            return (
+                f"        assert {target!r} in {body_var}, "
+                f"f\"missing response field {target}\""
+            )
         if op == "eq":
             return (
-                f"        assert body.get({target!r}) == {expect!r}, "
-                f"f\"unexpected value for {target}: {{body.get({target!r})!r}}\""
+                f"        assert {body_var}.get({target!r}) == {expect_expr}, "
+                f"f\"unexpected value for {target}: "
+                f"{{{body_var}.get({target!r})!r}}\""
             )
         if op == "ne":
-            return f"        assert body.get({target!r}) != {expect!r}"
+            return f"        assert {body_var}.get({target!r}) != {expect_expr}"
         if op == "in":
-            return f"        assert body.get({target!r}) in {expect!r}"
+            return f"        assert {body_var}.get({target!r}) in {expect_expr}"
         if op == "gte":
-            return f"        assert body.get({target!r}) >= {expect!r}"
+            return f"        assert {body_var}.get({target!r}) >= {expect_expr}"
         if op == "lte":
-            return f"        assert body.get({target!r}) <= {expect!r}"
+            return f"        assert {body_var}.get({target!r}) <= {expect_expr}"
         if op == "contains":
-            return f"        assert {expect!r} in str(body.get({target!r}))"
+            return (
+                f"        assert {expect_expr} in "
+                f"str({body_var}.get({target!r}))"
+            )
     if kind == "header":
         target = assertion.target or ""
         if op == "exists":
-            return f"        assert {target!r} in resp.headers"
-        return f"        assert resp.headers.get({target!r}) == {expect!r}"
+            return f"        assert {target!r} in {resp_var}.headers"
+        return (
+            f"        assert {resp_var}.headers.get({target!r}) == {expect_expr}"
+        )
     return f"        # unsupported assertion: {kind}/{op}"
+
+
+def _responses_expr(case: TestCase, index: int, needed: set[str]) -> str:
+    items = [
+        f"{step.name!r}: body_{step.name}"
+        for step in case.steps[:index]
+        if step.name in needed
+    ]
+    return "{" + ", ".join(items) + "}"
+
+
+def _request_args(
+    *,
+    method: str,
+    path: str,
+    path_params: dict[str, Any],
+    query: dict[str, Any],
+    headers: dict[str, str],
+    body: Any,
+    responses_expr: str,
+) -> list[str]:
+    if _value_has_ref(path_params):
+        route = (
+            f"step_tools.path({path!r}, "
+            f"step_tools.refs({path_params!r}, {responses_expr}))"
+        )
+    else:
+        route = repr(_render_path(path, path_params))
+    args = [repr(method), route]
+    if query:
+        args.append(f"params={_expect_expr(query, responses_expr)}")
+    if headers:
+        args.append(f"headers={headers!r}")
+    if body is not None:
+        args.append(f"json={_expect_expr(body, responses_expr)}")
+    return args
+
+
+def _single_request_lines(case: TestCase) -> list[str]:
+    request_args = _request_args(
+        method=case.method,
+        path=case.path,
+        path_params=case.path_params,
+        query=case.query,
+        headers=case.headers,
+        body=case.body,
+        responses_expr="{}",
+    )
+    # 先判状态码再解析 body：服务返回 500/非 JSON 时，失败信息应指向真正的
+    # 问题（状态码），而不是被 JSONDecodeError 掩盖成一条无上下文的异常。
+    inner = [f"        resp = client.request({', '.join(request_args)})"]
+    body_asserts = [a for a in case.asserts if a.kind == "body_field"]
+    for assertion in case.asserts:
+        if assertion.kind != "body_field":
+            inner.append(_assert_line(assertion))
+    if body_asserts:
+        inner.append("        body = resp.json()")
+        for assertion in body_asserts:
+            inner.append(_assert_line(assertion))
+    return inner
+
+
+def _steps_lines(case: TestCase) -> list[str]:
+    needed: set[str] = set()
+    for step in case.steps:
+        for value in (
+            step.body,
+            step.query,
+            step.path_params,
+            *(assertion.expect for assertion in step.asserts),
+        ):
+            needed.update(_ref_steps(value))
+    inner: list[str] = []
+    for index, step in enumerate(case.steps):
+        responses_expr = _responses_expr(case, index, needed)
+        resp_var = f"resp_{step.name}"
+        body_var = f"body_{step.name}"
+        request_args = _request_args(
+            method=step.method,
+            path=step.path,
+            path_params=step.path_params,
+            query=step.query,
+            headers=step.headers,
+            body=step.body,
+            responses_expr=responses_expr,
+        )
+        inner.append(
+            f"        {resp_var} = client.request({', '.join(request_args)})"
+        )
+        body_asserts = [
+            assertion for assertion in step.asserts
+            if assertion.kind == "body_field"
+        ]
+        for assertion in step.asserts:
+            if assertion.kind != "body_field":
+                inner.append(
+                    _assert_line(
+                        assertion,
+                        resp_var=resp_var,
+                        responses_expr=responses_expr,
+                    )
+                )
+        if body_asserts or step.name in needed:
+            inner.append(f"        {body_var} = {resp_var}.json()")
+        for assertion in body_asserts:
+            inner.append(
+                _assert_line(
+                    assertion,
+                    resp_var=resp_var,
+                    body_var=body_var,
+                    responses_expr=responses_expr,
+                )
+            )
+    return inner
 
 
 def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
     name = f"test_{case.id.replace('-', '_').lower()}_{case.category}"
-    path = _render_path(case.path, case.path_params)
-    request_args = [repr(case.method), repr(path)]
-    if case.query:
-        request_args.append(f"params={case.query!r}")
-    if case.headers:
-        request_args.append(f"headers={case.headers!r}")
-    if case.body is not None:
-        request_args.append(f"json={case.body!r}")
-
     bindings = dict(sorted(case.mock_bindings.items()))
     requires_data = bool(case.preconditions)
     lines: list[str] = []
@@ -404,24 +606,14 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
         )
     lines.extend(
         [
-            f"    def {name}(self, client, mock_session, data_state):",
+            f"    def {name}(self, client, mock_session, data_state, step_tools):",
             f'        """case={case.id} endpoint={case.endpoint} category={case.category} '
             f'source={case.source}"""',
             # 未配置 Mock 时 fixture 是 no-op；配置后每个用例都有独立会话与证据。
             f"        with mock_session({case.id!r}, {bindings!r}):",
         ]
     )
-    # 先判状态码再解析 body：服务返回 500/非 JSON 时，失败信息应指向真正的
-    # 问题（状态码），而不是被 JSONDecodeError 掩盖成一条无上下文的异常。
-    inner = [f"        resp = client.request({', '.join(request_args)})"]
-    body_asserts = [a for a in case.asserts if a.kind == "body_field"]
-    for assertion in case.asserts:
-        if assertion.kind != "body_field":
-            inner.append(_assert_line(assertion, case))
-    if body_asserts:
-        inner.append("        body = resp.json()")
-        for assertion in body_asserts:
-            inner.append(_assert_line(assertion, case))
+    inner = _steps_lines(case) if case.steps else _single_request_lines(case)
     lines.extend("    " + line for line in inner)
     return "\n".join(lines)
 

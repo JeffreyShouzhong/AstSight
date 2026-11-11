@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from contracts import (
     CaseLevel,
+    CaseStep,
     DataCatalog,
     MockSemantic,
     RequirementDoc,
@@ -34,8 +35,10 @@ from .context import (
 from .draft import (
     CATEGORY_RE,
     CASE_KEY_RE,
+    STEP_NAME_RE,
     CaseDraft,
     DraftCase,
+    DraftCaseStep,
     case_fingerprint,
     to_test_case,
 )
@@ -230,6 +233,243 @@ def _expected_status_codes(assertion: Any) -> list[int]:
     return []
 
 
+def _iter_ref_nodes(value: Any, location: str):
+    """深度遍历请求值/期望值中的 ``{"$ref": "step.field"}``。"""
+    if isinstance(value, dict):
+        if "$ref" in value:
+            yield value, location
+            return
+        for key, item in value.items():
+            yield from _iter_ref_nodes(item, f"{location}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _iter_ref_nodes(item, f"{location}[{index}]")
+
+
+def _has_ref(value: Any) -> bool:
+    return any(True for _ in _iter_ref_nodes(value, ""))
+
+
+def _is_step_ref(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == {"$ref"}
+        and isinstance(value.get("$ref"), str)
+    )
+
+
+def _check_step_refs(
+    value: Any,
+    *,
+    allowed_steps: set[str],
+    location: str,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    for node, where in _iter_ref_nodes(value, location):
+        if set(node) != {"$ref"}:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.ref_invalid",
+                    f"{where} 的 $ref 节点不能包含其他字段",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+            continue
+        ref = node.get("$ref")
+        if not isinstance(ref, str) or "." not in ref or len(ref) > 256:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.ref_invalid",
+                    f"{where} 的 $ref 必须是 '<step>.<field>' 且长度不超过 256",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+            continue
+        step_name, _, field = ref.partition(".")
+        if not STEP_NAME_RE.match(step_name) or not field:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.ref_invalid",
+                    f"{where} 的 $ref 步骤名或字段非法: {ref!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        elif step_name not in allowed_steps:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.ref_unknown",
+                    f"{where} 只能引用更早的步骤，未知引用: {ref!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+
+
+def _resolve_case_steps(
+    draft_case: DraftCase,
+    context: dict[str, Any],
+    *,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> list[tuple[CaseStep, dict[str, Any]]]:
+    """解析多请求步骤：endpoint 对齐画像、名称唯一、引用只能向后。"""
+    resolved: list[tuple[CaseStep, dict[str, Any]]] = []
+    seen_names: set[str] = set()
+    for index, raw in enumerate(draft_case.steps):
+        step_label = f"{path}.steps[{index}]"
+        name = raw.name
+        if not STEP_NAME_RE.match(name):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.name_invalid",
+                    f"步骤名必须匹配 {STEP_NAME_RE.pattern}: {name!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=step_label,
+                )
+            )
+        if name in seen_names:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.name_duplicate",
+                    f"步骤名重复: {name!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=step_label,
+                )
+            )
+        seen_names.add(name)
+
+        profile, exact = find_profile(context, raw.endpoint)
+        if profile is None:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.endpoint_unknown",
+                    f"步骤 endpoint 不在 context 中: {raw.endpoint!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=step_label,
+                )
+            )
+            continue
+        canonical = str(profile.get("endpoint") or "")
+        if not exact:
+            result.warnings.append(
+                _issue(
+                    "warning",
+                    "step.endpoint_normalized",
+                    f"步骤 endpoint 按 normalize_path 对齐为 {canonical}",
+                    case_key=case_key,
+                    endpoint=canonical,
+                    path=step_label,
+                )
+            )
+        parsed = parse_endpoint(canonical)
+        if parsed is None or not profile.get("method") or not profile.get("path"):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "step.endpoint_invalid_context",
+                    f"step profile 缺少 method/path: {canonical!r}",
+                    case_key=case_key,
+                    endpoint=canonical,
+                    path=step_label,
+                )
+            )
+            continue
+
+        allowed = set(seen_names) - {name}
+        _check_step_refs(
+            raw.body,
+            allowed_steps=allowed,
+            location=f"steps[{index}].body",
+            case_key=case_key,
+            endpoint=canonical,
+            path=step_label,
+            result=result,
+        )
+        _check_step_refs(
+            raw.query,
+            allowed_steps=allowed,
+            location=f"steps[{index}].query",
+            case_key=case_key,
+            endpoint=canonical,
+            path=step_label,
+            result=result,
+        )
+        _check_step_refs(
+            raw.path_params,
+            allowed_steps=allowed,
+            location=f"steps[{index}].path_params",
+            case_key=case_key,
+            endpoint=canonical,
+            path=step_label,
+            result=result,
+        )
+        safe_headers: dict[str, str] = {}
+        for header_name, header_value in raw.headers.items():
+            if _has_ref(header_value):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "step.header_ref_unsupported",
+                        f"Header {header_name!r} 不支持 $ref；请使用固定字符串",
+                        case_key=case_key,
+                        endpoint=canonical,
+                        path=step_label,
+                    )
+                )
+                continue
+            safe_headers[str(header_name)] = str(header_value)
+        for assertion in raw.asserts:
+            _check_step_refs(
+                assertion.expect,
+                allowed_steps=allowed,
+                location=f"steps[{index}].asserts.expect",
+                case_key=case_key,
+                endpoint=canonical,
+                path=step_label,
+                result=result,
+            )
+
+        resolved.append(
+            (
+                CaseStep(
+                    name=name,
+                    endpoint=canonical,
+                    method=str(profile["method"]).upper(),
+                    path=str(profile["path"]),
+                    path_params=dict(raw.path_params),
+                    query=dict(raw.query),
+                    headers=safe_headers,
+                    body=raw.body,
+                    asserts=[item.model_copy() for item in raw.asserts],
+                ),
+                profile,
+            )
+        )
+    return resolved
+
+
 def _check_assert(
     assertion: Any,
     *,
@@ -388,7 +628,8 @@ def _grounded_in_quote(codes: list[int], quote_text: str) -> bool:
 
 
 def _check_grounding(
-    case: TestCase,
+    assertions: list[Any],
+    requirement_refs: list[Any],
     *,
     case_key: str,
     endpoint: str,
@@ -397,7 +638,7 @@ def _check_grounding(
     result: ValidationResult,
 ) -> None:
     expected: list[int] = []
-    for assertion in case.asserts:
+    for assertion in assertions:
         if assertion.kind == "status_code":
             expected.extend(_expected_status_codes(assertion))
     non_2xx = [code for code in expected if code >= 400]
@@ -411,9 +652,7 @@ def _check_grounding(
     }
     if any(code in declared for code in non_2xx):
         return
-    quotes = " ".join(
-        ref.quote or "" for ref in case.requirement_refs
-    )
+    quotes = " ".join(ref.quote or "" for ref in requirement_refs)
     if not _grounded_in_quote(non_2xx, quotes):
         result.warnings.append(
             _issue(
@@ -464,6 +703,9 @@ def _check_request(
             )
         )
     for name, value in case.path_params.items():
+        if _is_step_ref(value):
+            # 多请求用例允许路径参数引用更早步骤的响应；引用本身在执行期解析。
+            continue
         if isinstance(value, (dict, list, tuple)) or value is None:
             result.errors.append(
                 _issue(
@@ -854,7 +1096,7 @@ def _check_preconditions(
 def _check_mock_semantics(
     draft_case: DraftCase,
     *,
-    profile: dict[str, Any],
+    profile_deps: set[str],
     mock_semantic: MockSemantic | None,
     case_key: str,
     endpoint: str,
@@ -864,11 +1106,7 @@ def _check_mock_semantics(
     if mock_semantic is None or not draft_case.mock_bindings:
         return
     deps = mock_semantic.dep_index()
-    known_profile_deps = {
-        str(dep.get("dep_id"))
-        for dep in profile.get("downstream_deps") or []
-        if dep.get("dep_id")
-    }
+    known_profile_deps = profile_deps
     for dep_id, branch in draft_case.mock_bindings.items():
         if dep_id not in deps:
             result.errors.append(
@@ -1007,6 +1245,52 @@ def _check_requirement_refs(
                     path=path,
                 )
             )
+
+
+def _check_rule_coverage(
+    draft: CaseDraft,
+    *,
+    ruleset: RuleSet | None,
+    result: ValidationResult,
+) -> None:
+    """A/B 级业务规则必须有用例引用，或在 uncovered 里显式声明。
+
+    `section` 级声明是向后兼容的弱口径：旧草案没有 `rule_keys` 时，
+    只要该 section 已声明未覆盖就不重复告警。新草案应写 `rule_keys`。
+    """
+    if ruleset is None:
+        return
+    referenced = {
+        ref.rule_key
+        for resolved in result.resolved
+        for ref in resolved.case.rule_refs
+    }
+    declared = {
+        key
+        for item in draft.uncovered_requirements
+        for key in item.rule_keys
+    }
+    declared_sections = {
+        (item.doc, item.section) for item in draft.uncovered_requirements
+    }
+    for rule in ruleset.rules:
+        if rule.status is not RuleStatus.ACTIVE:
+            continue
+        if rule.authority not in {RuleAuthority.A, RuleAuthority.B}:
+            continue
+        if rule.rule_key in referenced or rule.rule_key in declared:
+            continue
+        if (rule.source.doc, rule.source.section) in declared_sections:
+            continue
+        result.warnings.append(
+            _issue(
+                "warning",
+                "rule.uncovered",
+                f"规则未被任何用例引用，也未声明未覆盖: "
+                f"{rule.rule_id} ({rule.rule_key})",
+                path="uncovered_requirements",
+            )
+        )
 
 
 def validate_draft(
@@ -1210,9 +1494,124 @@ def validate_draft(
             path=pseudo_path,
             result=result,
         )
+        profile_deps = {
+            str(dep.get("dep_id"))
+            for dep in profile.get("downstream_deps") or []
+            if dep.get("dep_id")
+        }
+        resolved_steps: list[tuple[CaseStep, dict[str, Any]]] = []
+        if canonical_draft.steps:
+            if len(canonical_draft.steps) < 2:
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "case.steps_too_few",
+                        "steps 至少需要 2 步；单请求请直接使用顶层请求字段",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
+                )
+            if (
+                canonical_draft.body is not None
+                or canonical_draft.path_params
+                or canonical_draft.query
+                or canonical_draft.headers
+                or canonical_draft.asserts
+            ):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "case.steps_mixed_request",
+                        "使用 steps 时顶层 body/path_params/query/headers/asserts 必须为空",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
+                )
+            resolved_steps = _resolve_case_steps(
+                canonical_draft,
+                context,
+                case_key=key,
+                endpoint=canonical_endpoint,
+                path=pseudo_path,
+                result=result,
+            )
+            for _step, step_profile in resolved_steps:
+                profile_deps |= {
+                    str(dep.get("dep_id"))
+                    for dep in step_profile.get("downstream_deps") or []
+                    if dep.get("dep_id")
+                }
+            if resolved_steps and canonical_endpoint not in {
+                step.endpoint for step, _ in resolved_steps
+            }:
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "case.steps_primary_missing",
+                        f"顶层 endpoint {canonical_endpoint!r} 必须出现在 steps 中",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
+                )
+            for index, (step, step_profile) in enumerate(resolved_steps):
+                step_path = f"{pseudo_path}.steps[{index}]"
+                _check_request(
+                    step,
+                    category=canonical_draft.category,
+                    case_key=key,
+                    endpoint=step.endpoint,
+                    profile=step_profile,
+                    path=step_path,
+                    result=result,
+                )
+                if not step.asserts:
+                    result.errors.append(
+                        _issue(
+                            "error",
+                            "assertion.missing",
+                            f"步骤 {step.name!r} 至少需要一条断言",
+                            case_key=key,
+                            endpoint=step.endpoint,
+                            path=step_path,
+                        )
+                    )
+                if not any(
+                    assertion.kind == "status_code" for assertion in step.asserts
+                ):
+                    result.errors.append(
+                        _issue(
+                            "error",
+                            "assertion.status_missing",
+                            f"步骤 {step.name!r} 至少需要一条 status_code 断言",
+                            case_key=key,
+                            endpoint=step.endpoint,
+                            path=step_path,
+                        )
+                    )
+                for assertion in step.asserts:
+                    _check_assert(
+                        assertion,
+                        case_key=key,
+                        endpoint=step.endpoint,
+                        profile=step_profile,
+                        path=step_path,
+                        result=result,
+                    )
+                _check_grounding(
+                    step.asserts,
+                    canonical_draft.requirement_refs,
+                    case_key=key,
+                    endpoint=step.endpoint,
+                    profile=step_profile,
+                    path=step_path,
+                    result=result,
+                )
         _check_mock_semantics(
             canonical_draft,
-            profile=profile,
+            profile_deps=profile_deps,
             mock_semantic=mock_semantic,
             case_key=key,
             endpoint=canonical_endpoint,
@@ -1226,6 +1625,7 @@ def validate_draft(
             doc_versions=result.doc_versions,
             generator=draft.generator,
             ruleset=ruleset,
+            steps=[step for step, _ in resolved_steps],
         )
         _check_requirement_refs(
             canonical_draft,
@@ -1237,54 +1637,87 @@ def validate_draft(
             result=result,
             scope_docs=scope_docs,
         )
-        _check_request(
-            case,
-            category=canonical_draft.category,
-            case_key=key,
-            endpoint=canonical_endpoint,
-            profile=profile,
-            path=pseudo_path,
-            result=result,
-        )
-        if not case.asserts:
-            result.errors.append(
-                _issue(
-                    "error",
-                    "assertion.missing",
-                    "用例至少需要一条断言",
+        if not canonical_draft.steps:
+            for location, value in (
+                ("body", case.body),
+                ("query", case.query),
+                ("path_params", case.path_params),
+                *(
+                    (f"asserts[{i}].expect", assertion.expect)
+                    for i, assertion in enumerate(case.asserts)
+                ),
+            ):
+                _check_step_refs(
+                    value,
+                    allowed_steps=set(),
+                    location=location,
                     case_key=key,
                     endpoint=canonical_endpoint,
                     path=pseudo_path,
+                    result=result,
                 )
-            )
-        if not any(assertion.kind == "status_code" for assertion in case.asserts):
-            result.errors.append(
-                _issue(
-                    "error",
-                    "assertion.status_missing",
-                    "用例至少需要一条 status_code 断言",
-                    case_key=key,
-                    endpoint=canonical_endpoint,
-                    path=pseudo_path,
+            if _has_ref(case.headers):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "step.header_ref_unsupported",
+                        "Header 值不支持 $ref；请使用固定字符串",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
                 )
-            )
-        for assertion in case.asserts:
-            _check_assert(
-                assertion,
+            _check_request(
+                case,
+                category=canonical_draft.category,
                 case_key=key,
                 endpoint=canonical_endpoint,
                 profile=profile,
                 path=pseudo_path,
                 result=result,
             )
-        _check_grounding(
-            case,
-            case_key=key,
-            endpoint=canonical_endpoint,
-            profile=profile,
-            path=pseudo_path,
-            result=result,
-        )
+            if not case.asserts:
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "assertion.missing",
+                        "用例至少需要一条断言",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
+                )
+            if not any(
+                assertion.kind == "status_code" for assertion in case.asserts
+            ):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "assertion.status_missing",
+                        "用例至少需要一条 status_code 断言",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
+                )
+            for assertion in case.asserts:
+                _check_assert(
+                    assertion,
+                    case_key=key,
+                    endpoint=canonical_endpoint,
+                    profile=profile,
+                    path=pseudo_path,
+                    result=result,
+                )
+            _check_grounding(
+                case.asserts,
+                case.requirement_refs,
+                case_key=key,
+                endpoint=canonical_endpoint,
+                profile=profile,
+                path=pseudo_path,
+                result=result,
+            )
         result.resolved.append(
             ResolvedDraftCase(
                 draft_case=canonical_draft,
@@ -1354,6 +1787,8 @@ def validate_draft(
                 f"{len(result.unaccounted)} 个需求 section 既未覆盖也未声明未覆盖",
             )
         )
+
+    _check_rule_coverage(draft, ruleset=ruleset, result=result)
 
     if check_doc_hashes:
         from .context import stale_documents

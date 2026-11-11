@@ -17,6 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codegraph import (
+    CODEGRAPH_VERSION,
+    install as install_codegraph_runtime,
+    status as codegraph_runtime_status,
+)
 from contracts import DataCatalog, DataPlanBundle, MockPlan, RuleSet
 
 from .cases.context import load_context, prepare_context
@@ -26,6 +31,7 @@ from .cases.proposal import (
     approve_proposal,
     build_proposal,
     classify,
+    interactive_review,
     list_pending_proposals,
 )
 from .cases.store import (
@@ -49,6 +55,11 @@ from .data import (
 from .data.semantics import SemanticDraft
 from .inventory import discover_openapi, inventory_routes
 from .mock import MockPlanError, validate_mock_plan
+from .mock.semantic import (
+    apply_mock_semantic_candidates,
+    build_mock_semantic,
+    validate_mock_semantic,
+)
 from .persistence import load_json, save_json_atomic
 from .pipeline import RunConfig, run
 from .profile import build_plan_from_profiles, build_profiles, load_spec, parse_operations
@@ -187,12 +198,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--codegraph",
         choices=("auto", "on", "off"),
         default="auto",
-        help="无 OpenAPI 时扫描代码路由所用的图谱模式",
+        help="扫描代码路由所用的图谱模式（有 OpenAPI 时也会用真实 handler 补下游）",
     )
     prepare.add_argument(
         "--no-scan-routes",
         action="store_true",
-        help="没有 OpenAPI 时也不扫描代码路由；只生成需求上下文",
+        help="不扫描代码路由；只使用 OpenAPI/合成路由生成上下文",
+    )
+    prepare.add_argument(
+        "--data-catalog", default=None, help="数据目录 JSON；随上下文打包供 A4 使用"
+    )
+    prepare.add_argument(
+        "--mock-semantics", default=None, help="Mock 语义 JSON；随上下文打包供 A4 使用"
     )
     prepare.add_argument("--out", default=".astsight/casegen", help="相对 project")
     prepare.add_argument("--json", action="store_true")
@@ -222,6 +239,15 @@ def _build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--reviewer", required=True)
     approve.add_argument("--json", action="store_true")
 
+    review = cases_sub.add_parser(
+        "review", help="交互式填写审核决定（只改 cases.review.json，不批准）"
+    )
+    review.add_argument("--proposal", required=True, help="proposal 目录或 proposal.json")
+    review.add_argument(
+        "--pending", action="store_true", help="只处理仍为 pending 的条目"
+    )
+    review.add_argument("--json", action="store_true")
+
     status = cases_sub.add_parser("status", help="查看用例库/待审/需求覆盖")
     status.add_argument("--project", required=True)
     status.add_argument("--case-base", default=None)
@@ -248,6 +274,29 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--force", action="store_true", help="允许覆盖已存在的计划文件")
     plan.add_argument("--json", action="store_true")
 
+    mock_semantics = mock_sub.add_parser(
+        "semantics",
+        help="C3.5.1：画像下游 + 规则库 → mock_semantics.json（确定性 + 可选 LLM 候选）",
+    )
+    mock_semantics.add_argument("--project", required=True)
+    mock_semantics.add_argument(
+        "--context", required=True, help="casegen context.json 或其目录"
+    )
+    mock_semantics.add_argument(
+        "--ruleset", default=None, help="规则库 JSON；用于规则映射与候选校验"
+    )
+    mock_semantics.add_argument(
+        "--draft", default=None, help="模型在框架外产出的候选 JSON（与 --llm 二选一）"
+    )
+    mock_semantics.add_argument(
+        "--llm", action="store_true", help="调用模型补齐 success 响应体/有依据的分支"
+    )
+    mock_semantics.add_argument("--prompt", default=None, help="覆盖 C3.5.1 提示词路径")
+    mock_semantics.add_argument(
+        "--out", default=None, help="默认 .astsight/mock_semantics.json（相对 project）"
+    )
+    mock_semantics.add_argument("--json", action="store_true")
+
     rules_parser = sub.add_parser(
         "rules", help="规则库：需求文档抽取、框架外导入、状态与评审文档"
     )
@@ -255,14 +304,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     rules_extract = rules_sub.add_parser(
         "extract",
-        help="需求文档 → ruleset.json + ruleset.md（调用模型，一次抽取）",
+        aliases=["c1"],
+        help="C1：需求+设计（可选）+OpenAPI（可选）→ ruleset.json + ruleset.md（调用模型）",
     )
     rules_extract.add_argument("--project", required=True)
     rules_extract.add_argument(
         "--requirements", action="append", required=True, metavar="PATH"
     )
     rules_extract.add_argument(
-        "--openapi", default=None, help="可选：补充 CR 契约规则；不提供则不生成 CR"
+        "--design",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="可选：设计文档，可重复；与 --requirements 一起作为 A1 输入",
+    )
+    rules_extract.add_argument(
+        "--openapi",
+        default=None,
+        help="可选：补充 CR 契约规则；不传时自动发现项目内 openapi 文件，仍无则只生成 BR",
     )
     rules_extract.add_argument("--out", default=".astsight/rules", help="相对 project")
     rules_extract.add_argument("--rule-base", default=None, help="相对 project")
@@ -281,6 +340,13 @@ def _build_parser() -> argparse.ArgumentParser:
     rules_prepare.add_argument("--project", required=True)
     rules_prepare.add_argument(
         "--requirements", action="append", required=True, metavar="PATH"
+    )
+    rules_prepare.add_argument(
+        "--design",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="可选：设计文档，可重复；与 --requirements 一起生成上下文",
     )
     rules_prepare.add_argument("--openapi", default=None)
     rules_prepare.add_argument("--out", default=".astsight/rules", help="相对 project")
@@ -335,7 +401,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     data_semantics.add_argument("--project", required=True)
     data_semantics.add_argument("--catalog", required=True)
-    data_semantics.add_argument("--draft", required=True)
+    data_semantics.add_argument(
+        "--draft", default=None, help="模型在框架外产出的语义草案（与 --llm 二选一）"
+    )
+    data_semantics.add_argument(
+        "--llm", action="store_true", help="调用模型生成字段语义/业务态候选"
+    )
+    data_semantics.add_argument(
+        "--context", default=None, help="casegen/rules context；--llm 时提供需求原文"
+    )
+    data_semantics.add_argument("--prompt", default=None, help="覆盖 C5a 提示词路径")
     data_semantics.add_argument("--ruleset", default=None)
     data_semantics.add_argument("--out", default=None)
     data_semantics.add_argument("--json", action="store_true")
@@ -360,6 +435,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--keep-data", action="store_true", help="保留数据；默认执行后立即回收"
     )
     data_apply.add_argument("--json", action="store_true")
+
+    codegraph_parser = sub.add_parser(
+        "codegraph", help="CodeGraph 运行时：持久化安装与状态"
+    )
+    codegraph_sub = codegraph_parser.add_subparsers(
+        dest="codegraph_command", required=True
+    )
+    codegraph_install = codegraph_sub.add_parser(
+        "install", help="安装到用户级缓存，所有项目自动复用"
+    )
+    codegraph_install.add_argument(
+        "--version", default=CODEGRAPH_VERSION, help="CodeGraph 版本（默认固定版本）"
+    )
+    codegraph_install.add_argument("--root", default=None, help="覆盖安装目录")
+    codegraph_install.add_argument(
+        "--force", action="store_true", help="已安装也重新安装"
+    )
+    codegraph_install.add_argument("--json", action="store_true")
+    codegraph_status = codegraph_sub.add_parser("status", help="查看运行时定位结果")
+    codegraph_status.add_argument("--root", default=None, help="覆盖安装目录")
+    codegraph_status.add_argument("--json", action="store_true")
 
     agent_parser = sub.add_parser(
         "agent", help="LLM 辅助端到端流程（规则→Mock 语义→造数目录→用例→计划→执行→诊断）"
@@ -500,6 +596,8 @@ def _run_command(args) -> int:
 def _cases_prepare(args) -> int:
     project = Path(args.project).resolve()
     try:
+        catalog = _load_optional_catalog(project, args.data_catalog)
+        mock_semantic = _load_optional_mock_semantic(project, args.mock_semantics)
         prepared = prepare_context(
             project,
             list(args.requirements),
@@ -508,6 +606,8 @@ def _cases_prepare(args) -> int:
             out=args.out,
             scan_routes=not args.no_scan_routes,
             codegraph=args.codegraph,
+            data_catalog=catalog,
+            mock_semantic=mock_semantic,
         )
     except Exception as exc:
         print(f"cases prepare 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -568,7 +668,13 @@ def _cases_import(args) -> int:
         draft = load_draft(args.draft)
         ruleset = _load_optional_ruleset(project, args.ruleset)
         catalog = _load_optional_catalog(project, args.data_catalog)
+        if catalog is None and context.get("data_catalog"):
+            catalog = DataCatalog.model_validate(context["data_catalog"])
         mock_semantic = _load_optional_mock_semantic(project, args.mock_semantics)
+        if mock_semantic is None and context.get("mock_semantics"):
+            from contracts import MockSemantic
+
+            mock_semantic = MockSemantic.model_validate(context["mock_semantics"])
         validation = validate_draft(
             draft,
             context,
@@ -673,6 +779,22 @@ def _cases_approve(args) -> int:
     return 0
 
 
+def _cases_review(args) -> int:
+    try:
+        result = interactive_review(
+            args.proposal, only_pending=args.pending
+        )
+    except ProposalError as exc:
+        print(f"cases review 拒绝: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"cases review 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cases_status(args) -> int:
     project = Path(args.project).resolve()
     store_path = resolve_case_base(project, args.case_base)
@@ -742,6 +864,11 @@ def _rules_llm():
     return LLMClient(config_from_env())
 
 
+def _rule_source_documents(args) -> list[str]:
+    """需求文档必填，设计文档可选；两者都作为 A1 的原文来源。"""
+    return [*args.requirements, *getattr(args, "design", [])]
+
+
 def _rules_extract(args) -> int:
     """需求文档是入口：确定性上下文 + 模型抽规则 + 确定性导入，一次完成。
 
@@ -755,7 +882,7 @@ def _rules_extract(args) -> int:
     try:
         context = build_rules_context(
             project,
-            list(args.requirements),
+            _rule_source_documents(args),
             openapi=args.openapi,
             prompt_path=args.prompt,
         )
@@ -846,7 +973,7 @@ def _rules_prepare(args) -> int:
     try:
         prepared = prepare_rules_context(
             project,
-            list(args.requirements),
+            _rule_source_documents(args),
             openapi=args.openapi,
             out=args.out,
             prompt_path=args.prompt,
@@ -1052,11 +1179,38 @@ def _data_catalog(args) -> int:
 
 def _data_semantics(args) -> int:
     project = Path(args.project).resolve()
+    if args.draft and args.llm:
+        print("--draft 与 --llm 只能二选一", file=sys.stderr)
+        return 1
+    if not args.draft and not args.llm:
+        print(
+            "需要 --draft（框架外模型输出）或 --llm（框架内调用模型）",
+            file=sys.stderr,
+        )
+        return 1
     try:
         catalog = DataCatalog.model_validate(load_json(args.catalog))
-        draft = SemanticDraft.model_validate(load_json(args.draft))
         ruleset = _load_optional_ruleset(project, args.ruleset)
-        result = apply_semantics(catalog, draft, ruleset=ruleset)
+        if args.llm:
+            from .agent.data_prep import generate_data_semantics
+            from .llm import LLMClient, config_from_env
+
+            context = None
+            if args.context:
+                context_path = _resolve_under_project(project, args.context)
+                context = load_json(context_path)
+            _draft, result = generate_data_semantics(
+                catalog,
+                llm=LLMClient(config_from_env()),
+                ruleset=ruleset,
+                context=context if isinstance(context, dict) else None,
+                prompt_path=args.prompt,
+            )
+            catalog = result.catalog
+        else:
+            draft_path = _resolve_under_project(project, args.draft)
+            draft = SemanticDraft.model_validate(load_json(draft_path))
+            result = apply_semantics(catalog, draft, ruleset=ruleset)
         if not result.ok:
             print(
                 json.dumps(
@@ -1307,6 +1461,115 @@ def _mock_plan_command(args) -> int:
     return 0
 
 
+def _mock_semantics_command(args) -> int:
+    project = Path(args.project).resolve()
+    if not project.is_dir():
+        print(f"项目目录不存在: {project}", file=sys.stderr)
+        return 1
+    if args.draft and args.llm:
+        print("--draft 与 --llm 只能二选一", file=sys.stderr)
+        return 1
+
+    warnings: list[str] = []
+    try:
+        context_path = _resolve_under_project(project, args.context)
+        context = load_context(context_path)
+        ruleset = _load_optional_ruleset(project, args.ruleset)
+        semantic = build_mock_semantic(context, ruleset)
+
+        if args.draft:
+            draft_path = _resolve_under_project(project, args.draft)
+            applied = apply_mock_semantic_candidates(
+                semantic,
+                load_json(draft_path),
+                context=context,
+                ruleset=ruleset,
+            )
+            warnings.extend(applied.warnings)
+            if not applied.ok:
+                print(
+                    json.dumps(
+                        {"ok": False, "errors": applied.errors, "warnings": applied.warnings},
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 1
+            semantic = applied.semantic
+
+        if args.llm:
+            from .agent.mock_semantics import generate_mock_semantic_candidates
+            from .llm import LLMClient, config_from_env
+
+            applied = generate_mock_semantic_candidates(
+                context,
+                semantic,
+                ruleset=ruleset,
+                llm=LLMClient(config_from_env()),
+                prompt_path=args.prompt,
+            )
+            if applied is not None:
+                warnings.extend(applied.warnings)
+                if not applied.ok:
+                    print(
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "errors": applied.errors,
+                                "warnings": applied.warnings,
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    )
+                    return 1
+                semantic = applied.semantic
+
+        errors = validate_mock_semantic(semantic, context, ruleset=ruleset)
+        if errors:
+            print(
+                json.dumps(
+                    {"ok": False, "errors": errors, "warnings": warnings},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+
+        out = (
+            _resolve_under_project(project, args.out)
+            if args.out
+            else project / ".astsight" / "mock_semantics.json"
+        )
+        save_json_atomic(out, semantic.model_dump(mode="json"))
+    except Exception as exc:
+        print(f"mock semantics 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    result = {
+        "ok": True,
+        "semantics": str(out),
+        "context_id": semantic.context_id,
+        "deps": len(semantic.deps),
+        "branches": sum(len(dep.branches) for dep in semantic.deps),
+        "gaps": len(semantic.gaps),
+        "warnings": warnings,
+    }
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"Mock 语义: {result['semantics']}")
+        print(
+            f"  deps: {result['deps']}  分支: {result['branches']}  "
+            f"gaps: {result['gaps']}"
+        )
+        for warning in warnings:
+            print(f"  [WARN] {warning}")
+        for gap in semantic.gaps:
+            print(f"  [GAP] {gap.dep_id or 'global'}: {gap.reason}")
+    return 0
+
+
 def _split_command(raw: str | None) -> list[str] | None:
     if not raw:
         return None
@@ -1431,13 +1694,17 @@ def main(argv: list[str] | None = None) -> int:
             return _cases_import(args)
         if args.cases_command == "approve":
             return _cases_approve(args)
+        if args.cases_command == "review":
+            return _cases_review(args)
         if args.cases_command == "status":
             return _cases_status(args)
     if args.command == "mock":
         if args.mock_command == "plan":
             return _mock_plan_command(args)
+        if args.mock_command == "semantics":
+            return _mock_semantics_command(args)
     if args.command == "rules":
-        if args.rules_command == "extract":
+        if args.rules_command in ("extract", "c1"):
             return _rules_extract(args)
         if args.rules_command == "prepare":
             return _rules_prepare(args)
@@ -1456,11 +1723,53 @@ def main(argv: list[str] | None = None) -> int:
             return _data_plan(args)
         if args.data_command == "apply":
             return _data_apply(args)
+    if args.command == "codegraph":
+        if args.codegraph_command == "install":
+            return _codegraph_install(args)
+        if args.codegraph_command == "status":
+            return _codegraph_status(args)
     if args.command == "agent":
         if args.agent_command == "run":
             return _agent_command(args)
     parser.print_help()
     return 2
+
+
+def _codegraph_install(args) -> int:
+    try:
+        result = install_codegraph_runtime(
+            args.root, version=args.version, force=args.force
+        )
+    except Exception as exc:  # 环境问题：npm/node/网络，原样报出
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        action = "已复用" if result.get("reused") else "已安装"
+        print(f"CodeGraph {result.get('version')} {action}: {result['root']}")
+        print("后续运行默认使用该目录；--codegraph-module-root 可显式覆盖。")
+    return 0
+
+
+def _codegraph_status(args) -> int:
+    data = codegraph_runtime_status(args.root)
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        print(f"CodeGraph 包: {data['package']} (pin {data['pinned_version']})")
+        print(f"持久化目录: {data['managed_root']}")
+        print(f"实际使用: {data['module_root'] or '未找到（运行时会回退 bridge 目录）'}")
+        print(
+            f"安装状态: {'已安装 ' + str(data['installed_version']) if data['installed'] else '未安装'}"
+        )
+        print(f"Node: {data['node'] or '未找到'} / npm: {data['npm'] or '未找到'}")
+        if not data["installed"]:
+            print("安装命令: python -m astsight codegraph install")
+    return 0 if data["installed"] else 1
 
 
 def _summary(report: dict) -> dict:

@@ -210,6 +210,65 @@ def test_duplicate_or_invalid_branches_are_rejected() -> None:
     assert "branch_duplicate:inventory:rule_BR-01" in result.errors
 
 
+def test_dep_token_does_not_match_error_code_substring() -> None:
+    context = {
+        "context_id": "ctx-mock-sms",
+        "profiles": [
+            {
+                "endpoint": "POST /api/partner/sms/send",
+                "downstream_deps": [
+                    {
+                        "dep_id": "sms-gateway",
+                        "method": "POST",
+                        "path_key": "/v1/messages",
+                        "target": "http://sms-gateway.internal/v1/messages",
+                    }
+                ],
+            }
+        ],
+    }
+    rule = _rule(
+        "同号在 60 秒内重复发送返回 429 SMS_COOLDOWN",
+        key="RK-b5c2cb77d54e",
+    )
+    semantic = build_mock_semantic(context, _ruleset(rule))
+    assert [branch.branch for branch in semantic.deps[0].branches] == ["success"]
+
+    grounded = _rule(
+        "短信网关超时或不可用时提示稍后重试",
+        key="RK-b5c2cb77d54e",
+    )
+    semantic = build_mock_semantic(context, _ruleset(grounded))
+    assert "rule_BR-01" in {
+        branch.branch for branch in semantic.deps[0].branches
+    }
+
+
+def test_top_level_gaps_are_merged_and_unknown_dep_rejected() -> None:
+    semantic = build_mock_semantic(_context(), _ruleset(_rule()))
+    result = apply_mock_semantic_candidates(
+        semantic,
+        {
+            "deps": [],
+            "gaps": [
+                {"dep_id": "inventory", "reason": "响应结构未定义"},
+                {"dep_id": "", "reason": "全局缺口"},
+                {"dep_id": "payments", "reason": "未知下游"},
+                {"dep_id": "inventory", "reason": ""},
+            ],
+            "questions": [],
+        },
+        context=_context(),
+        ruleset=_ruleset(_rule()),
+    )
+    assert [gap.reason for gap in result.semantic.gaps] == [
+        "响应结构未定义",
+        "全局缺口",
+    ]
+    assert "gap_dep_unknown:payments" in result.errors
+    assert "gap_reason_missing:inventory" in result.errors
+
+
 def test_validate_flags_unknown_dep_and_rule_branch_without_keys() -> None:
     semantic = MockSemantic(
         schema_version=1,

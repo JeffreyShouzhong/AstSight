@@ -16,6 +16,7 @@ from contracts import (
     AssertStrength,
     Assertion,
     CaseLevel,
+    CaseStep,
     ChangeRef,
     CoverageRole,
     Precondition,
@@ -33,6 +34,8 @@ from ..persistence import sha256_json
 MAX_DRAFT_BYTES = 5 * 1024 * 1024
 MAX_CASES = 500
 MAX_ASSERTS_PER_CASE = 50
+MAX_ASSERTS_PER_STEP = 50
+MAX_STEPS_PER_CASE = 50
 MAX_BODY_DEPTH = 20
 MAX_BODY_ITEMS = 5000
 MAX_RULE_REFS_PER_CASE = 50
@@ -41,6 +44,7 @@ MAX_PRECONDITIONS_PER_CASE = 20
 
 CASE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 CATEGORY_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+STEP_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
 class DraftRequirementRef(BaseModel):
@@ -51,6 +55,25 @@ class DraftRequirementRef(BaseModel):
     doc: str = Field(description="context 中的项目相对文档路径")
     section: str = Field(description="Markdown 标题路径")
     quote: str = Field(description="section 原文片段，必须能在原文中找到")
+
+
+class DraftCaseStep(BaseModel):
+    """多请求用例的一步；`endpoint` 必须能在 context 中定位。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        description="步骤名，匹配 ^[a-z][a-z0-9_]{1,63}$；用例内唯一"
+    )
+    endpoint: str = Field(description="METHOD /path")
+    path_params: dict[str, Any] = Field(default_factory=dict)
+    query: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Header 值必须是字符串；$ref 会在校验阶段被拒绝",
+    )
+    body: Any = None
+    asserts: list[Assertion] = Field(default_factory=list)
 
 
 class DraftCase(BaseModel):
@@ -87,7 +110,12 @@ class DraftCase(BaseModel):
     query: dict[str, Any] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
     body: Any = None
-    asserts: list[Assertion] = Field(min_length=1)
+    asserts: list[Assertion] = Field(default_factory=list)
+    steps: list[DraftCaseStep] = Field(
+        default_factory=list,
+        max_length=MAX_STEPS_PER_CASE,
+        description="多请求步骤；非空时按顺序执行，顶层请求/断言必须为空",
+    )
     assert_strength: AssertStrength = Field(default=AssertStrength.L1)
     rationale: str | None = None
     assumptions: list[str] = Field(default_factory=list)
@@ -104,6 +132,11 @@ class UncoveredRequirement(BaseModel):
     doc: str
     section: str
     reason: str = Field(min_length=1)
+    rule_keys: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="该 section 下明确未覆盖的业务规则；用于规则级覆盖对账",
+    )
 
 
 class CaseDraft(BaseModel):
@@ -159,16 +192,28 @@ def load_draft(path: str | Path) -> CaseDraft:
             raise ValueError(
                 f"{case.case_key} 断言过多: {len(case.asserts)} > {MAX_ASSERTS_PER_CASE}"
             )
-        depth = body_depth(case.body)
-        if depth > MAX_BODY_DEPTH:
+        if len(case.steps) > MAX_STEPS_PER_CASE:
             raise ValueError(
-                f"{case.case_key} 请求体嵌套过深: {depth} > {MAX_BODY_DEPTH}"
+                f"{case.case_key} 步骤过多: {len(case.steps)} > {MAX_STEPS_PER_CASE}"
             )
-        items = body_item_count(case.body)
-        if items > MAX_BODY_ITEMS:
-            raise ValueError(
-                f"{case.case_key} 请求体元素过多: {items} > {MAX_BODY_ITEMS}"
-            )
+        bodies = [case.body] + [step.body for step in case.steps]
+        for body in bodies:
+            depth = body_depth(body)
+            if depth > MAX_BODY_DEPTH:
+                raise ValueError(
+                    f"{case.case_key} 请求体嵌套过深: {depth} > {MAX_BODY_DEPTH}"
+                )
+            items = body_item_count(body)
+            if items > MAX_BODY_ITEMS:
+                raise ValueError(
+                    f"{case.case_key} 请求体元素过多: {items} > {MAX_BODY_ITEMS}"
+                )
+        for step in case.steps:
+            if len(step.asserts) > MAX_ASSERTS_PER_STEP:
+                raise ValueError(
+                    f"{case.case_key}.{step.name} 断言过多: "
+                    f"{len(step.asserts)} > {MAX_ASSERTS_PER_STEP}"
+                )
     return draft
 
 
@@ -229,6 +274,7 @@ def to_test_case(
     generator: dict[str, Any],
     case_id: str = "TC-0000",
     ruleset: RuleSet | None = None,
+    steps: list[CaseStep] | None = None,
 ) -> TestCase:
     """把草案用例解析成执行形态；version 取自 context 文档 hash。"""
     refs = [
@@ -261,6 +307,7 @@ def to_test_case(
         headers=draft_case.headers,
         body=draft_case.body,
         asserts=draft_case.asserts,
+        steps=[step.model_copy(deep=True) for step in (steps or [])],
         source=_source_for(refs, generator),
         assert_strength=draft_case.assert_strength,
         note=draft_case.note,
@@ -309,6 +356,37 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
             for assertion in case.asserts
         ],
         "assert_strength": case.assert_strength.value,
+        # 为空时不写入，保持既有单请求用例指纹不变。
+        **(
+            {
+                "steps": [
+                    {
+                        "name": step.name,
+                        "endpoint": step.endpoint,
+                        "method": step.method.upper(),
+                        "path": step.path,
+                        "path_params": step.path_params,
+                        "query": step.query,
+                        "headers": {
+                            str(k).lower(): v for k, v in step.headers.items()
+                        },
+                        "body": step.body,
+                        "asserts": [
+                            {
+                                "kind": assertion.kind,
+                                "target": assertion.target,
+                                "op": assertion.op,
+                                "expect": assertion.expect,
+                            }
+                            for assertion in step.asserts
+                        ],
+                    }
+                    for step in case.steps
+                ]
+            }
+            if case.steps
+            else {}
+        ),
         "requirement_refs": refs,
         "rule_keys": sorted({ref.rule_key for ref in case.rule_refs}),
         "preconditions": [
@@ -334,8 +412,11 @@ def draft_bytes(path: str | Path) -> bytes:
 __all__ = [
     "CASE_KEY_RE",
     "CATEGORY_RE",
+    "MAX_STEPS_PER_CASE",
+    "STEP_NAME_RE",
     "CaseDraft",
     "DraftCase",
+    "DraftCaseStep",
     "DraftRequirementRef",
     "UncoveredRequirement",
     "body_depth",

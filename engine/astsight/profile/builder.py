@@ -128,6 +128,11 @@ def build_profiles(
                     "response_fields": {
                         str(code): fields for code, fields in operation.response_fields.items()
                     },
+                    "error_codes": sorted(
+                        code
+                        for code in operation.response_fields
+                        if 400 <= int(code) <= 599
+                    ),
                 }
             )
         elif operations:

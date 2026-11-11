@@ -4,6 +4,8 @@
 > 正式实现根目录，与 `testhub-proto/`（历史原型）隔离。
 > 设计依据：`framework-capability-design.md`（能力设计）+ `agent-architecture.md`（Agent 架构）。
 > **运行环境基线：Linux（服务器 / CI 容器）**；Windows 仅用于开发机本地调试，不作为部署与验收环境。
+>
+> 全项目安装、配置、命令与排错见 [AstSight 使用文档](../doc/AstSight-使用文档.md)。
 
 ## 当前进度：M1 确定性闭环 + 规则驱动用例
 
@@ -15,7 +17,7 @@ git diff → 变更符号 → 影响接口 → OpenAPI 画像 → 模板用例
          → pytest 编码 → collect 自检 → 执行 → 确定性归因 → 报告 + 门禁
 
 B. 需求驱动（规则驱动，canonical）
-需求/设计文档（+ 可选契约源）→ rules extract（唯一入口）
+需求/设计文档（+ 可选契约源）→ rules extract / rules c1（唯一入口）
                         → 确定性 context/prompt/schema
                         → A1 LLM 抽取 BR（a1_requirement_analysis）+ CR 确定性提取
                         → 校验通过写 ruleset.json（rule_key / authority / diff）+ ruleset.md
@@ -68,7 +70,7 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 | `astsight/codegen/` C6 | ✅ | 每接口一个 pytest 文件 + conftest，语法自检 + collect 自检 |
 | `astsight/execute/` C7 | ✅ | JUnit XML、确定性归因、只对环境抖动做有界重试 |
 | `astsight/report/` C7.4 | ✅ | JSON + Markdown；用例库版本、待审、需求覆盖、drift 单列 |
-| `astsight/mock/` C3.5.5 | ◐ 核心+执行链路+计划+启动注入 | `dep_id` 唯一性/`route_key`、Host/路径路由、会话分支、drain、晚到调用归因、会话历史、`mock_not_used`、`mock_calls.jsonl`、内嵌 uvicorn；`run --mock-plan` 管理生命周期、写 `run_manifest.json`/`mock_injection.json`；`mock plan` 从 C3 调用点生成计划草案；`agent run` 用注入清单启动 SUT |
+| `astsight/mock/` C3.5.5 | ◐ 核心+执行链路+语义+计划+启动注入 | `dep_id` 唯一性/`route_key`、Host/路径路由、会话分支、drain、晚到调用归因、会话历史、`mock_not_used`、`mock_calls.jsonl`、内嵌 uvicorn；`mock semantics` 生成契约 `success` + 规则分支（可选 `--draft`/`--llm` 候选）；`run --mock-plan` 管理生命周期、写 `run_manifest.json`/`mock_injection.json`；`mock plan` 从 C3 调用点生成计划草案；`agent run` 用注入清单启动 SUT |
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
 | `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
@@ -86,16 +88,18 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
   `cases import/approve`、`data catalog/plan/apply` 的确定性部分与 `run` 保持零模型；
   `rules extract`、`agent run` 或显式调用适配层时才请求模型，且模型输出必须通过
   endpoint/quote/dep_id/branch/rule_key/FK 拓扑/断言的全套校验。密钥只从环境变量读取，
-  不落盘、不进报告。`rules extract` 是需求文档入口（框架内调用模型）；
+  不落盘、不进报告。`rules extract`（别名 `rules c1`）是需求/设计文档入口（框架内调用模型）；
   `rules prepare` + 外部模型 + `rules import` 是同一流程的两段式拆分，
   供 Claude Code Skill、人工、模型网关或离线批处理使用。
 - **Agent 自动批准是显式选择**：`--approve-as <reviewer>` 只自动批准 new/update/revive；
   `deprecate` 永远 reject，必须人工逐项批准。不提供 `--approve-as` 时流程停在待审 proposal。
 - **审核不能自动化**：`cases approve` 必须显式给 `--reviewer`；没有任何“自动全量批准”参数。
   示例 demo 的自动批准仅用于演示，并明确拒绝自动批准 `deprecate`。
-- **只支持单请求用例**：v1 不生成跨用例捕获或鉴权链路；需要数据库前置状态的用例用
-  `preconditions[].state_key` 引用 `data_catalog`，由 C5b 生成单用例 fixture。无 catalog/plan
-  或未配置 `ASTSIGHT_DB_URL` 时标 `blocked`，不伪造可执行用例。
+- **多请求限于单用例内串行**：`steps[]` 按顺序共享同一个 `client`/Mock 会话执行，
+  支持 `{"$ref": "<step>.<field>"}` 读取更早步骤的响应（body/query/path_params/断言
+  expect，不支持 header）。不生成跨用例捕获、鉴权链路、并发或重试编排；需要数据库
+  前置状态的用例仍用 `preconditions[].state_key` 引用 `data_catalog`，由 C5b 生成单用例
+  fixture。无 catalog/plan 或未配置 `ASTSIGHT_DB_URL` 时标 `blocked`，不伪造可执行用例。
 - **断言强度仍为 L1**：主要断言状态码/字段存在/字段值；尚未实现基于需求表达式的 L2–L4 判定。
 - **自动“矫正”仅两件事**：生成后 `compile` 自检 + 执行前 `pytest --collect-only`；执行后只对
   连接/超时类环境抖动重试（默认 1 次，上限 3），**不修改业务代码，不猜失败原因**。
@@ -159,13 +163,14 @@ PYTHONPATH=. python -m astsight run \
 - Git Bash 会把以 `/` 开头的参数改写成 Windows 路径；`--reset-url` 建议传完整 URL，
   或设置 `MSYS_NO_PATHCONV=1`。
 
-Java/Spring 的 API 级变更感知走同一条命令，但必须让 CodeGraph 可用：
+Java/Spring 的 API 级变更感知走同一条命令，但必须让 CodeGraph 可用。
+执行过 `python -m astsight codegraph install` 后会自动使用用户级缓存，
+`--codegraph-module-root` 只用于覆盖安装目录：
 
 ```bash
 PYTHONPATH=. python -m astsight run \
   --project /path/to/java-repo --mode delta --base main --target feature \
   --codegraph on \
-  --codegraph-module-root /path/to/node_modules \
   --full-index \
   --openapi /path/to/openapi.json
 ```
@@ -260,13 +265,14 @@ canonical 链路是规则驱动的；`cases prepare` 只生成端点/需求上�
 cd engine
 PROJECT=examples/order_service
 
-# 1. 需求文档 → 规则库（唯一入口；OpenAPI 可选，只补 CR 契约规则）
+# 1. 需求/设计文档 → 规则库（C1 唯一入口；设计、OpenAPI 均可选）
 #    确定性 context/prompt/schema + 模型抽 BR + 校验/降级/冲突/CR/版本化，
 #    一次产出 ruleset.json 与人工评审用 ruleset.md；校验失败不写规则库。
-PYTHONPATH=. python -m astsight rules extract \
+#    `rules c1` 是 `rules extract` 的别名。
+PYTHONPATH=. python -m astsight rules c1 \
   --project $PROJECT \
-  --requirements $PROJECT/docs/api-design.md \
   --requirements $PROJECT/docs/requirements.md \
+  --design $PROJECT/docs/api-design.md \
   --openapi $PROJECT/openapi.json
 
 # 产物：$PROJECT/.astsight/rules/<analysis_id>/
@@ -286,10 +292,13 @@ PYTHONPATH=. python -m astsight rules import \
   --rule-base ruleset.json
 
 # 3. 生成端点上下文包（A4 草案的 endpoint/quote 事实源）
+#    有 OpenAPI 也会扫代码，用真实 handler 补 downstream_deps；
+#    --data-catalog/--mock-semantics 可把造数状态和下游分支一起打包。
 PYTHONPATH=. python -m astsight cases prepare \
   --project $PROJECT \
   --requirements $PROJECT/docs/api-design.md \
   --requirements $PROJECT/docs/requirements.md \
+  --data-catalog $PROJECT/.astsight/data/data_catalog.json \
   --base-url http://127.0.0.1:8010
 
 # 产物：$PROJECT/.astsight/casegen/<context_id>/
@@ -298,6 +307,7 @@ PYTHONPATH=. python -m astsight cases prepare \
 # 4. 按 prompts/a4_case_design.md 写出 cases.draft.json：
 #    level/rule_refs/requirement_refs/change_refs/preconditions/expect
 #    mock_bindings 是 {dep_id: branch}
+#    连续请求规则用 steps[]；跨步骤取值用 {"$ref": "<step>.<field>"}
 
 # 5. 校验并与已批准用例库 diff（只写 proposal，不改 caseset.json）
 PYTHONPATH=. python -m astsight cases import \
@@ -306,7 +316,11 @@ PYTHONPATH=. python -m astsight cases import \
   --draft $PROJECT/case_samples/cases.draft.json \
   --ruleset ruleset.json
 
-# 6. 人工编辑 proposal 下的 cases.review.json（approve / reject + reviewer + note）
+# 6. 先读 cases.review.md 的审核导航，再逐条填决定：
+#    PYTHONPATH=. python -m astsight cases review \
+#      --proposal $PROJECT/.astsight/cases/proposals/<proposal_id> --pending
+#    a/r/s/q 交互；也可手工编辑 cases.review.json
+#    （reviewer 由 approve 命令指定，item 内 reviewer 不参与批准）
 
 # 7. 应用审核结果
 PYTHONPATH=. python -m astsight cases approve \
@@ -356,8 +370,12 @@ PYTHONPATH=. python -m astsight run --project $PROJECT --mode cases \
 
 `data` 命令参数：
 
-- `catalog --ddl PATH [--seed PATH] [--context DIR]`：确定性解析 DDL/FK/拓扑，LLM 适配层
-  只补字段语义与候选业务态；无模型时仍产出骨架并标 `unmapped`。
+- `catalog --ddl PATH [--seed PATH] [--context DIR]`：确定性解析 DDL/FK/拓扑，不调用模型；
+  无 seed 时 `states` 为空，字段语义按命名/类型推断，无法确定的进 `gaps`。
+- `semantics --catalog PATH (--draft PATH | --llm) [--context DIR] [--ruleset PATH]`：
+  合并字段业务语义与候选业务态。`--draft` 读框架外模型产物（`prompts/c5_data_catalog.md`
+  的输出），`--llm` 直接调用模型；两条路径都逐项校验表/列/枚举/规则引用，非法候选整体拒绝，
+  通过后写回 `data_catalog.json`（`states` 可供 A4 的 `preconditions.state_key` 引用）。
 - `plan --catalog PATH --cases PATH [--fixtures PATH]`：只用目录中存在的表/列/状态；
   校验 FK 闭包、类型/枚举、preconditions 覆盖与 SQL 标识符白名单。
 - `apply --db-url sqlite:///... --plan PATH [--keep-data]`：事务内 apply，失败回滚；
@@ -366,11 +384,14 @@ PYTHONPATH=. python -m astsight run --project $PROJECT --mode cases \
 `cases` 命令参数：
 
 - `prepare --requirements PATH`：可重复；目录会递归读取 `.md/.markdown/.txt`。
-  OpenAPI 依次从 `--openapi`、项目内自动发现、`--base-url` 获取；都没有时不中断，
-  改为扫描代码路由（`--no-scan-routes` 可关闭，`--codegraph auto|on|off` 控制图谱）。
-  此时画像标 `contract_incomplete=true`、`contract_incomplete_reason=openapi_missing`，
+  OpenAPI 依次从 `--openapi`、项目内自动发现、`--base-url` 获取。有 OpenAPI 时也会
+  扫描代码路由，用真实 handler/file 补 `downstream_deps`，但只保留 OpenAPI 端点；
+  代码独有的内部路由不进入 A4 上下文。没有 OpenAPI 时画像标
+  `contract_incomplete=true`、`contract_incomplete_reason=openapi_missing`，
   `context.json` 的 `warnings` 记录 `openapi_missing` / `routes_missing`；
-  找不到字段就留空，不猜测。
+  扫描失败不阻断，记录 `route_scan_failed:*`；找不到字段就留空，不猜测。
+  `--no-scan-routes` 关闭扫描，`--codegraph auto|on|off` 控制图谱模式；
+  `--data-catalog` / `--mock-semantics` 可把造数与下游分支随上下文打包。
 - `import --context PATH --draft PATH`：校验失败退出非 0，且**不修改 store**；
   `--dry-run` 只输出校验与 diff。
 - `approve --proposal PATH --reviewer NAME`：必须显式 reviewer；重新校验草案、重新 diff、
@@ -474,6 +495,29 @@ python -m astsight mock plan --project examples/order_service --codegraph off \
 - 计划可由 `run --mock-plan` 直接使用；`agent run` 会生成同等计划，并把注入写入
   SUT 启动环境后执行。
 
+### Mock 语义（C3.5.1）
+
+`mock plan` 只给路由骨架；`mock semantics` 把“每个下游有哪些分支、每个分支返回什么”
+变成可校验的契约层，供 A4 的 `mock_bindings: {dep_id: branch}` 引用：
+
+```bash
+python -m astsight mock semantics --project $PROJECT \
+  --context $PROJECT/.astsight/casegen/<context_id> \
+  --ruleset ruleset.json --out .astsight/mock_semantics.json
+```
+
+- **确定性层**：每个 dep 固定生成 `success` 分支（`source.kind=contract`，`status=200`）；
+  只有 active 的 `error_handling` / `state_transition` / `data_consistency` / `validation`
+  规则、且文本含失败提示与 dep token 时，才生成 `rule_<RULE_ID>` 分支（`source.kind=rule`，
+  `source.rule_keys` 指向具体规则）。dep token 按词匹配，`sms` 不会命中 `SMS_COOLDOWN`。
+- **语义层（可选）**：`--draft PATH` 读取框架外模型产物，`--llm` 直接调用模型
+  （`prompts/c35_mock_semantics.md`）。候选分支必须带 `source.rule_keys` 且规则存在；
+  未知 dep/规则、重复分支、无依据分支整体报错，不写入。模型标 `verified` 的分支降级为
+  `inferred`。顶层 `gaps` 与 per-dep `gaps` 都会合并，未知 dep 的 gap 报错。
+- 无法从需求/规则得到依据的失败分支不会被编造，而是写进 `gaps` 并附 `reason`；
+  这些缺口应回到 A1 补规则，而不是在 Mock 层猜响应。
+- 校验通过后原子写 `mock_semantics.json`，`context_id` 记录来源上下文，便于与 A4 对齐。
+
 ### 用例身份、版本与 diff
 
 - 用例身份是 `(endpoint, case_key)`；`case_key` 由草案给出，格式 `^[a-z][a-z0-9_]{2,63}$`。
@@ -496,8 +540,9 @@ python -m astsight mock plan --project examples/order_service --codegraph off \
 | 全部 unchanged | 不生成 proposal，报告“无变更” |
 
 - **fingerprint** 只覆盖会改变执行行为或需求归属的内容：endpoint、case_key、category、
-  priority、method/path、参数、header、body、asserts、requirement_refs 的
+  priority、method/path、参数、header、body、asserts、`steps`、requirement_refs 的
   `(doc, section, quote)`。`id/source/title/note/rationale/文档 hash/审批信息/时间戳` 不参与。
+  `steps` 为空时不进入指纹，既有单请求用例的指纹保持不变。
 - 文档 hash 变化但 section/quote 未变时不触发重审，只产生 `doc_version_drift` 警告。
 - 需求覆盖按 Markdown 叶子 section 计算；父标题（通常只是导航/介绍）不进入分母。
 - 元数据标题（版本、变更记录、目录、附录、术语、背景、范围等）不计入覆盖率，但在 context 中可见。
@@ -718,8 +763,9 @@ python -m pytest -q
   待审阶段不产生 caseset/data_plan/execution、规则与目录快照。
 - `test_codegraph_embedded.py`：CodeGraph 嵌入、已知路由缺陷的修复、证据等级，
   以及 Java/Spring 的真实分支 diff → 受影响 API 闭环（合成 Maven 项目）。
-  需要 Node >= 22.5 与 `@colbymchenry/codegraph`；可通过
-  `ASTSIGHT_CODEGRAPH_MODULE_ROOT` 指定 node_modules，环境不具备时显式 SKIP。
+  需要 Node >= 22.5 与 `@colbymchenry/codegraph`；先执行
+  `python -m astsight codegraph install`，或用 `ASTSIGHT_CODEGRAPH_MODULE_ROOT`
+  指定 node_modules，环境不具备时显式 SKIP。
 
 ## 下一步
 

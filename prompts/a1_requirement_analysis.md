@@ -189,6 +189,12 @@
   带条件、箭头或语义概括的字符串不是 token，必须留空 `constraints`，把整句写进
   `text`。复制 token 时保持原文写法：原文是 `X/x` 就写 `X/x`，不要为了通顺改成
   「末位数字或 X/x」；原文用「分」就不要写成「分」以外的形式。
+- **布尔字段不要写 `true` / `false`。** 原文说「未勾选」「必须勾选」「免登录」，
+  就照原文写判定词；把 boolean 字段映射成 `true`/`false` 时，这两个词通常不在
+  `quote` 里，会被判编造。需要约束时用 `operator=eq` + 原文判定词，
+  或留空 `constraints`，把状态语义写进 `text`。
+- **`operator=other` 的 `values` 必须为空。** `other` 表示“原文有判定但无法归入
+  现有 operator”，在 values 里塞短语会被逐字比对判为编造；把完整语义放进 `text`。
 
 ### A 级复核（标 A 之前逐条确认）
 
@@ -596,7 +602,8 @@ md 模式下，`source.quote` 的逐字校验没有框架兜底，所以每一�
 26. 性能阈值必须带测量条件（并发、数据量、环境、统计窗口），否则降 B 并产出 `gap`。
 27. `constraints.values` / `error_code` / `pattern` 只填原文逐字 token；禁止自造正则、
     派生表达式与英文枚举别名；`values` 每项只放最小 token，不放句子；
-    表达不了就留空，不要用结构化字段掩盖不确定性。
+    布尔字段不要写 `true`/`false`，按原文写「未勾选」「免登录」等判定词或留空；
+    `operator=other` 时 `values` 必须为空；表达不了就留空，不要用结构化字段掩盖不确定性。
 28. `context.warnings` 的章节塌缩、层级缺失、声明覆盖未落地必须进
     `kind=document_structure` 的 `gaps`；不得从流程图或范围清单臆测详细规则。
 29. `rules[].type` 只从六个枚举里选；权限/安全/幂等/并发属于 `check_dimension`，

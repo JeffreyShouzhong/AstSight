@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "deps": [],
+  "gaps": [
+    {
+      "dep_id": "http:host:sms-gateway.internal POST /v1/messages",
+      "reason": "短信通道失败/超时分支无法生成：需求 §3 要求「短信通道失败或 5 秒无响应提示稍后重试」，但 A1 将其列为缺口（未形成可引用规则），没有 rule_key 可挂；success 响应体未被被测代码解析，保留空 body。"
+    },
+    {
+      "dep_id": "http:host:id-verify.internal POST /v1/verify",
+      "reason": "实名认证下游的响应结构未在需求/设计/OpenAPI 中定义，失败分支也没有可引用规则；success 响应体未被解析，保留空 body。"
+    },
+    {
+      "dep_id": "http:host:partner-core.internal POST /internal/partners",
+      "reason": "合伙人核心服务的响应结构未在需求/设计/OpenAPI 中定义，失败分支也没有可引用规则；success 响应体未被解析，保留空 body。"
+    }
+  ],
+  "questions": [
+    {
+      "text": "是否把「短信通道失败/超时提示稍后重试」补成 A 级业务规则？",
+      "reason": "当前只存在于需求 §3 与 ruleset.gaps；没有 rule_key 时 C3.5.1 拒绝生成失败分支，A4 也无法写下游失败用例。"
+    }
+  ]
+}

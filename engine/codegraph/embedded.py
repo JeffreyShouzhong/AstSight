@@ -53,6 +53,7 @@ from .route_repair import (
     RouteRepairReport,
     normalize_django_path,
 )
+from .runtime import resolve_module_root
 
 _DEFAULT_TIMEOUT = 60.0
 _INDEX_TIMEOUT = 900.0  # 全量索引大仓可能十几分钟
@@ -108,11 +109,8 @@ class EmbeddedCodeGraphClient(CodeGraphClient):
         max_consecutive_failures: int = 3,
     ):
         self.project_root = str(Path(project_root).resolve())
-        self.module_root = (
-            str(Path(module_root).resolve())
-            if module_root
-            else os.environ.get("ASTSIGHT_CODEGRAPH_MODULE_ROOT")
-        )
+        # 显式参数 → 环境变量 → 用户级持久化目录（codegraph install 安装）。
+        self.module_root = resolve_module_root(module_root)
         self._node = node or _find_node()
         self._timeout = timeout
         self._repair_routes = repair_routes

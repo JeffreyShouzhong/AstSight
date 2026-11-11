@@ -261,14 +261,16 @@ def parse_operations(spec: dict) -> list[EndpointSpec]:
                     continue
                 if 200 <= numeric < 300:
                     success_codes.append(numeric)
-                    schema = {}
-                    content_obj = (response or {}).get("content") or {}
-                    json_resp = content_obj.get("application/json") or {}
-                    if json_resp:
-                        schema = _deref(json_resp.get("schema", {}), spec)
-                    fields = list((schema.get("properties") or {}).keys())
-                    if fields:
-                        response_fields[numeric] = fields
+                # 错误响应体同样是契约事实：断言 error_code/message 时不能因为
+                # 只收集 2xx 就把已声明的字段判成“未声明”。
+                schema = {}
+                content_obj = (response or {}).get("content") or {}
+                json_resp = content_obj.get("application/json") or {}
+                if json_resp:
+                    schema = _deref(json_resp.get("schema", {}), spec)
+                fields = list((schema.get("properties") or {}).keys())
+                if fields:
+                    response_fields[numeric] = fields
 
             operations.append(
                 EndpointSpec(

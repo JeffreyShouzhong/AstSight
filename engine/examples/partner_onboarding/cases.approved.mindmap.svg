@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="1124" viewBox="0 0 1760 1124" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+<rect width="100%" height="100%" fill="#f8fafc"/>
+<text x="36" y="42" font-size="24" font-weight="700" fill="#0f172a">合伙人注册用例脑图</text>
+<text x="36" y="64" font-size="13" fill="#64748b">已批准 22 条 · 用例库 v1 · 按业务主题分组</text>
+<rect x="36" y="512.0" width="250" height="100" rx="18" fill="#0f172a"/>
+<text x="161.0" y="554.0" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">合伙人注册</text>
+<text x="161.0" y="580.0" text-anchor="middle" font-size="13" fill="#cbd5e1">已批准 22 条 · v1</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 144.0, 390 144.0" fill="none" stroke="#2f6fed" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="124.0" width="260" height="40" rx="12" fill="#2f6fed" opacity="0.12"/>
+<rect x="390" y="124.0" width="5" height="40" rx="2.5" fill="#2f6fed"/>
+<text x="408" y="149.0" font-size="14" font-weight="700" fill="#2f6fed">协议与勾选（3）</text>
+<path d="M 650 144.0 C 715.0 144.0, 715.0 100.0, 780 100.0" fill="none" stroke="#2f6fed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="84.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#2f6fed" stroke-opacity="0.45"/>
+<text x="796" y="104.5" font-size="13" fill="#1e293b">TC-0001 缺少 agreement_checked 时返回 422</text>
+<path d="M 650 144.0 C 715.0 144.0, 715.0 144.0, 780 144.0" fill="none" stroke="#2f6fed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="128.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#2f6fed" stroke-opacity="0.45"/>
+<text x="796" y="148.5" font-size="13" fill="#1e293b">TC-0002 协议未勾选时返回 400 AGREEMENT_NOT_CHECKED</text>
+<path d="M 650 144.0 C 715.0 144.0, 715.0 188.0, 780 188.0" fill="none" stroke="#2f6fed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="172.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#2f6fed" stroke-opacity="0.45"/>
+<text x="796" y="192.5" font-size="13" fill="#1e293b">TC-0003 协议版本不一致时返回 400 AGREEMENT_VERSION_MISMATCH</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 254.0, 390 254.0" fill="none" stroke="#0e9f6e" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="234.0" width="260" height="40" rx="12" fill="#0e9f6e" opacity="0.12"/>
+<rect x="390" y="234.0" width="5" height="40" rx="2.5" fill="#0e9f6e"/>
+<text x="408" y="259.0" font-size="14" font-weight="700" fill="#0e9f6e">城市选择（2）</text>
+<path d="M 650 254.0 C 715.0 254.0, 715.0 232.0, 780 232.0" fill="none" stroke="#0e9f6e" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="216.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#0e9f6e" stroke-opacity="0.45"/>
+<text x="796" y="236.5" font-size="13" fill="#1e293b">TC-0004 未显式选择城市时返回 422</text>
+<path d="M 650 254.0 C 715.0 254.0, 715.0 276.0, 780 276.0" fill="none" stroke="#0e9f6e" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="260.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#0e9f6e" stroke-opacity="0.45"/>
+<text x="796" y="280.5" font-size="13" fill="#1e293b">TC-0005 城市不在五市枚举内时返回 422</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 364.0, 390 364.0" fill="none" stroke="#d97706" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="344.0" width="260" height="40" rx="12" fill="#d97706" opacity="0.12"/>
+<rect x="390" y="344.0" width="5" height="40" rx="2.5" fill="#d97706"/>
+<text x="408" y="369.0" font-size="14" font-weight="700" fill="#d97706">身份证（3）</text>
+<path d="M 650 364.0 C 715.0 364.0, 715.0 320.0, 780 320.0" fill="none" stroke="#d97706" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="304.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#d97706" stroke-opacity="0.45"/>
+<text x="796" y="324.5" font-size="13" fill="#1e293b">TC-0007 身份证校验位错误时返回 400 INVALID_ID_CARD</text>
+<path d="M 650 364.0 C 715.0 364.0, 715.0 364.0, 780 364.0" fill="none" stroke="#d97706" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="348.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#d97706" stroke-opacity="0.45"/>
+<text x="796" y="368.5" font-size="13" fill="#1e293b">TC-0008 身份证被占用返回 400 REGISTRATION_UNAVAILABLE 且不暴露可枚举文案</text>
+<path d="M 650 364.0 C 715.0 364.0, 715.0 408.0, 780 408.0" fill="none" stroke="#d97706" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="392.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#d97706" stroke-opacity="0.45"/>
+<text x="796" y="412.5" font-size="13" fill="#1e293b">TC-0009 身份证不足 18 位时返回 422</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 540.0, 390 540.0" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="520.0" width="260" height="40" rx="12" fill="#7c3aed" opacity="0.12"/>
+<rect x="390" y="520.0" width="5" height="40" rx="2.5" fill="#7c3aed"/>
+<text x="408" y="545.0" font-size="14" font-weight="700" fill="#7c3aed">幂等与重复注册（5）</text>
+<path d="M 650 540.0 C 715.0 540.0, 715.0 452.0, 780 452.0" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="436.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#7c3aed" stroke-opacity="0.45"/>
+<text x="796" y="456.5" font-size="13" fill="#1e293b">TC-0006 唯一键相同但幂等键不同返回 409 DUPLICATE_REGISTRATION</text>
+<path d="M 650 540.0 C 715.0 540.0, 715.0 496.0, 780 496.0" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="480.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#7c3aed" stroke-opacity="0.45"/>
+<text x="796" y="500.5" font-size="13" fill="#1e293b">TC-0010 幂等键为空时返回 422</text>
+<path d="M 650 540.0 C 715.0 540.0, 715.0 540.0, 780 540.0" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="524.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#7c3aed" stroke-opacity="0.45"/>
+<text x="796" y="544.5" font-size="13" fill="#1e293b">TC-0011 幂等键超过 64 字符时返回 422</text>
+<path d="M 650 540.0 C 715.0 540.0, 715.0 584.0, 780 584.0" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="568.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#7c3aed" stroke-opacity="0.45"/>
+<text x="796" y="588.5" font-size="13" fill="#1e293b">TC-0012 唯一键与幂等键都相同，重试返回原档案</text>
+<path d="M 650 540.0 C 715.0 540.0, 715.0 628.0, 780 628.0" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="612.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#7c3aed" stroke-opacity="0.45"/>
+<text x="796" y="632.5" font-size="13" fill="#1e293b">TC-0013 手机号已注册且唯一键不同返回 409 MOBILE_ALREADY_REGISTERED</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 672.0, 390 672.0" fill="none" stroke="#db2777" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="652.0" width="260" height="40" rx="12" fill="#db2777" opacity="0.12"/>
+<rect x="390" y="652.0" width="5" height="40" rx="2.5" fill="#db2777"/>
+<text x="408" y="677.0" font-size="14" font-weight="700" fill="#db2777">手机号（1）</text>
+<path d="M 650 672.0 C 715.0 672.0, 715.0 672.0, 780 672.0" fill="none" stroke="#db2777" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="656.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#db2777" stroke-opacity="0.45"/>
+<text x="796" y="676.5" font-size="13" fill="#1e293b">TC-0014 注册手机号第二位不在 3–9 时返回 422</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 782.0, 390 782.0" fill="none" stroke="#0891b2" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="762.0" width="260" height="40" rx="12" fill="#0891b2" opacity="0.12"/>
+<rect x="390" y="762.0" width="5" height="40" rx="2.5" fill="#0891b2"/>
+<text x="408" y="787.0" font-size="14" font-weight="700" fill="#0891b2">姓名（4）</text>
+<path d="M 650 782.0 C 715.0 782.0, 715.0 716.0, 780 716.0" fill="none" stroke="#0891b2" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="700.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#0891b2" stroke-opacity="0.45"/>
+<text x="796" y="720.5" font-size="13" fill="#1e293b">TC-0015 姓名为空时返回 422 校验错误</text>
+<path d="M 650 782.0 C 715.0 782.0, 715.0 760.0, 780 760.0" fill="none" stroke="#0891b2" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="744.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#0891b2" stroke-opacity="0.45"/>
+<text x="796" y="764.5" font-size="13" fill="#1e293b">TC-0016 姓名为纯数字时返回 400 INVALID_NAME</text>
+<path d="M 650 782.0 C 715.0 782.0, 715.0 804.0, 780 804.0" fill="none" stroke="#0891b2" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="788.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#0891b2" stroke-opacity="0.45"/>
+<text x="796" y="808.5" font-size="13" fill="#1e293b">TC-0017 姓名为纯符号时返回 400 INVALID_NAME</text>
+<path d="M 650 782.0 C 715.0 782.0, 715.0 848.0, 780 848.0" fill="none" stroke="#0891b2" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="832.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#0891b2" stroke-opacity="0.45"/>
+<text x="796" y="852.5" font-size="13" fill="#1e293b">TC-0018 姓名超过 20 字符时返回 422 校验错误</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 914.0, 390 914.0" fill="none" stroke="#4d7c0f" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="894.0" width="260" height="40" rx="12" fill="#4d7c0f" opacity="0.12"/>
+<rect x="390" y="894.0" width="5" height="40" rx="2.5" fill="#4d7c0f"/>
+<text x="408" y="919.0" font-size="14" font-weight="700" fill="#4d7c0f">验证码（2）</text>
+<path d="M 650 914.0 C 715.0 914.0, 715.0 892.0, 780 892.0" fill="none" stroke="#4d7c0f" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="876.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#4d7c0f" stroke-opacity="0.45"/>
+<text x="796" y="896.5" font-size="13" fill="#1e293b">TC-0019 验证码不是 6 位数字时返回 422</text>
+<path d="M 650 914.0 C 715.0 914.0, 715.0 936.0, 780 936.0" fill="none" stroke="#4d7c0f" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="920.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#4d7c0f" stroke-opacity="0.45"/>
+<text x="796" y="940.5" font-size="13" fill="#1e293b">TC-0020 验证码取值错误时返回 400 INVALID_SMS_CODE</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 980.0, 390 980.0" fill="none" stroke="#16a34a" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="960.0" width="260" height="40" rx="12" fill="#16a34a" opacity="0.12"/>
+<rect x="390" y="960.0" width="5" height="40" rx="2.5" fill="#16a34a"/>
+<text x="408" y="985.0" font-size="14" font-weight="700" fill="#16a34a">注册成功（1）</text>
+<path d="M 650 980.0 C 715.0 980.0, 715.0 980.0, 780 980.0" fill="none" stroke="#16a34a" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="964.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#16a34a" stroke-opacity="0.45"/>
+<text x="796" y="984.5" font-size="13" fill="#1e293b">TC-0021 资料合法时注册成功并返回待审核初始状态</text>
+<path d="M 286 562.0 C 338.0 562.0, 338.0 1024.0, 390 1024.0" fill="none" stroke="#475569" stroke-width="1.4" opacity="0.75"/>
+<rect x="390" y="1004.0" width="260" height="40" rx="12" fill="#475569" opacity="0.12"/>
+<rect x="390" y="1004.0" width="5" height="40" rx="2.5" fill="#475569"/>
+<text x="408" y="1029.0" font-size="14" font-weight="700" fill="#475569">校验顺序（1）</text>
+<path d="M 650 1024.0 C 715.0 1024.0, 715.0 1024.0, 780 1024.0" fill="none" stroke="#475569" stroke-width="1.4" opacity="0.75"/>
+<rect x="780" y="1008.0" width="700" height="32" rx="9" fill="#ffffff" stroke="#475569" stroke-opacity="0.45"/>
+<text x="796" y="1028.5" font-size="13" fill="#1e293b">TC-0022 姓名规则先于验证码校验</text>
+</svg>

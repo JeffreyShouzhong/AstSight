@@ -1,0 +1,2567 @@
+{
+  "schema_version": 2,
+  "ruleset_id": "rs-1be1cd3c8400d052",
+  "project": "partner_onboarding",
+  "version": 3,
+  "generated_at": "2026-11-10T14:11:13+00:00",
+  "prompt": {
+    "name": "a1_requirement_analysis",
+    "version": "6",
+    "sha256": "83a9d3d36112aa0c7048ce1ddadb2c94664289aa777340b6ec7b60e4785fbeb5",
+    "provider": "anthropic",
+    "model": "deepseek-chat"
+  },
+  "documents": [
+    {
+      "doc": "docs/design.md",
+      "sha256": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+      "sections": 42
+    },
+    {
+      "doc": "docs/requirements.md",
+      "sha256": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+      "sections": 8
+    }
+  ],
+  "rules": [
+    {
+      "rule_key": "RK-6ef0b7b08ea3",
+      "rule_id": "BR-01",
+      "text": "未注册用户可免登录访问",
+      "type": "business_constraint",
+      "entities": [
+        "注册页"
+      ],
+      "fields": [],
+      "constraints": [],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "未注册用户免登录可访问"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "原文明确免登录访问，属于身份前提",
+      "fingerprint": "aa2898453e660d28a0262184d776130b9ac5da9d47ea2c3291be4d7718258837",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-fcdb6785d7aa",
+      "rule_id": "BR-02",
+      "text": "姓名为 2–20 个字符，允许中文、字母、空格、`·`；为空、纯符号、纯数字、超 20 字时不通过",
+      "type": "validation",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "name"
+      ],
+      "constraints": [
+        {
+          "field": "name",
+          "operator": "between",
+          "values": [
+            "2",
+            "20"
+          ],
+          "condition": "姓名长度",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "| 2 | 姓名        | 2–20 个字符，允许中文、字母、空格、`·`。**异常**：为空、纯符号、纯数字、超 20 字 → 输入框下方提示并阻止下一步，提示定位到该字段"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "长度与字符集均来自原文；设计 V1.1 已定义码点计数、trim 与字符集，见 BR-48～BR-50",
+      "fingerprint": "101577b54dc7560c578e2f7f66e4dc01fe2ed1cb3d95408f06f32639eecd3d2d",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-cbaf5b6a3bd5",
+      "rule_id": "BR-03",
+      "text": "手机号为 11 位、1 开头、第二位 3–9",
+      "type": "validation",
+      "entities": [
+        "手机号"
+      ],
+      "fields": [
+        "mobile"
+      ],
+      "constraints": [
+        {
+          "field": "mobile",
+          "operator": "other",
+          "values": [],
+          "condition": "手机号格式",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "手机号 11 位、1 开头、第二位 3–9"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "数字符集未在原文明确「全部为数字」，设计文档补充了正则",
+      "fingerprint": "eaaec465bb2945572f5cbe001a33a91091820d0c392d4d49898069e1430b7bda",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-54198c262de1",
+      "rule_id": "BR-04",
+      "text": "验证码为 6 位",
+      "type": "validation",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [
+        {
+          "field": "sms_code",
+          "operator": "other",
+          "values": [],
+          "condition": "验证码长度",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "验证码 6 位、5 分钟有效"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "需求同时要求验证码 5 分钟有效、错误 5 次作废；本规则只取 6 位长度，时效与次数见 BR-35～BR-39",
+      "fingerprint": "f87b8e5c5854f96d41eba5c095e4f39f36ba1c26a6685df9be0200ef7f3a23e5",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-b5c2cb77d54e",
+      "rule_id": "BR-05",
+      "text": "同号在 60 秒内重复发送返回 429 SMS_COOLDOWN",
+      "type": "error_handling",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "mobile"
+      ],
+      "constraints": [
+        {
+          "field": "sms",
+          "operator": "other",
+          "values": [],
+          "condition": "60 秒内重复发送",
+          "error_code": "SMS_COOLDOWN",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 429 | `SMS_COOLDOWN` | 60 秒内重复发送 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码、阈值与错误码均来自设计错误表",
+      "fingerprint": "4f53e434dfd5fe6b65392427b631917ffd6a95c5532440dd252fdd4b9ccbf452",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-9191fe629f9b",
+      "rule_id": "BR-06",
+      "text": "单号最近 24 小时超过 10 次时返回 429 `SMS_DAILY_LIMIT`",
+      "type": "error_handling",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "mobile"
+      ],
+      "constraints": [
+        {
+          "field": "sms",
+          "operator": "other",
+          "values": [],
+          "condition": "单号最近 24 小时超过 10 次",
+          "error_code": "SMS_DAILY_LIMIT",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 429 | `SMS_DAILY_LIMIT` | 单号最近 24 小时超过 10 次 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码、阈值与错误码来自设计错误表；窗口口径见 BR-47",
+      "fingerprint": "ee7ac34c34fddb4b0dd6f7cdb2cf6a6e8a597394ff37a4327c00aad753291985",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-cf94631dac66",
+      "rule_id": "BR-07",
+      "text": "单 IP 最近 60 分钟超过 20 次时返回 429 `SMS_IP_LIMIT`",
+      "type": "error_handling",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "ip"
+      ],
+      "constraints": [
+        {
+          "field": "sms",
+          "operator": "other",
+          "values": [],
+          "condition": "单 IP 最近 60 分钟超过 20 次",
+          "error_code": "SMS_IP_LIMIT",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 429 | `SMS_IP_LIMIT` | 单 IP 最近 60 分钟超过 20 次 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码、阈值与错误码来自设计错误表；窗口口径见 BR-47",
+      "fingerprint": "4d1515493bf309fae763f55aab0b1cfd19b40b9caf2bef4686ed2162ccda31f2",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-e05a487fde65",
+      "rule_id": "BR-08",
+      "text": "图形验证码从同号第 3 次起触发",
+      "type": "business_constraint",
+      "entities": [
+        "短信验证码",
+        "图形验证码"
+      ],
+      "fields": [
+        "sms_code",
+        "captcha_token"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 频控规则",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 图形验证码 | 同号第 3 次起 | `CAPTCHA_REQUIRED` |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "触发条件与错误码来自频控表",
+      "fingerprint": "2b8c42191921287ca06dba37a5bf6ac9535909e8078c0dd44fbfc33608595b61",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-2e101dd5af91",
+      "rule_id": "BR-09",
+      "text": "已触发图形验证码但未提供 token 时返回 400 CAPTCHA_REQUIRED",
+      "type": "error_handling",
+      "entities": [
+        "图形验证码"
+      ],
+      "fields": [
+        "captcha_token"
+      ],
+      "constraints": [
+        {
+          "field": "captcha_token",
+          "operator": "required",
+          "values": [],
+          "condition": "已触发图形验证码",
+          "error_code": "CAPTCHA_REQUIRED",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 400 | `CAPTCHA_REQUIRED` | 已触发图形验证码但未提供 token |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码与错误码来自设计错误表",
+      "fingerprint": "0444c22eba1934afd065d1324e54134a19680fa32350268221e5cbaaff320576",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-e397722a1497",
+      "rule_id": "BR-10",
+      "text": "图形验证码按请求次数而非成功次数计算",
+      "type": "business_constraint",
+      "entities": [
+        "短信验证码",
+        "图形验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 频控规则",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "每次请求都计入尝试次数，因此「第 3 次起要求图形验证码」按请求次数而非成功次数\n计算。"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "原文明确计数口径",
+      "fingerprint": "515022a4f3cbf8b10c2a5128b293bad91c27c9f9d6013cc9123a5e128c428c0d",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-ae178eedf9d4",
+      "rule_id": "BR-11",
+      "text": "所在城市必须从贵阳/成都/长沙/武汉/南京五选一显式选择，不设默认值",
+      "type": "validation",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "city"
+      ],
+      "constraints": [
+        {
+          "field": "city",
+          "operator": "in",
+          "values": [
+            "贵阳",
+            "成都",
+            "长沙",
+            "武汉",
+            "南京"
+          ],
+          "condition": "所在城市",
+          "error_code": "",
+          "exhaustive": true
+        }
+      ],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "枚举五选一：贵阳/成都/长沙/武汉/南京；必须显式选择，不设默认值"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "枚举值完整且原文声明不设默认值；城市列表来源与配置失败见 BR-52/BR-53",
+      "fingerprint": "dfe33b426bd870ed8f30e9fbfb1fde04796663bca0a2590cd69dbcb64e6acef0",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-a253eb796c16",
+      "rule_id": "BR-12",
+      "text": "身份证号为 18 位，前 17 位为数字，末位为数字或 X/x，并通过 GB 11643 校验位（ISO 7064 MOD 11-2）",
+      "type": "validation",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "id_card"
+      ],
+      "constraints": [
+        {
+          "field": "id_card",
+          "operator": "between",
+          "values": [
+            "18",
+            "18"
+          ],
+          "condition": "身份证长度",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "18 位，前 17 位数字、末位数字或 `X/x`，必须通过 GB 11643 校验位（ISO 7064 MOD 11-2）"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "长度、字符集与校验算法均来自原文",
+      "fingerprint": "fadea283c3d733b0c73a59bf54711c963813ead2ad87e1df94d7a74ad5f483f6",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-93bd5aec1ad5",
+      "rule_id": "BR-13",
+      "text": "身份证已被占用时返回 400 REGISTRATION_UNAVAILABLE，并使用通用提示",
+      "type": "error_handling",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "id_card"
+      ],
+      "constraints": [
+        {
+          "field": "id_card",
+          "operator": "other",
+          "values": [],
+          "condition": "身份证已被占用",
+          "error_code": "REGISTRATION_UNAVAILABLE",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 400 | `REGISTRATION_UNAVAILABLE` | 身份证占用，通用提示 |"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "状态码与错误码来自设计错误表",
+      "fingerprint": "03544a03b400064ec4dbb097f5a9d8139823796cfff5f45bd01274754a113f84",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-b007f22321c4",
+      "rule_id": "BR-14",
+      "text": "身份证占用的提示与其他情况一致，禁止提示「该身份证已注册」，以防枚举",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "id_card"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "已被占用 → 返回与其他情况一致的通用提示「该证件信息暂无法完成注册，请联系客服」（禁止提示「该身份证已注册」以防枚举）"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "原文明确禁止可枚举文案",
+      "fingerprint": "57b85c6872eb50142bdb9f15cd0cd28d2c15e4a48fa2c33cbf7ac98bbc7f592c",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-ee3a4096128d",
+      "rule_id": "BR-15",
+      "text": "协议默认未勾选，必须由用户主动勾选",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_checked"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "《合伙人合作协议》默认未勾选，必须用户主动勾选"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "默认态与提交条件均来自原文",
+      "fingerprint": "b2d3db7a1ca2aca2577c8aed876a9ce1782459a101f700f6829ed266685f45ce",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-b2e4ff881538",
+      "rule_id": "BR-16",
+      "text": "协议版本不一致时返回 400 AGREEMENT_VERSION_MISMATCH",
+      "type": "error_handling",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_version"
+      ],
+      "constraints": [
+        {
+          "field": "agreement_version",
+          "operator": "other",
+          "values": [],
+          "condition": "协议版本不一致",
+          "error_code": "AGREEMENT_VERSION_MISMATCH",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 400 | `AGREEMENT_VERSION_MISMATCH` | 协议版本不一致 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码与错误码来自设计错误表",
+      "fingerprint": "8da79d5ce9e59f11844039511c4a94373b1f5b3c707a9c8b08eb70075870290f",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-cc5f2612cb7a",
+      "rule_id": "BR-17",
+      "text": "agreement_version 的当前版本为 v1.0",
+      "type": "validation",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_version"
+      ],
+      "constraints": [
+        {
+          "field": "agreement_version",
+          "operator": "eq",
+          "values": [
+            "v1.0"
+          ],
+          "condition": "当前协议版本",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `agreement_version` | string | 是 | 当前 `v1.0` | 勾选时展示的协议版本 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "当前版本值来自请求参数表",
+      "fingerprint": "bef05f175361fa646e3f226dcd63de3d30c4a943171bef200f388d3d4634cd4c",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-ef51d27c937a",
+      "rule_id": "BR-18",
+      "text": "注册业务唯一键为「手机号 + 身份证（大写）」",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "mobile",
+        "id_card"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "业务唯一键为「手机号 + 身份证（大写）」"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "唯一键定义来自设计幂等小节",
+      "fingerprint": "267106f1e796b01868f46444c49f68e419fc9ed0046f67eef7ae7713aa9077e0",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-54b6a8eb1318",
+      "rule_id": "BR-19",
+      "text": "唯一键已存在且 `idempotency_key` 相同、请求体一致时，返回原档案，HTTP 200，`partner_id` 不变",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "idempotency_key",
+        "partner_id"
+      ],
+      "constraints": [
+        {
+          "field": "idempotency_key",
+          "operator": "other",
+          "values": [],
+          "condition": "唯一键已存在且幂等键相同、请求体一致",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 唯一键已存在且 `idempotency_key` 相同、请求体一致 | 返回原档案，HTTP 200，`partner_id` 不变 |"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "幂等成功分支来自设计表格；请求体一致性口径见 BR-55",
+      "fingerprint": "7fdb9e2c340b1544cf3f388862cee11de89da384523c80bd9e98c38b6d049f40",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-f18646e6a101",
+      "rule_id": "BR-20",
+      "text": "唯一键已存在但 idempotency_key 不同时返回 409 DUPLICATE_REGISTRATION",
+      "type": "error_handling",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "idempotency_key"
+      ],
+      "constraints": [
+        {
+          "field": "idempotency_key",
+          "operator": "other",
+          "values": [],
+          "condition": "唯一键已存在但幂等键不同",
+          "error_code": "DUPLICATE_REGISTRATION",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 唯一键已存在但 `idempotency_key` 不同 | 409 `DUPLICATE_REGISTRATION` |"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "幂等冲突分支来自设计表格",
+      "fingerprint": "16d01f7a093b476613bbf397e32db22b41b71d04d06797faf731106dc7fa9fdc",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-42ced5ce95ff",
+      "rule_id": "BR-21",
+      "text": "手机号已存在且唯一键不同时返回 409 MOBILE_ALREADY_REGISTERED",
+      "type": "error_handling",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "mobile"
+      ],
+      "constraints": [
+        {
+          "field": "mobile",
+          "operator": "other",
+          "values": [],
+          "condition": "手机号已存在且唯一键不同",
+          "error_code": "MOBILE_ALREADY_REGISTERED",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 手机号已存在、唯一键不同 | 409 `MOBILE_ALREADY_REGISTERED` |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "单字段唯一冲突分支来自设计表格",
+      "fingerprint": "e7cf510980e98ed96475e4123bfb7a2529b042cd3bfb350a19821de6b63300ab",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-6621154ef46e",
+      "rule_id": "BR-22",
+      "text": "注册校验按城市列表配置可用性、姓名规则、短信验证码（格式、5 分钟时效、累计 5 次错误作废）、城市枚举、身份证格式与校验位、协议勾选、协议版本、业务唯一键幂等判断、手机号是否已注册、身份证是否被占用、写库的顺序执行",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "name",
+        "sms_code",
+        "city",
+        "id_card",
+        "agreement_checked",
+        "agreement_version",
+        "idempotency_key"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 校验顺序",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "0. 城市列表配置可用性（为空或加载失败 → 503，且不继续校验、不写库）；\n1. 姓名规则；\n2. 短信验证码（格式、5 分钟时效、累计 5 次错误作废）；\n3. 城市枚举；\n4. 身份证格式与校验位；\n5. 协议勾选；\n6. 协议版本；\n7. 业务唯一键幂等判断；\n8. 手机号是否已注册；\n9. 身份证是否被占用；\n10. 写库（同时记录协议勾选时间、IP、UA）。"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "顺序影响多个校验同时失败时返回哪个错误；步骤 0 的城市配置失败见 BR-53",
+      "fingerprint": "02e5dafd220dd5d5a086e92ed38c5a1b3a2758ada14febfbd2caf6f9a5774402",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-d5120507c6a9",
+      "rule_id": "BR-23",
+      "text": "idempotency_key 长度为 1–64 字符，重试必须沿用同一个值",
+      "type": "validation",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "idempotency_key"
+      ],
+      "constraints": [
+        {
+          "field": "idempotency_key",
+          "operator": "between",
+          "values": [
+            "1",
+            "64"
+          ],
+          "condition": "幂等键长度",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `idempotency_key` | string | 是 | 1–64 字符 | 幂等键，重试必须沿用 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "长度与沿用要求来自请求参数表",
+      "fingerprint": "aa67044b531c59f68423a0a687d13edafa04674178e97559839831fcfc847b72",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-21a1b8ccab98",
+      "rule_id": "BR-24",
+      "text": "提交成功后 status 为 pending、audit_status 为 pending、audit_step 为 1",
+      "type": "state_transition",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "status",
+        "audit_status",
+        "audit_step"
+      ],
+      "constraints": [
+        {
+          "field": "status",
+          "operator": "eq",
+          "values": [
+            "pending"
+          ],
+          "condition": "注册成功",
+          "error_code": "",
+          "exhaustive": null
+        },
+        {
+          "field": "audit_status",
+          "operator": "eq",
+          "values": [
+            "pending"
+          ],
+          "condition": "注册成功",
+          "error_code": "",
+          "exhaustive": null
+        },
+        {
+          "field": "audit_step",
+          "operator": "eq",
+          "values": [
+            "1"
+          ],
+          "condition": "注册成功",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 响应字段",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `status` | string | 固定 `pending` |\n| `audit_status` | string | 固定 `pending` |\n| `audit_step` | integer | 固定 `1`（提交资料） |"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "三个初始状态字段均来自响应字段表",
+      "fingerprint": "fcb6bd04c47913d60a9070a0c9730c6f7b92ea2cb4383632ab8d8ca364750108",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-bf9a2027d9f1",
+      "rule_id": "BR-25",
+      "text": "partner_id 的格式为 P + 6 位序号",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "partner_id"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 响应字段",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `partner_id` | string | 合伙人编号，格式 `P` + 6 位序号 |"
+      },
+      "authority": "A",
+      "impact": "P2-体验",
+      "priority": "P2",
+      "reasoning": "编号格式来自响应字段表",
+      "fingerprint": "c1057742f34eb17802aea45fb6b8eca43e5b44f0d90379b773db6c5873bcd9fb",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-ff48f61206c3",
+      "rule_id": "BR-26",
+      "text": "合伙人主档与审核日志在同一事务内提交，任一失败整体回滚",
+      "type": "data_consistency",
+      "entities": [
+        "partner",
+        "partner_audit_log"
+      ],
+      "fields": [],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.5 事务与并发",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "主档与日志同事务提交，任一失败整体回滚；"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "事务原子性来自设计 4.5",
+      "fingerprint": "7ff3412b8b2c0e649d1c34e62713586369c0261a000665cb21ca8172492bd519",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-d2d2df562935",
+      "rule_id": "BR-27",
+      "text": "提交动作的审核日志为 action=submit、from_status=NULL、to_status=pending、audit_step=1",
+      "type": "data_consistency",
+      "entities": [
+        "partner_audit_log"
+      ],
+      "fields": [
+        "action",
+        "from_status",
+        "to_status",
+        "audit_step"
+      ],
+      "constraints": [
+        {
+          "field": "action",
+          "operator": "eq",
+          "values": [
+            "submit"
+          ],
+          "condition": "提交注册",
+          "error_code": "",
+          "exhaustive": null
+        },
+        {
+          "field": "from_status",
+          "operator": "eq",
+          "values": [
+            "NULL"
+          ],
+          "condition": "提交注册",
+          "error_code": "",
+          "exhaustive": null
+        },
+        {
+          "field": "to_status",
+          "operator": "eq",
+          "values": [
+            "pending"
+          ],
+          "condition": "提交注册",
+          "error_code": "",
+          "exhaustive": null
+        },
+        {
+          "field": "audit_step",
+          "operator": "eq",
+          "values": [
+            "1"
+          ],
+          "condition": "提交注册",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.3 partner_audit_log（审核日志）",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `action` | TEXT | NOT NULL | 动作，提交为 `submit` |\n| `from_status` | TEXT | NULL | 变更前状态，提交时为 NULL |\n| `to_status` | TEXT | NOT NULL | 变更后状态，`pending` |\n| `audit_step` | INTEGER | NOT NULL | 审核步骤，提交为 1 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "审核日志初始字段来自设计表结构",
+      "fingerprint": "9b74961174f6ebdb16346421c5cffbdff4737f0be50937fc6489f3bda0427044",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-6892294000bf",
+      "rule_id": "BR-28",
+      "text": "错误响应统一为包含 error_code 与 message 的 JSON 对象",
+      "type": "error_handling",
+      "entities": [
+        "接口"
+      ],
+      "fields": [
+        "error_code",
+        "message"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.1 通用约定",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 错误响应 | `{\"error_code\": \"...\", \"message\": \"...\"}` |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "错误体结构来自通用约定",
+      "fingerprint": "5edd2c8067fbf40b0ce67df9999c86b7c81bdea23a6cfcaa0945be46c0c84aeb",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-9c3f7ce28514",
+      "rule_id": "BR-29",
+      "text": "时间字段使用 ISO 8601 UTC、秒级、Z 结尾的格式",
+      "type": "data_consistency",
+      "entities": [
+        "接口"
+      ],
+      "fields": [
+        "submit_at"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.1 通用约定",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 时间格式 | ISO 8601 UTC，秒级，`Z` 结尾，如 `2026-11-04T12:30:04Z` |"
+      },
+      "authority": "A",
+      "impact": "P2-体验",
+      "priority": "P2",
+      "reasoning": "时间格式来自通用约定",
+      "fingerprint": "55acd638ba516f7a4a70b916f1442356d076b3caa05254a53990672cb2ac3b98",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-04f39ff8eaa4",
+      "rule_id": "BR-30",
+      "text": "字段缺失、长度、正则或枚举校验失败（含城市不在枚举内）时返回 422 `VALIDATION_ERROR`",
+      "type": "error_handling",
+      "entities": [
+        "接口"
+      ],
+      "fields": [
+        "name",
+        "mobile",
+        "sms_code",
+        "city",
+        "id_card",
+        "agreement_checked",
+        "agreement_version",
+        "idempotency_key"
+      ],
+      "constraints": [
+        {
+          "field": "request",
+          "operator": "other",
+          "values": [],
+          "condition": "字段校验失败",
+          "error_code": "VALIDATION_ERROR",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "参数校验错误映射来自设计错误表；城市非法统一走 422，不再有 INVALID_CITY 分支",
+      "fingerprint": "8f54fd081aef8c3d1274cd25fa0f9bf4a7e66c44a845bd848427d4522d33fcce",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-8441f643b13e",
+      "rule_id": "BR-31",
+      "text": "接口响应不返回身份证，调试接口按前 6 位 + ******** + 后 4 位掩码",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "id_card"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.6 数据安全",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 身份证展示 | 接口不返回身份证；调试接口掩码为前 6 位 + `********` + 后 4 位 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "响应与调试接口的展示规则来自数据安全表",
+      "fingerprint": "2b3dcf91c883cd993cf1bda6278f4ad54d9f8a56e829e3b08f083159b2c16831",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-14cee17a910d",
+      "rule_id": "BR-32",
+      "text": "日志不得打印请求体，避免身份证明文进入日志",
+      "type": "business_constraint",
+      "entities": [
+        "日志"
+      ],
+      "fields": [
+        "id_card"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.6 数据安全",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 日志 | 不打印请求体，避免身份证明文进入日志 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "日志脱敏要求来自数据安全表",
+      "fingerprint": "d52aa0181e3c5155d21b954681f23064c52c634e0c654841481676ee2be86311",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-899e2c5bc982",
+      "rule_id": "BR-33",
+      "text": "发送成功返回的 cooldown_seconds 固定为 60",
+      "type": "business_constraint",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "cooldown_seconds"
+      ],
+      "constraints": [
+        {
+          "field": "cooldown_seconds",
+          "operator": "eq",
+          "values": [
+            "60"
+          ],
+          "condition": "发送成功",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 响应字段",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `cooldown_seconds` | integer | 下次可发送的间隔秒数，固定 60 |"
+      },
+      "authority": "A",
+      "impact": "P2-体验",
+      "priority": "P2",
+      "reasoning": "响应字段固定值来自响应字段表",
+      "fingerprint": "306b4891664ba3cea702c22322285ea208fff39efac633e8ac00b7b2e027faf4",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-d869bfddf8e8",
+      "rule_id": "BR-34",
+      "text": "提交注册时记录协议版本号",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_version"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/requirements.md",
+        "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+        "kind": "explicit",
+        "version": "74fecf151352655421a40b977953f3ff79d5f4ae135ffa4bffbe1036649778e3",
+        "doc_version": null,
+        "quote": "提交时记录协议版本号、勾选时间、IP、UA"
+      },
+      "authority": "A",
+      "impact": "P2-体验",
+      "priority": "P2",
+      "reasoning": "协议版本号与勾选时间/IP/UA 均在提交事务内记录；字段级规则见 BR-57～BR-61",
+      "fingerprint": "871410888e91fda7c430cc2cc985b3665d509a3c8ab302e651a8046a3254e319",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-9749d67fe795",
+      "rule_id": "BR-35",
+      "text": "短信验证码有效期为 5 分钟",
+      "type": "validation",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [
+        {
+          "field": "sms_code",
+          "operator": "other",
+          "values": [],
+          "condition": "验证码有效期 5 分钟",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 验证码签发与时效",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- `sms/send` 成功后为该手机号签发验证码，有效期 5 分钟；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "有效期来自验证码签发小节",
+      "fingerprint": "ba4dffdf88863b75bfb8983da335e75970f977db7899115edcfcceef6dcf6cee",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-84c646a8f260",
+      "rule_id": "BR-36",
+      "text": "验证码超过 5 分钟有效期时返回 400 `SMS_CODE_EXPIRED`",
+      "type": "error_handling",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [
+        {
+          "field": "sms_code",
+          "operator": "other",
+          "values": [],
+          "condition": "超过 5 分钟有效期",
+          "error_code": "SMS_CODE_EXPIRED",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 400 | `SMS_CODE_EXPIRED` | 验证码超过 5 分钟有效期 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码、时效与错误码来自提交注册错误表",
+      "fingerprint": "fb12ea54f539b9529764ee6a7423953e3b92c99e768f9577ab6738e640363a9f",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-e2e269050df5",
+      "rule_id": "BR-37",
+      "text": "同一验证码最多允许 5 次校验失败，第 5 次失败后立即作废",
+      "type": "state_transition",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [
+        {
+          "field": "sms_code",
+          "operator": "other",
+          "values": [],
+          "condition": "第 5 次失败后作废",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 验证码签发与时效",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 同一验证码最多允许 5 次校验失败，第 5 次失败后立即作废，必须重新获取；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "失败次数上限与作废时机来自验证码签发小节",
+      "fingerprint": "f47761a1810f462a752d96115a8adc20f530fc58f35d24393bec97119032a1e5",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-21d8574fb237",
+      "rule_id": "BR-38",
+      "text": "验证码错误累计达到 5 次时返回 400 `SMS_CODE_ATTEMPTS_EXCEEDED`",
+      "type": "error_handling",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [
+        {
+          "field": "sms_code",
+          "operator": "other",
+          "values": [],
+          "condition": "错误累计达到 5 次",
+          "error_code": "SMS_CODE_ATTEMPTS_EXCEEDED",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 400 | `SMS_CODE_ATTEMPTS_EXCEEDED` | 错误累计达到 5 次，验证码已作废 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码、次数与错误码来自提交注册错误表",
+      "fingerprint": "0bdef7a8dee16c220393ae39603acad8046ecff7439705b205edf9c0b9848fa0",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-616729cde108",
+      "rule_id": "BR-39",
+      "text": "重新获取验证码会重置有效期与错误次数",
+      "type": "state_transition",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 验证码签发与时效",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 重新获取验证码会重置有效期与错误次数，验证码按手机号维度记录；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "重发后的状态重置来自验证码签发小节",
+      "fingerprint": "f412389aa229d2f093e5cd874ad0d5c8010af0a3c47122a625d0803dd4ac9a12",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-aef02461ba06",
+      "rule_id": "BR-40",
+      "text": "图形验证码 token 校验不通过时返回 400 `CAPTCHA_INVALID`",
+      "type": "error_handling",
+      "entities": [
+        "图形验证码"
+      ],
+      "fields": [
+        "captcha_token"
+      ],
+      "constraints": [
+        {
+          "field": "captcha_token",
+          "operator": "other",
+          "values": [],
+          "condition": "图形验证码校验不通过",
+          "error_code": "CAPTCHA_INVALID",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 图形验证码契约",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "校验不通过返回 400 `CAPTCHA_INVALID`；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "状态码与错误码来自图形验证码契约",
+      "fingerprint": "3896f32dfb71277c12527a3d57e525cbf3237c7fd04a87590c994b216916b2db",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-27def6ca9607",
+      "rule_id": "BR-41",
+      "text": "`captcha_token` 由外部图形验证码服务签发，本服务不解析 token 内容，仅透传校验",
+      "type": "business_constraint",
+      "entities": [
+        "图形验证码"
+      ],
+      "fields": [
+        "captcha_token"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 图形验证码契约",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- `captcha_token` 由外部图形验证码服务签发，本服务不解析 token 内容，仅透传校验；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "职责边界来自图形验证码契约；具体契约见 Q-02",
+      "fingerprint": "a724c4a88dc6faa8abd0c3a1cdeff8ab50dd4ce25e773f84cda729e13022b5f0",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-8581f236b81a",
+      "rule_id": "BR-42",
+      "text": "调用短信通道超时 5 秒或发送失败时返回 503 `SMS_CHANNEL_UNAVAILABLE`",
+      "type": "error_handling",
+      "entities": [
+        "短信验证码",
+        "短信通道"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [
+        {
+          "field": "sms",
+          "operator": "other",
+          "values": [],
+          "condition": "通道超时 5 秒或发送失败",
+          "error_code": "SMS_CHANNEL_UNAVAILABLE",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 短信通道失败",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 调用短信通道超时 5 秒；超时或失败返回 503 `SMS_CHANNEL_UNAVAILABLE`，提示"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "超时阈值、状态码与错误码来自短信通道失败小节",
+      "fingerprint": "be60457001598a844ca3898810727ea38076a52c12c744f87188f1a72876a0a1",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-1c52485c015e",
+      "rule_id": "BR-43",
+      "text": "短信通道失败请求计入单号/单 IP 频控尝试次数，但不启动 60 秒冷却，允许用户立即重试",
+      "type": "business_constraint",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "mobile",
+        "ip"
+      ],
+      "constraints": [
+        {
+          "field": "sms",
+          "operator": "other",
+          "values": [],
+          "condition": "失败请求计入尝试次数但不启动 60 秒冷却",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 短信通道失败",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 失败请求计入单号/单 IP 频控尝试次数，但不启动 60 秒冷却，允许用户立即重试；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "失败请求的频控计数与冷却语义来自短信通道失败小节",
+      "fingerprint": "bde0b046fbf38ebbf3bf532112f4a134e3ffa15ac1dff64173baee5f95b448b9",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-4f91ae1eb7a3",
+      "rule_id": "BR-44",
+      "text": "短信通道发送失败时不记录验证码签发时间，也不清零该手机号已有的错误次数",
+      "type": "data_consistency",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "sms_code"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 短信通道失败",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 发送失败时不记录验证码签发时间，也不清零该手机号已有的错误次数。"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "失败分支的状态保持语义来自短信通道失败小节",
+      "fingerprint": "7c46b4770a4d90b52b3b7e88a91dcd243791c50864507a657bb9fb52dc1eb34a",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-e58f2db36923",
+      "rule_id": "BR-45",
+      "text": "`remaining_today` 按 `max(0, 10 - 最近 24 小时已计入请求数)` 计算，计数含本次请求",
+      "type": "calculation",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "remaining_today"
+      ],
+      "constraints": [
+        {
+          "field": "remaining_today",
+          "operator": "other",
+          "values": [],
+          "condition": "按最近 24 小时已计入请求数计算，含本次",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 响应字段",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `remaining_today` | integer | `max(0, 10 - 最近 24 小时已计入请求数)`，计数含本次请求 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "响应字段给出可计算口径，替换旧的未定义缺口",
+      "fingerprint": "1083e9c6960c8aee46b2784733a977b36e73bf0c0b91cd4808dfc80ab9195fe0",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-af9e0cdec1ee",
+      "rule_id": "BR-46",
+      "text": "最近 24 小时已计入请求数（含本次）达到 2 次后，`captcha_required` 为真",
+      "type": "calculation",
+      "entities": [
+        "短信验证码",
+        "图形验证码"
+      ],
+      "fields": [
+        "captcha_required"
+      ],
+      "constraints": [
+        {
+          "field": "captcha_required",
+          "operator": "other",
+          "values": [],
+          "condition": "最近 24 小时计数（含本次）>= 2",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 响应字段",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `captcha_required` | boolean | `最近 24 小时已计入请求数（含本次）>= 2`，即为后续（第 3 次起）请求要求图形验证码 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "响应字段给出图形验证码触发公式",
+      "fingerprint": "4e504661dc66173f15b9a47b5d47b0a542b058f3f38a6ceb2e730a3ba3346565",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-5b5f731d5892",
+      "rule_id": "BR-47",
+      "text": "频控窗口为最近 24 小时与最近 60 分钟滚动窗口，均以 UTC 计时，左闭右开",
+      "type": "business_constraint",
+      "entities": [
+        "短信验证码"
+      ],
+      "fields": [
+        "mobile",
+        "ip"
+      ],
+      "constraints": [
+        {
+          "field": "sms",
+          "operator": "other",
+          "values": [],
+          "condition": "最近 24 小时与 60 分钟滚动窗口",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 频控规则",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "窗口口径：单号每日上限按最近 24 小时滚动窗口计算，单 IP 每小时上限按最近 60 分钟\n滚动窗口计算，均以 UTC 计时，窗口为左闭右开。"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "窗口基准与边界来自频控规则；自然日口径待 D-01 确认",
+      "fingerprint": "02ec1e0cd202d4da9c9e8cdb01f17ebe18825dd1af1af85a673213b2a207113c",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-2b7d4d54be3f",
+      "rule_id": "BR-48",
+      "text": "`name` 长度按 Unicode 码点计数，首尾空白不做 trim，空格计入长度",
+      "type": "validation",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "name"
+      ],
+      "constraints": [
+        {
+          "field": "name",
+          "operator": "other",
+          "values": [],
+          "condition": "按 Unicode 码点计数",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- `name` 长度按 Unicode 码点计数（Python `len`），首尾空白不做 trim，空格计入长度；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "长度计数单位与 trim 语义来自字段规范化小节",
+      "fingerprint": "42e59f03c78465824f030efe23d8c0afc4287af49d97f9d3b4b8431e5e408ada",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-73a9395ce979",
+      "rule_id": "BR-49",
+      "text": "姓名允许中文、ASCII 字母、半角空格与间隔号 `·`，不允许全角字母/数字、全角空格及其他符号",
+      "type": "validation",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "name"
+      ],
+      "constraints": [
+        {
+          "field": "name",
+          "operator": "other",
+          "values": [],
+          "condition": "允许字符集",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 允许字符：中文（U+4E00–U+9FA5）、ASCII 字母、半角空格（U+0020）、间隔号 `·`（U+00B7）；\n- 不允许全角字母/数字、全角空格（U+3000）及其他符号；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "字符集来自字段规范化小节",
+      "fingerprint": "fbb22b54afd26a9b36aacd426fbb1d01ec7a2db0e351b61694c2ed71f7dd9458",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-67c225171fe7",
+      "rule_id": "BR-50",
+      "text": "姓名必须至少包含一个中文或 ASCII 字母，纯空格、纯符号、纯数字均不通过",
+      "type": "validation",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "name"
+      ],
+      "constraints": [
+        {
+          "field": "name",
+          "operator": "other",
+          "values": [],
+          "condition": "至少一个中文或 ASCII 字母",
+          "error_code": "",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 姓名必须至少包含一个中文或 ASCII 字母，纯空格、纯符号、纯数字均不通过；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "正例字符要求来自字段规范化小节",
+      "fingerprint": "20bd4022ea5953d62b6e2ab9cd931b5b056a52370303c7244866a2a9241dafa7",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-e1d1fc36b631",
+      "rule_id": "BR-51",
+      "text": "`id_card` 与业务唯一键中的身份证统一转大写后再比较与入库",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "id_card"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- `id_card` 与业务唯一键中的身份证统一转大写后再比较与入库。"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "大小写归一影响唯一键判定与存储",
+      "fingerprint": "05c53ec10b83bd096d15b9f545f014f8bbdc109c5ba8dc7edd552d8e60c14a66",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-0f04fc213b28",
+      "rule_id": "BR-52",
+      "text": "城市枚举由配置项 `CITY_LIST` 下发，默认五市：贵阳/成都/长沙/武汉/南京",
+      "type": "business_constraint",
+      "entities": [
+        "城市"
+      ],
+      "fields": [
+        "city"
+      ],
+      "constraints": [
+        {
+          "field": "city",
+          "operator": "in",
+          "values": [
+            "贵阳",
+            "成都",
+            "长沙",
+            "武汉",
+            "南京"
+          ],
+          "condition": "默认城市枚举",
+          "error_code": "",
+          "exhaustive": true
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 城市列表配置",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 城市枚举由配置项 `CITY_LIST` 下发，默认五市：贵阳/成都/长沙/武汉/南京；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "城市来源由固定枚举改为配置下发，关闭 CF-01",
+      "fingerprint": "793621ad71dbf1177fadd23db725beb0b46c3026fce0a5348d2439f0ab16ce78",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-2270b37d1605",
+      "rule_id": "BR-53",
+      "text": "城市列表配置为空或加载失败时，`POST /api/partner/register` 返回 503 `CITY_LIST_UNAVAILABLE`，不执行校验与写库",
+      "type": "error_handling",
+      "entities": [
+        "城市"
+      ],
+      "fields": [
+        "city",
+        "config"
+      ],
+      "constraints": [
+        {
+          "field": "config",
+          "operator": "other",
+          "values": [],
+          "condition": "城市列表配置为空或加载失败",
+          "error_code": "CITY_LIST_UNAVAILABLE",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 城市列表配置",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 服务启动时加载配置；配置为空或加载失败时，`POST /api/partner/register` 返回\n  `503 CITY_LIST_UNAVAILABLE`，不执行任何校验与写库；"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "配置失败的阻断语义关闭 CF-01 的未定义分支",
+      "fingerprint": "ddf966552212086110b265d29996ad62b3f023d1a7573b7d81cf3758b72143e6",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-b9761fab3cc1",
+      "rule_id": "BR-54",
+      "text": "同唯一键、同 `idempotency_key` 但请求体不一致时返回 409 `IDEMPOTENCY_KEY_CONFLICT`",
+      "type": "error_handling",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "idempotency_key"
+      ],
+      "constraints": [
+        {
+          "field": "idempotency_key",
+          "operator": "other",
+          "values": [],
+          "condition": "同唯一键同幂等键但请求体不一致",
+          "error_code": "IDEMPOTENCY_KEY_CONFLICT",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 唯一键已存在且 `idempotency_key` 相同、请求体不同 | 409 `IDEMPOTENCY_KEY_CONFLICT` |"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "载荷冲突分支来自幂等表；是否保持该默认见 Q-03",
+      "fingerprint": "a6897e31b75f687ea7b7fc945bd8864ea5452e51d3e122410eb9e5a5ec772672",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-88249f9b80de",
+      "rule_id": "BR-55",
+      "text": "请求体一致性按 `name`、`mobile`、`id_card`（大写）、`city`、`agreement_version` 比较，任一字段变化视为不同请求",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "name",
+        "mobile",
+        "id_card",
+        "city",
+        "agreement_version"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "请求体一致性按 `name`、`mobile`、`id_card`（大写）、`city`、`agreement_version`\n比较；任一字段变化视为不同请求。"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "载荷一致性字段集来自幂等小节",
+      "fingerprint": "5be9cff469c65f2e13dd5806eca9c6ebaed2f7509c092e252ae8a47f39261074",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-deb60e373901",
+      "rule_id": "BR-56",
+      "text": "`409 MOBILE_ALREADY_REGISTERED` 只表示手机号已注册，本服务不返回跳转地址，也不实现 P-04 状态查询",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "mobile"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "`409 MOBILE_ALREADY_REGISTERED` 只表示手机号已注册；前端根据 P-04 查询到的\n`audit_status` 决定跳转 P-04 还是登录页，本服务不返回跳转地址，也不实现 P-04\n状态查询。"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "响应语义与 P-04 边界来自幂等小节",
+      "fingerprint": "12612c12c4b3a161f77f9b56e7fedafad4187b88f589e17c57212032f39a281e",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-c786351e5661",
+      "rule_id": "BR-57",
+      "text": "提交注册时记录 `agreement_checked_at`，取服务端接收时间，UTC 精确到秒",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_checked_at"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 协议元数据",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `agreement_checked_at` | 服务端接收时间 | UTC，精确到秒 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "协议勾选时间字段来自协议元数据表，关闭 CF-03",
+      "fingerprint": "e3ede924d671620bbeaf26ac813f974bd0f1a33a317555c7115b28de32897f69",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-83dbe1f39182",
+      "rule_id": "BR-58",
+      "text": "提交注册时记录 `agreement_ip`，优先取 `X-Forwarded-For` 首个地址，否则取连接地址",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_ip"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 协议元数据",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `agreement_ip` | 请求来源 IP | 优先取 `X-Forwarded-For` 首个地址，否则取连接地址 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "IP 采集来源来自协议元数据表，关闭 CF-03",
+      "fingerprint": "d86d0c50e93bfb7cbe568f794ab36dcbd46424c37bd703c17271f42451a26b7d",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-c401b0c2729a",
+      "rule_id": "BR-59",
+      "text": "提交注册时记录 `agreement_user_agent`，取 `User-Agent` 请求头，缺失时记空字符串",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_user_agent"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 协议元数据",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| `agreement_user_agent` | `User-Agent` 请求头 | 缺失时记空字符串 |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "UA 采集来源来自协议元数据表，关闭 CF-03",
+      "fingerprint": "b93975c72c11de6b4f67a84429be466ed22afa6701205b68928325b45eb5e3ed",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-688ec12eb515",
+      "rule_id": "BR-60",
+      "text": "协议元数据中的 IP 与 UA 不写入业务日志正文",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人合作协议",
+        "日志"
+      ],
+      "fields": [
+        "agreement_ip",
+        "agreement_user_agent"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 协议元数据",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "IP 与 UA 仅用于协议签署留痕，不写入业务日志正文。"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "协议元数据的日志边界来自协议元数据小节",
+      "fingerprint": "3d1597358fec8fa910ee749528c247febb061e4a71258ddda7945ab86171ef86",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-e0400def32f3",
+      "rule_id": "BR-61",
+      "text": "协议版本更新后，已提交且仍为 `pending` 的档案保留提交时的 `agreement_version`，不追溯重签",
+      "type": "state_transition",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_version"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 协议元数据",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "协议版本更新后，已提交且仍为 `pending` 的档案保留提交时的 `agreement_version`，\n不追溯重签；只有新提交必须使用当前版本。"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "存量 pending 档案的版本处理已定义",
+      "fingerprint": "3500cfdfe38d850f70a9500eb6a1a9e8eee6f191851515c287506d6bdb7471da",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-d88ca5c53771",
+      "rule_id": "BR-62",
+      "text": "并发提交发生唯一约束冲突后按业务唯一键重查；幂等键与请求体一致时返回已存在档案（200）",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "idempotency_key",
+        "partner_id"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.5 事务与并发",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 捕获唯一约束冲突后重新按业务唯一键查询：幂等键与请求体均一致时返回已存在档案\n  （200）"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "并发冲突重查的成功分支来自事务与并发小节",
+      "fingerprint": "10c71321d7141eed6689e69031f2d0e759637ac89d57881755e5211499daa290",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-dab1ae36c5fb",
+      "rule_id": "BR-63",
+      "text": "并发冲突重查后请求体不一致时返回 409 `IDEMPOTENCY_KEY_CONFLICT`",
+      "type": "error_handling",
+      "entities": [
+        "合伙人"
+      ],
+      "fields": [
+        "idempotency_key"
+      ],
+      "constraints": [
+        {
+          "field": "idempotency_key",
+          "operator": "other",
+          "values": [],
+          "condition": "并发冲突重查后请求体不一致",
+          "error_code": "IDEMPOTENCY_KEY_CONFLICT",
+          "exhaustive": null
+        }
+      ],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.5 事务与并发",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "请求体不一致返回 409 `IDEMPOTENCY_KEY_CONFLICT`，其余按手机号/身份证"
+      },
+      "authority": "A",
+      "impact": "P0-阻断",
+      "priority": "P0",
+      "reasoning": "并发冲突重查的冲突分支来自事务与并发小节",
+      "fingerprint": "994d6da606139a142f6709e4014ce49f85c77ecc24eddbd6811be740bcf333d0",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-2a847a10ae14",
+      "rule_id": "BR-64",
+      "text": "协议元数据 `agreement_ip` 与 `agreement_user_agent` 随主档保存，保留期限与主档一致",
+      "type": "data_consistency",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_ip",
+        "agreement_user_agent"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.6 数据安全",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 协议元数据 | `agreement_ip` / `agreement_user_agent` 随主档保存，保留期限与主档一致；`/_debug/state` 不返回这两个字段；仅审计/运维后台可读；仅在受信代理后信任 `X-Forwarded-For` |"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "留存期限来自数据安全表",
+      "fingerprint": "06a2ba2d5bd27463ef9233eca6473233409ec58ac79a12c4f75ddefe54edb33e",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-93cccaa68d09",
+      "rule_id": "BR-65",
+      "text": "`/_debug/state` 不返回 `agreement_ip` 与 `agreement_user_agent`",
+      "type": "business_constraint",
+      "entities": [
+        "合伙人合作协议"
+      ],
+      "fields": [
+        "agreement_ip",
+        "agreement_user_agent"
+      ],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.6 数据安全",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 协议元数据 | `agreement_ip` / `agreement_user_agent` 随主档保存，保留期限与主档一致；`/_debug/state` 不返回这两个字段；仅审计/运维后台可读；仅在受信代理后信任 `X-Forwarded-For` |"
+      },
+      "authority": "A",
+      "impact": "P2-体验",
+      "priority": "P2",
+      "reasoning": "调试接口不返回敏感协议元数据",
+      "fingerprint": "deab8c17b817bc9b6a9d9b66d8670a4ac5f6323aa8e22aa0beaf371b2cdd2369",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-7255e61ae7e3",
+      "rule_id": "BR-66",
+      "text": "示例环境（4C8G、本地 SQLite、单进程）注册接口 p95 ≤ 200 ms、短信发送接口 p95 ≤ 100 ms（不含外部通道耗时），以 10 并发、60 秒窗口统计",
+      "type": "other",
+      "entities": [
+        "接口"
+      ],
+      "fields": [],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 六、非功能设计",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "| 性能 | 示例基线（4C8G、本地 SQLite、单进程）：注册接口 p95 ≤ 200 ms，短信发送接口 p95 ≤ 100 ms（不含外部通道耗时）；以 10 并发、60 秒窗口统计；生产 SLA 另行确定 |"
+      },
+      "authority": "A",
+      "impact": "P2-体验",
+      "priority": "P2",
+      "reasoning": "示例性能基线含环境、分位、并发与统计窗口；生产 SLA 待 D-02 确认",
+      "fingerprint": "59cc7529ab87d0309755f5ed7f5aa610345836c0e944851a839df6b2d0c71d59",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-60baf9d77c09",
+      "rule_id": "BR-67",
+      "text": "生产部署必须在网关层增加鉴权、限流与审计访问控制",
+      "type": "business_constraint",
+      "entities": [
+        "接口"
+      ],
+      "fields": [],
+      "constraints": [],
+      "source": {
+        "doc": "docs/design.md",
+        "section": "合伙人注册服务 · 设计文档 > 七、约束与实现差异 > 7.1 已知约束",
+        "kind": "explicit",
+        "version": "cab4aec62a02d9ec87295229e46910b94ed8a51c04e4516cf0b8612ecd84f813",
+        "doc_version": null,
+        "quote": "- 服务无鉴权，注册接口按公开接口设计；生产部署必须在网关层增加鉴权、限流与\n  审计访问控制；"
+      },
+      "authority": "A",
+      "impact": "P1-功能",
+      "priority": "P1",
+      "reasoning": "示例服务无鉴权是已知约束；生产网关要求为部署约束，API 用例不可直接验证",
+      "fingerprint": "dc5e780ceda4481d6b85c8b07658074a38ff848cadf8f58b3923105ed5e9cedc",
+      "status": "active"
+    }
+  ],
+  "contract_rules": [
+    {
+      "rule_key": "RK-755d80c5554f",
+      "rule_id": "CR-01",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.agreement_checked",
+      "constraint": "type=boolean; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.agreement_checked: type=boolean; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-cfb46be98a9b",
+      "rule_id": "CR-02",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.agreement_version",
+      "constraint": "type=string; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.agreement_version: type=string; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-ff2cf864a137",
+      "rule_id": "CR-03",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.city",
+      "constraint": "type=string; enum=[\"贵阳\", \"成都\", \"长沙\", \"武汉\", \"南京\"]; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.city: type=string; enum=[\"贵阳\", \"成都\", \"长沙\", \"武汉\", \"南京\"]; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-f76e39c48b0d",
+      "rule_id": "CR-04",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.id_card",
+      "constraint": "type=string; maxLength=18; minLength=18; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.id_card: type=string; maxLength=18; minLength=18; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-7e1a14f4b6a1",
+      "rule_id": "CR-05",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.idempotency_key",
+      "constraint": "type=string; maxLength=64; minLength=1; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.idempotency_key: type=string; maxLength=64; minLength=1; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-55d70cbafcf1",
+      "rule_id": "CR-06",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.mobile",
+      "constraint": "type=string; pattern=^1[3-9]\\d{9}$; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.mobile: type=string; pattern=^1[3-9]\\d{9}$; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-d9106457ce17",
+      "rule_id": "CR-07",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.name",
+      "constraint": "type=string; maxLength=20; minLength=2; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.name: type=string; maxLength=20; minLength=2; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-ca34a125ecf9",
+      "rule_id": "CR-08",
+      "transport": "http",
+      "endpoint": "POST /api/partner/register",
+      "field": "body.sms_code",
+      "constraint": "type=string; pattern=^\\d{6}$; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/register",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.sms_code: type=string; pattern=^\\d{6}$; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-70256ae39a01",
+      "rule_id": "CR-09",
+      "transport": "http",
+      "endpoint": "POST /api/partner/sms/send",
+      "field": "body.mobile",
+      "constraint": "type=string; pattern=^1[3-9]\\d{9}$; required=True",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/sms/send",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.mobile: type=string; pattern=^1[3-9]\\d{9}$; required=True"
+      },
+      "authority": "A",
+      "status": "active"
+    },
+    {
+      "rule_key": "RK-0bb256c6882e",
+      "rule_id": "CR-10",
+      "transport": "http",
+      "endpoint": "POST /api/partner/sms/send",
+      "field": "body.scene",
+      "constraint": "type=string",
+      "source": {
+        "doc": "openapi.json",
+        "section": "POST /api/partner/sms/send",
+        "kind": "explicit",
+        "version": "c4a35c232d866be47cdc40be0ce10d6131b1d09330bd137e4c34c91ca72df4d7",
+        "doc_version": null,
+        "quote": "body.scene: type=string"
+      },
+      "authority": "A",
+      "status": "active"
+    }
+  ],
+  "questions": [
+    {
+      "id": "Q-01",
+      "text": "单 IP 最近 60 分钟 20 次在 NAT/共享出口下会误伤同网用户，是否接受？是否需要白名单或按设备限流？",
+      "reason": "需要业务决策与外部网络事实",
+      "impact": "影响频控策略与边界用例",
+      "source": "docs/design.md#七、约束与实现差异 > 7.3 待业务确认",
+      "related_rule_keys": [
+        "RK-cf94631dac66"
+      ]
+    },
+    {
+      "id": "Q-02",
+      "text": "图形验证码 token 的签发方、有效期、失败上限、错误码与重放策略是什么？示例环境接受任意非空 token，生产如何联调？",
+      "reason": "依赖外部图形验证码服务的事实",
+      "impact": "CAPTCHA_INVALID 等分支在示例环境不可达",
+      "source": "docs/design.md#七、约束与实现差异 > 7.3 待业务确认",
+      "related_rule_keys": [
+        "RK-aef02461ba06",
+        "RK-27def6ca9607"
+      ]
+    },
+    {
+      "id": "Q-03",
+      "text": "同一 idempotency_key 携带不同请求体时，是否接受默认的 409 IDEMPOTENCY_KEY_CONFLICT，还是改为返回首次结果或覆盖？",
+      "reason": "属于业务策略，文档先给默认实现",
+      "impact": "影响幂等与重试用例的预期结果",
+      "source": "docs/design.md#七、约束与实现差异 > 7.3 待业务确认",
+      "related_rule_keys": [
+        "RK-b9761fab3cc1",
+        "RK-88249f9b80de"
+      ]
+    },
+    {
+      "id": "D-01",
+      "text": "频控窗口是否维持最近 24 小时/最近 60 分钟滚动窗口，还是改为自然日/自然小时？若改，采用哪个时区？",
+      "reason": "涉及业务口径与时区选择",
+      "impact": "影响频控边界用例与跨窗口重置断言",
+      "source": "docs/design.md#七、约束与实现差异 > 7.3 待业务确认",
+      "related_rule_keys": [
+        "RK-9191fe629f9b",
+        "RK-cf94631dac66",
+        "RK-5b5f731d5892"
+      ]
+    },
+    {
+      "id": "D-02",
+      "text": "生产环境注册/短信接口的响应时间、并发量与压测环境指标是多少？",
+      "reason": "示例基线不能替代生产 SLA",
+      "impact": "影响性能用例的判定基准",
+      "source": "docs/design.md#七、约束与实现差异 > 7.3 待业务确认",
+      "related_rule_keys": [
+        "RK-7255e61ae7e3"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "kind": "missing",
+      "desc": "P-04 的 audit_step 2/3/4 状态迁移与审核通过/驳回后的字段变化未定义",
+      "reason": "设计 5.3 声明由 P-04 定义，不在本服务范围",
+      "related_interfaces": [],
+      "check_dimension": "state_transition",
+      "affected_rule_keys": [
+        "RK-21a1b8ccab98"
+      ]
+    },
+    {
+      "kind": "implicit",
+      "desc": "生产环境身份证加密/散列的算法、密钥管理与轮换策略未定义",
+      "reason": "设计 4.6 只要求示例库之外加密或散列，未给实现约束",
+      "related_interfaces": [],
+      "check_dimension": "security",
+      "affected_rule_keys": [
+        "RK-8441f643b13e",
+        "RK-14cee17a910d"
+      ]
+    },
+    {
+      "kind": "implicit",
+      "desc": "协议元数据的审计/运维访问角色与授权方式未定义",
+      "reason": "设计 4.6 只写仅审计/运维后台可读，服务本身无鉴权与角色模型",
+      "related_interfaces": [
+        "POST /api/partner/register"
+      ],
+      "check_dimension": "permission",
+      "affected_rule_keys": [
+        "RK-2a847a10ae14",
+        "RK-93cccaa68d09"
+      ]
+    },
+    {
+      "kind": "implicit",
+      "desc": "示例环境图形验证码接受任意非空 token，CAPTCHA_INVALID 分支无法在示例环境触发",
+      "reason": "设计 3.3/7.1 说明示例未接入外部服务，生产契约待 Q-02 确认",
+      "related_interfaces": [
+        "POST /api/partner/sms/send"
+      ],
+      "check_dimension": "exception_flow",
+      "affected_rule_keys": [
+        "RK-aef02461ba06"
+      ]
+    }
+  ],
+  "conflicts": []
+}

@@ -60,6 +60,8 @@ astsight run --mode cases   --project order-svc   # 只执行项目级用例库�
 | `implementation-feasibility.md` | 立项前可行性调研（四来源交叉验证） | 历史 |
 | `api-test-platform-feasibility.md` | 腾讯云方案可行性专项研究 | 历史 |
 | `similar-articles.md` | 同类文章与开源项目清单 | 参考 |
+| `AstSight-使用文档.md` | **全项目使用文档**：安装/配置、C1 规则、A4 用例、C5 造数、Mock、三种运行模式、CodeGraph、Agent、产物与门禁、排错与命令速查 | 使用文档 |
+| `C1-规则生成使用文档.md` | C1 专题深入：单命令与两段式流程、需求/设计/OpenAPI 输入、`ruleset` 产物、校验门禁、重复执行与排错 | 专题 |
 | `engine/README.md` | 正式实现进度（M1 delta 闭环 / 规则→审核用例→版本化 / C5 造数 / CodeGraph 抽象） | 代码 |
 
 > **设计文档口径（v4.3，v4.5 增补多 SUT 隔离，v4.6 删除 Feign 特殊支持，v4.6.1 收紧 HTTP Mock 范围，v4.7 规则驱动 A4 与 C5a/C5b）**：`framework-capability-design.md` 与 `agent-architecture.md`
@@ -122,6 +124,12 @@ v4.2 明确三种 transport：**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）
 ```bash
 cd engine
 pip install -r requirements.txt            # langgraph / pydantic / httpx / PyYAML / pytest / fastapi / uvicorn
+
+# CodeGraph 运行时：代码感知/调用链/非 Python 项目必需。
+# 安装到用户级缓存，所有项目复用（Windows: %LOCALAPPDATA%\AstSight\codegraph，
+# Linux/macOS: ~/.local/share/astsight/codegraph）。
+python -m astsight codegraph install
+python -m astsight codegraph status
 
 # 一条命令：建临时 git 仓库 → 起示例服务 → delta 全链路
 python examples/demo_delta.py

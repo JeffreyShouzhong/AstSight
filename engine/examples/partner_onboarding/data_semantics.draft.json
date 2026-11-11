@@ -1,0 +1,282 @@
+{
+  "schema_version": 1,
+  "field_semantics": [
+    {
+      "table": "partner",
+      "column": "seq",
+      "semantic_type": "identifier",
+      "value_semantics": [],
+      "business_notes": "注册序号；partner_id 的 6 位数字部分来源于此",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner",
+      "column": "partner_id",
+      "semantic_type": "identifier",
+      "value_semantics": [],
+      "business_notes": "合伙人编号，格式为 P + 6 位序号（BR-25）；幂等重试返回同一个值",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner",
+      "column": "name",
+      "semantic_type": "text",
+      "value_semantics": [],
+      "business_notes": "2–20 个字符，允许中文、字母、空格与间隔号；纯数字或纯符号不通过（BR-02）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner",
+      "column": "mobile",
+      "semantic_type": "text",
+      "value_semantics": [],
+      "business_notes": "11 位手机号，1 开头、第二位 3–9（BR-03）；与身份证共同构成注册业务唯一键（BR-18）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner",
+      "column": "city",
+      "semantic_type": "enum",
+      "value_semantics": [
+        {"value": "贵阳", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
+        {"value": "成都", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
+        {"value": "长沙", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
+        {"value": "武汉", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
+        {"value": "南京", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]}
+      ],
+      "business_notes": "所在城市，五选一且必须显式选择（BR-11）；DDL 未加 CHECK 约束",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner",
+      "column": "id_card",
+      "semantic_type": "text",
+      "value_semantics": [],
+      "business_notes": "18 位身份证号，统一存大写；接口响应不返回，调试接口做掩码（BR-12、BR-31）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner",
+      "column": "status",
+      "semantic_type": "status",
+      "value_semantics": [
+        {"value": "pending", "meaning": "提交成功，等待审核", "evidence": "verified", "rule_keys": ["RK-21a1b8ccab98"]}
+      ],
+      "business_notes": "提交成功后固定为 pending（BR-24）",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner",
+      "column": "audit_status",
+      "semantic_type": "status",
+      "value_semantics": [
+        {"value": "pending", "meaning": "审核尚未开始", "evidence": "verified", "rule_keys": ["RK-21a1b8ccab98"]}
+      ],
+      "business_notes": "提交成功后固定为 pending（BR-24）",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner",
+      "column": "audit_step",
+      "semantic_type": "quantity",
+      "value_semantics": [
+        {"value": 1, "meaning": "第一步审核", "evidence": "verified", "rule_keys": ["RK-21a1b8ccab98"]}
+      ],
+      "business_notes": "提交成功后固定为 1（BR-24）",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner",
+      "column": "submit_at",
+      "semantic_type": "timestamp",
+      "value_semantics": [],
+      "business_notes": "提交时间；ISO 8601 UTC、秒级、Z 结尾（BR-29）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner",
+      "column": "idempotency_key",
+      "semantic_type": "text",
+      "value_semantics": [],
+      "business_notes": "幂等键，1–64 字符；重试必须沿用同一个值（BR-23）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner",
+      "column": "agreement_version",
+      "semantic_type": "text",
+      "value_semantics": [
+        {"value": "v1.0", "meaning": "当前协议版本", "evidence": "verified", "rule_keys": ["RK-cc5f2612cb7a"]}
+      ],
+      "business_notes": "勾选时展示的协议版本，当前为 v1.0（BR-17）；提交时记录（BR-34）",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner",
+      "column": "created_at",
+      "semantic_type": "timestamp",
+      "value_semantics": [],
+      "business_notes": "档案写入时间；ISO 8601 UTC、秒级、Z 结尾（BR-29）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner_seq",
+      "column": "name",
+      "semantic_type": "text",
+      "value_semantics": [
+        {"value": "partner", "meaning": "合伙人注册序号计数器", "evidence": "inferred", "rule_keys": []}
+      ],
+      "business_notes": "单行计数器，服务端在事务内递增",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner_seq",
+      "column": "value",
+      "semantic_type": "quantity",
+      "value_semantics": [],
+      "business_notes": "当前已分配的最大注册序号；下一次注册取 value+1",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner_audit_log",
+      "column": "partner_id",
+      "semantic_type": "reference",
+      "value_semantics": [],
+      "business_notes": "外键指向 partner.partner_id；提交动作写一条 submit 日志（BR-27）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner_audit_log",
+      "column": "action",
+      "semantic_type": "text",
+      "value_semantics": [
+        {"value": "submit", "meaning": "提交注册", "evidence": "verified", "rule_keys": ["RK-d2d2df562935"]}
+      ],
+      "business_notes": "提交动作的审核日志 action=submit（BR-27）",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner_audit_log",
+      "column": "from_status",
+      "semantic_type": "status",
+      "value_semantics": [],
+      "business_notes": "提交动作没有前序状态，写 NULL（BR-27）",
+      "evidence": "inferred"
+    },
+    {
+      "table": "partner_audit_log",
+      "column": "to_status",
+      "semantic_type": "status",
+      "value_semantics": [
+        {"value": "pending", "meaning": "进入待审核", "evidence": "verified", "rule_keys": ["RK-d2d2df562935"]}
+      ],
+      "business_notes": "提交动作的审核日志 to_status=pending（BR-27）",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner_audit_log",
+      "column": "audit_step",
+      "semantic_type": "quantity",
+      "value_semantics": [
+        {"value": 1, "meaning": "第一步审核", "evidence": "verified", "rule_keys": ["RK-d2d2df562935"]}
+      ],
+      "business_notes": "提交动作的审核日志 audit_step=1（BR-27）",
+      "evidence": "verified"
+    },
+    {
+      "table": "partner_audit_log",
+      "column": "created_at",
+      "semantic_type": "timestamp",
+      "value_semantics": [],
+      "business_notes": "审核日志时间；ISO 8601 UTC、秒级、Z 结尾（BR-29）",
+      "evidence": "inferred"
+    }
+  ],
+  "states": [
+    {
+      "state_key": "state_partner_registered",
+      "table_values": {
+        "partner": [
+          {
+            "seq": 0,
+            "partner_id": "P000000",
+            "name": "李四",
+            "mobile": "13900139000",
+            "city": "成都",
+            "id_card": "11010519491231002X",
+            "status": "pending",
+            "audit_status": "pending",
+            "audit_step": 1,
+            "submit_at": "2026-01-01T00:00:00Z",
+            "idempotency_key": "seed-key-000",
+            "agreement_version": "v1.0",
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      },
+      "target_state": {},
+      "evidence": "inferred",
+      "rule_keys": [
+        "RK-ef51d27c937a",
+        "RK-dc186a55a422",
+        "RK-f18646e6a101",
+        "RK-42ced5ce95ff"
+      ]
+    },
+    {
+      "state_key": "state_partner_id_card_occupied",
+      "table_values": {
+        "partner": [
+          {
+            "seq": 0,
+            "partner_id": "P000000",
+            "name": "王五",
+            "mobile": "13700137000",
+            "city": "武汉",
+            "id_card": "11010519491231002X",
+            "status": "pending",
+            "audit_status": "pending",
+            "audit_step": 1,
+            "submit_at": "2026-01-01T00:00:00Z",
+            "idempotency_key": "seed-key-001",
+            "agreement_version": "v1.0",
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      },
+      "target_state": {},
+      "evidence": "inferred",
+      "rule_keys": [
+        "RK-93bd5aec1ad5",
+        "RK-b007f22321c4"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "kind": "unseedable_runtime_state",
+      "desc": "短信频控计数保存在进程内存，无法通过 table_values 构造",
+      "reason": "冷却时间、每日/单 IP 上限、第 3 次触发图形验证码都依赖同一进程内的历史请求；catalog 只有 partner/partner_seq/partner_audit_log 三张表，没有对应存储。需要执行器重放请求或新增接口级 fixture。",
+      "affected_rule_keys": [
+        "RK-b5c2cb77d54e",
+        "RK-7912a2090739",
+        "RK-dfef9775b753",
+        "RK-e05a487fde65",
+        "RK-2e101dd5af91",
+        "RK-e397722a1497"
+      ]
+    },
+    {
+      "kind": "state_seq_semantics",
+      "desc": "状态行的 partner.seq 使用 0",
+      "reason": "示例服务的 partner_seq 计数器由应用递增，state 只能插入行、不能先更新计数器；seq=0 可保证后续注册取到 1，不与状态行冲突。生产库如果要求序号从 1 开始，需要单独的序列状态或应用级 fixture。",
+      "affected_rule_keys": ["RK-bf9a2027d9f1"]
+    }
+  ],
+  "questions": [
+    {
+      "text": "频控状态是否需要落库或提供可重置的计数接口？",
+      "reason": "当前只存在内存，C5b 无法声明可执行前置状态"
+    }
+  ]
+}

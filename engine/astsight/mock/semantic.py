@@ -83,6 +83,14 @@ def _dep_tokens(dep: dict[str, Any]) -> set[str]:
     return tokens
 
 
+def _token_in_text(token: str, text: str) -> bool:
+    """按词匹配 dep token，避免 ``sms`` 命中错误码 ``SMS_COOLDOWN``。"""
+    if token.isascii():
+        pattern = rf"(?<![a-z0-9_]){re.escape(token)}(?![a-z0-9_])"
+        return re.search(pattern, text) is not None
+    return token in text
+
+
 def _rule_matches_dep(rule: Rule, dep: dict[str, Any], *, only_dep: bool) -> bool:
     text = rule.text.lower()
     failed = any(hint in text for hint in _FAILURE_HINTS) or bool(
@@ -90,7 +98,7 @@ def _rule_matches_dep(rule: Rule, dep: dict[str, Any], *, only_dep: bool) -> boo
     )
     if not failed:
         return False
-    if any(token and token in text for token in _dep_tokens(dep)):
+    if any(token and _token_in_text(token, text) for token in _dep_tokens(dep)):
         return True
     if only_dep and any(
         word in text
@@ -295,6 +303,23 @@ def apply_mock_semantic_candidates(
                         reason=str(gap.get("reason") or "unknown")[:1_000],
                     )
                 )
+    # 框架外草案（MockSemanticDraft）把 gaps 放在顶层；这里与 per-dep gaps
+    # 一起合并，避免模型明确声明的缺口被静默丢弃。
+    for raw in payload.get("gaps") or []:
+        if not isinstance(raw, dict):
+            errors.append("gap_not_object")
+            continue
+        dep_id = str(raw.get("dep_id") or "")
+        reason = str(raw.get("reason") or "").strip()
+        if not reason:
+            errors.append(f"gap_reason_missing:{dep_id or 'global'}")
+            continue
+        if dep_id and dep_id not in deps:
+            errors.append(f"gap_dep_unknown:{dep_id}")
+            continue
+        semantic.gaps.append(
+            MockSemanticGap(dep_id=dep_id, reason=reason[:1_000])
+        )
     for raw in payload.get("questions") or []:
         if isinstance(raw, dict):
             try:

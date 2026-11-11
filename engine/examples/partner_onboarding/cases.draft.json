@@ -1,0 +1,3487 @@
+{
+  "schema_version": 1,
+  "context_id": "9bc8d1ccd52f00f89015d331ac6a6e9fd772791808346ad717d2a3a11f324a5c",
+  "ruleset_id": "rs-1be1cd3c8400d052",
+  "ruleset_hash": "0ff935397c9ae89bfadab498834a142bdcc73c49921c005f0af6bc7860f4cd7a",
+  "scope_docs": [
+    "docs/requirements.md",
+    "docs/design.md"
+  ],
+  "cases": [
+    {
+      "case_key": "sms_send_success_cooldown",
+      "title": "发送短信验证码成功返回固定 60 秒冷却",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码",
+          "quote": "`POST /api/partner/sms/send`"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 响应字段",
+          "quote": "| `cooldown_seconds` | integer | 下次可发送的间隔秒数，固定 60 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 响应字段",
+          "quote": "| `remaining_today` | integer | `max(0, 10 - 最近 24 小时已计入请求数)`，计数含本次请求 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 响应字段",
+          "quote": "| `captcha_required` | boolean | `最近 24 小时已计入请求数（含本次）>= 2`，即为后续（第 3 次起）请求要求图形验证码 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-899e2c5bc982",
+          "rule_id": "BR-33"
+        },
+        {
+          "rule_key": "RK-cbaf5b6a3bd5",
+          "rule_id": "BR-03"
+        },
+        {
+          "rule_key": "RK-70256ae39a01",
+          "rule_id": "CR-09"
+        },
+        {
+          "rule_key": "RK-e58f2db36923",
+          "rule_id": "BR-45"
+        },
+        {
+          "rule_key": "RK-af9e0cdec1ee",
+          "rule_id": "BR-46"
+        }
+      ],
+      "endpoint": "POST /api/partner/sms/send",
+      "category": "positive",
+      "priority": "P0",
+      "body": {
+        "mobile": "13800138000"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 200
+        },
+        {
+          "kind": "body_field",
+          "target": "cooldown_seconds",
+          "op": "eq",
+          "expect": 60
+        },
+        {
+          "kind": "body_field",
+          "target": "remaining_today",
+          "op": "eq",
+          "expect": 9
+        },
+        {
+          "kind": "body_field",
+          "target": "captcha_required",
+          "op": "eq",
+          "expect": false
+        }
+      ],
+      "assert_strength": "L2",
+      "rationale": "BR-33 规定 cooldown_seconds 固定 60；BR-45/BR-46 规定首次请求计数为 1，remaining_today 为 9 且 captcha_required 为 false；响应字段由契约声明。",
+      "note": null,
+      "mock_bindings": {
+        "http:host:sms-gateway.internal POST /v1/messages": "success"
+      }
+    },
+    {
+      "case_key": "sms_send_missing_mobile",
+      "title": "缺少 mobile 时返回 422 VALIDATION_ERROR",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 手机号格式错误或缺失 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.1 通用约定",
+          "quote": "| 错误响应 | `{\"error_code\": \"...\", \"message\": \"...\"}` |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        },
+        {
+          "rule_key": "RK-70256ae39a01",
+          "rule_id": "CR-09"
+        },
+        {
+          "rule_key": "RK-6892294000bf",
+          "rule_id": "BR-28"
+        }
+      ],
+      "endpoint": "POST /api/partner/sms/send",
+      "category": "negative",
+      "priority": "P0",
+      "body": {
+        "scene": "register"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-30 规定字段缺失返回 422；BR-28 规定错误体含 error_code/message。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "sms_send_mobile_second_digit_invalid",
+      "title": "手机号第二位不在 3–9 时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 请求参数",
+          "quote": "| `mobile` | string | 是 | `^1[3-9]\\d{9}$` | 11 位手机号 |"
+        },
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "手机号 11 位、1 开头、第二位 3–9"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-cbaf5b6a3bd5",
+          "rule_id": "BR-03"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        },
+        {
+          "rule_key": "RK-70256ae39a01",
+          "rule_id": "CR-09"
+        }
+      ],
+      "endpoint": "POST /api/partner/sms/send",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "mobile": "12800138000"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-03 要求第二位 3–9；格式校验失败由 BR-30/CR-09 归为 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "sms_send_scene_not_register",
+      "title": "scene 不是固定值 register 时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 请求参数",
+          "quote": "| `scene` | string | 否 | 固定 `register` | 使用场景，默认 `register` |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        },
+        {
+          "rule_key": "RK-0bb256c6882e",
+          "rule_id": "CR-10"
+        }
+      ],
+      "endpoint": "POST /api/partner/sms/send",
+      "category": "negative",
+      "priority": "P2",
+      "body": {
+        "mobile": "13800138000",
+        "scene": "other"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "设计 3.3 规定 scene 固定 register；枚举/常量校验失败按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_success_pending",
+      "title": "资料合法时注册成功并返回待审核初始状态",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册",
+          "quote": "`POST /api/partner/register`"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 响应字段",
+          "quote": "| `partner_id` | string | 合伙人编号，格式 `P` + 6 位序号 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 响应字段",
+          "quote": "| `status` | string | 固定 `pending` |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 响应字段",
+          "quote": "| `submit_at` | string | 提交时间，UTC |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.1 通用约定",
+          "quote": "| 时间格式 | ISO 8601 UTC，秒级，`Z` 结尾，如 `2026-11-04T12:30:04Z` |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 五、业务流程设计 > 5.3 状态设计",
+          "quote": "| `status` | `pending` | 合伙人状态 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 五、业务流程设计 > 5.2 注册提交流程",
+          "quote": "200，返回 partner_id 与待审核状态"
+        },
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "成功后写入 `partners`（`status=pending`、`audit_status=pending`、`audit_step=1`）并写一条审核日志，跳转 P-04"
+        },
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图",
+          "quote": "提交 → 幂等校验 → 写入 `partners` + 审核日志 → 跳 P-04"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-21a1b8ccab98",
+          "rule_id": "BR-24"
+        },
+        {
+          "rule_key": "RK-bf9a2027d9f1",
+          "rule_id": "BR-25"
+        },
+        {
+          "rule_key": "RK-9c3f7ce28514",
+          "rule_id": "BR-29"
+        },
+        {
+          "rule_key": "RK-755d80c5554f",
+          "rule_id": "CR-01"
+        },
+        {
+          "rule_key": "RK-cfb46be98a9b",
+          "rule_id": "CR-02"
+        },
+        {
+          "rule_key": "RK-ff2cf864a137",
+          "rule_id": "CR-03"
+        },
+        {
+          "rule_key": "RK-f76e39c48b0d",
+          "rule_id": "CR-04"
+        },
+        {
+          "rule_key": "RK-7e1a14f4b6a1",
+          "rule_id": "CR-05"
+        },
+        {
+          "rule_key": "RK-55d70cbafcf1",
+          "rule_id": "CR-06"
+        },
+        {
+          "rule_key": "RK-d9106457ce17",
+          "rule_id": "CR-07"
+        },
+        {
+          "rule_key": "RK-ca34a125ecf9",
+          "rule_id": "CR-08"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "positive",
+      "priority": "P0",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 200
+        },
+        {
+          "kind": "body_field",
+          "target": "status",
+          "op": "eq",
+          "expect": "pending"
+        },
+        {
+          "kind": "body_field",
+          "target": "audit_status",
+          "op": "eq",
+          "expect": "pending"
+        },
+        {
+          "kind": "body_field",
+          "target": "audit_step",
+          "op": "eq",
+          "expect": 1
+        },
+        {
+          "kind": "body_field",
+          "target": "partner_id",
+          "op": "exists"
+        },
+        {
+          "kind": "body_field",
+          "target": "submit_at",
+          "op": "exists"
+        },
+        {
+          "kind": "body_field",
+          "target": "submit_at",
+          "op": "contains",
+          "expect": "Z"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-24/BR-25/BR-29 规定响应状态、编号格式与时间格式；契约规则保证字段类型与必填。",
+      "note": "协议版本落库（BR-34）无法由注册响应断言；需求与设计在勾选时间/IP/UA 记录上存在差异，见 ruleset 冲突「协议元数据冲突」。示例服务默认不调用实名认证与核心服务（需求未定义其响应语义），因此不声明这两个下游的 Mock 绑定。",
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_name_empty",
+      "title": "姓名为空时返回 422 校验错误",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "为空、纯符号、纯数字、超 20 字 → 输入框下方提示并阻止下一步"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `name` | string | 是 | 2–20 字符 | 中文、字母、空格、`·`；不能纯数字/符号 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        },
+        {
+          "rule_key": "RK-d9106457ce17",
+          "rule_id": "CR-07"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-02/CR-07 规定姓名至少 2 字符；长度校验失败按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_name_too_long",
+      "title": "姓名超过 20 字符时返回 422 校验错误",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "2–20 个字符，允许中文、字母、空格、`·`"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `name` | string | 是 | 2–20 字符 | 中文、字母、空格、`·`；不能纯数字/符号 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        },
+        {
+          "rule_key": "RK-d9106457ce17",
+          "rule_id": "CR-07"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "boundary",
+      "priority": "P1",
+      "body": {
+        "name": "张张张张张张张张张张张张张张张张张张张张张",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-02/CR-07 规定姓名上限 20 字符；超长按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_name_pure_digits",
+      "title": "姓名为纯数字时返回 400 INVALID_NAME",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "为空、纯符号、纯数字、超 20 字 → 输入框下方提示并阻止下一步"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_NAME` | 姓名不符合业务规则 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+          "quote": "- 姓名必须至少包含一个中文或 ASCII 字母，纯空格、纯符号、纯数字均不通过；"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        },
+        {
+          "rule_key": "RK-67c225171fe7",
+          "rule_id": "BR-50"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "12345",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_NAME"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-02 明确纯数字姓名不通过；设计错误表给出 400 INVALID_NAME。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_name_pure_symbols",
+      "title": "姓名为纯符号时返回 400 INVALID_NAME",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "为空、纯符号、纯数字、超 20 字 → 输入框下方提示并阻止下一步"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_NAME` | 姓名不符合业务规则 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+          "quote": "- 姓名必须至少包含一个中文或 ASCII 字母，纯空格、纯符号、纯数字均不通过；"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        },
+        {
+          "rule_key": "RK-67c225171fe7",
+          "rule_id": "BR-50"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "!!",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_NAME"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-02 明确纯符号姓名不通过；设计错误表给出 400 INVALID_NAME。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_mobile_second_digit_invalid",
+      "title": "注册手机号第二位不在 3–9 时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "手机号 11 位、1 开头、第二位 3–9"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `mobile` | string | 是 | `^1[3-9]\\d{9}$` | 手机号 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-cbaf5b6a3bd5",
+          "rule_id": "BR-03"
+        },
+        {
+          "rule_key": "RK-55d70cbafcf1",
+          "rule_id": "CR-06"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "12800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-03/CR-06 给出手机号正则；格式失败按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_sms_code_bad_format",
+      "title": "验证码不是 6 位数字时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "验证码 6 位、5 分钟有效"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `sms_code` | string | 是 | `^\\d{6}$`，5 分钟有效 | 短信验证码；错误累计 5 次作废 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-54198c262de1",
+          "rule_id": "BR-04"
+        },
+        {
+          "rule_key": "RK-ca34a125ecf9",
+          "rule_id": "CR-08"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "12345",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-04/CR-08 要求 6 位数字验证码；正则失败按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_sms_code_wrong_value",
+      "title": "验证码取值错误时返回 400 INVALID_SMS_CODE",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_SMS_CODE` | 验证码错误，且未达到 5 次 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 五、业务流程设计 > 5.1 短信验证码流程",
+          "quote": "示例环境不接入真实短信通道，验证码固定为 `123456`，但签发时间与错误次数仍按"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-54198c262de1",
+          "rule_id": "BR-04"
+        },
+        {
+          "rule_key": "RK-6621154ef46e",
+          "rule_id": "BR-22"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "654321",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_SMS_CODE"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "设计 5.1 声明示例固定验证码 123456；错误取值由设计错误表给出 400 INVALID_SMS_CODE。",
+      "note": "验证码时效/错误次数冲突：设计 7.2 声明示例不校验时效与次数；本用例只断言取值错误分支。",
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_city_not_in_enum",
+      "title": "城市不在五市枚举内时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "枚举五选一：贵阳/成都/长沙/武汉/南京；必须显式选择，不设默认值"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `city` | string | 是 | 五市枚举，来源 `CITY_LIST` 配置 | 贵阳/成都/长沙/武汉/南京；必须显式选择，无默认值 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-ae178eedf9d4",
+          "rule_id": "BR-11"
+        },
+        {
+          "rule_key": "RK-ff2cf864a137",
+          "rule_id": "CR-03"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "深圳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-11/CR-03 规定五市枚举；非法枚举按 BR-30 返回 422。",
+      "note": "ruleset 冲突：INVALID_CITY 分支不可达（正常由 422 拦截）；城市列表来源冲突（需求配置下发 vs 设计固定枚举）。",
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_city_missing",
+      "title": "未显式选择城市时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "枚举五选一：贵阳/成都/长沙/武汉/南京；必须显式选择，不设默认值"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `city` | string | 是 | 五市枚举，来源 `CITY_LIST` 配置 | 贵阳/成都/长沙/武汉/南京；必须显式选择，无默认值 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-ae178eedf9d4",
+          "rule_id": "BR-11"
+        },
+        {
+          "rule_key": "RK-ff2cf864a137",
+          "rule_id": "CR-03"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-11 要求显式选择、不设默认值；必填缺失按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_id_card_wrong_length",
+      "title": "身份证不足 18 位时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "18 位，前 17 位数字、末位数字或 `X/x`，必须通过 GB 11643 校验位（ISO 7064 MOD 11-2）"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `id_card` | string | 是 | 18 位 | GB 11643 校验位 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-a253eb796c16",
+          "rule_id": "BR-12"
+        },
+        {
+          "rule_key": "RK-f76e39c48b0d",
+          "rule_id": "CR-04"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-12/CR-04 要求 18 位；长度失败按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_id_card_bad_checksum",
+      "title": "身份证校验位错误时返回 400 INVALID_ID_CARD",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "18 位，前 17 位数字、末位数字或 `X/x`，必须通过 GB 11643 校验位（ISO 7064 MOD 11-2）"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_ID_CARD` | 身份证格式或校验位错误 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-a253eb796c16",
+          "rule_id": "BR-12"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "110105194912310021",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_ID_CARD"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-12 要求通过 GB 11643 校验位；设计错误表给出 400 INVALID_ID_CARD。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_agreement_not_checked",
+      "title": "协议未勾选时返回 400 AGREEMENT_NOT_CHECKED",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/requirements.md",
+          "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+          "quote": "《合伙人合作协议》默认未勾选，必须用户主动勾选"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `AGREEMENT_NOT_CHECKED` | 协议未勾选 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-ee3a4096128d",
+          "rule_id": "BR-15"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P0",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": false,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "AGREEMENT_NOT_CHECKED"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-15 要求主动勾选；设计错误表给出 400 AGREEMENT_NOT_CHECKED。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_agreement_checked_missing",
+      "title": "缺少 agreement_checked 时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `agreement_checked` | boolean | 是 | 必须为 `true` | 协议已勾选 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-755d80c5554f",
+          "rule_id": "CR-01"
+        },
+        {
+          "rule_key": "RK-ee3a4096128d",
+          "rule_id": "BR-15"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "CR-01 声明 agreement_checked 必填；缺失按 BR-30 返回 422，区别于 false 的业务 400。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_agreement_version_mismatch",
+      "title": "协议版本不一致时返回 400 AGREEMENT_VERSION_MISMATCH",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `agreement_version` | string | 是 | 当前 `v1.0` | 勾选时展示的协议版本 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `AGREEMENT_VERSION_MISMATCH` | 协议版本不一致 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-b2e4ff881538",
+          "rule_id": "BR-16"
+        },
+        {
+          "rule_key": "RK-cc5f2612cb7a",
+          "rule_id": "BR-17"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P0",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v2.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "AGREEMENT_VERSION_MISMATCH"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-17 规定当前版本 v1.0；BR-16 规定版本不一致返回 400。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_idempotency_key_too_long",
+      "title": "幂等键超过 64 字符时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `idempotency_key` | string | 是 | 1–64 字符 | 幂等键，重试必须沿用 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-d5120507c6a9",
+          "rule_id": "BR-23"
+        },
+        {
+          "rule_key": "RK-7e1a14f4b6a1",
+          "rule_id": "CR-05"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "boundary",
+      "priority": "P1",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-23/CR-05 规定 1–64 字符；超长按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_idempotency_key_empty",
+      "title": "幂等键为空时返回 422",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `idempotency_key` | string | 是 | 1–64 字符 | 幂等键，重试必须沿用 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 422 | `VALIDATION_ERROR` | 字段缺失、长度/正则/枚举校验失败（含城市不在枚举内） |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-d5120507c6a9",
+          "rule_id": "BR-23"
+        },
+        {
+          "rule_key": "RK-7e1a14f4b6a1",
+          "rule_id": "CR-05"
+        },
+        {
+          "rule_key": "RK-04f39ff8eaa4",
+          "rule_id": "BR-30"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "boundary",
+      "priority": "P2",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": ""
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 422
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "VALIDATION_ERROR"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-23/CR-05 规定最小长度 1；空值按 BR-30 返回 422。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_validation_order_name_before_sms",
+      "title": "姓名规则先于验证码校验",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 校验顺序",
+          "quote": "1. 姓名规则；\n2. 短信验证码（格式、5 分钟时效、累计 5 次错误作废）；\n3. 城市枚举；\n4. 身份证格式与校验位；\n5. 协议勾选；"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_NAME` | 姓名不符合业务规则 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-6621154ef46e",
+          "rule_id": "BR-22"
+        },
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P2",
+      "body": {
+        "name": "12345",
+        "mobile": "13800138000",
+        "sms_code": "654321",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_NAME"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-22 规定姓名规则先于验证码；同时提供两类非法输入时先返回 INVALID_NAME。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_validation_order_sms_before_agreement",
+      "title": "验证码校验先于协议勾选校验",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 校验顺序",
+          "quote": "1. 姓名规则；\n2. 短信验证码（格式、5 分钟时效、累计 5 次错误作废）；\n3. 城市枚举；\n4. 身份证格式与校验位；\n5. 协议勾选；"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_SMS_CODE` | 验证码错误，且未达到 5 次 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-6621154ef46e",
+          "rule_id": "BR-22"
+        },
+        {
+          "rule_key": "RK-54198c262de1",
+          "rule_id": "BR-04"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P2",
+      "body": {
+        "name": "张三",
+        "mobile": "13800138000",
+        "sms_code": "654321",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": false,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-13800138000-001"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_SMS_CODE"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-22 规定验证码先于协议勾选；两类非法输入同时出现时先返回 INVALID_SMS_CODE。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_idempotent_retry_same_key",
+      "title": "唯一键与幂等键都相同，重试返回原档案",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "| 唯一键已存在且 `idempotency_key` 相同、请求体一致 | 返回原档案，HTTP 200，`partner_id` 不变 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 响应字段",
+          "quote": "| `partner_id` | string | 合伙人编号，格式 `P` + 6 位序号 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-54b6a8eb1318",
+          "rule_id": "BR-19"
+        },
+        {
+          "rule_key": "RK-ef51d27c937a",
+          "rule_id": "BR-18"
+        }
+      ],
+      "preconditions": [
+        {
+          "kind": "db_state",
+          "state_key": "state_partner_registered"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "positive",
+      "priority": "P0",
+      "body": {
+        "name": "李四",
+        "mobile": "13900139000",
+        "sms_code": "123456",
+        "city": "成都",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "seed-key-000"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 200
+        },
+        {
+          "kind": "body_field",
+          "target": "partner_id",
+          "op": "eq",
+          "expect": "P000000"
+        },
+        {
+          "kind": "body_field",
+          "target": "status",
+          "op": "eq",
+          "expect": "pending"
+        }
+      ],
+      "assert_strength": "L2",
+      "rationale": "BR-19 规定同一唯一键 + 同一幂等键返回原档案；预置状态中的 partner_id 为 P000000，重试应原样返回。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_duplicate_unique_key_different_idempotency",
+      "title": "唯一键相同但幂等键不同返回 409 DUPLICATE_REGISTRATION",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "| 唯一键已存在但 `idempotency_key` 不同 | 409 `DUPLICATE_REGISTRATION` |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-f18646e6a101",
+          "rule_id": "BR-20"
+        },
+        {
+          "rule_key": "RK-ef51d27c937a",
+          "rule_id": "BR-18"
+        }
+      ],
+      "preconditions": [
+        {
+          "kind": "db_state",
+          "state_key": "state_partner_registered"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P0",
+      "body": {
+        "name": "李四",
+        "mobile": "13900139000",
+        "sms_code": "123456",
+        "city": "成都",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "seed-key-999"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 409
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "DUPLICATE_REGISTRATION"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-20 规定唯一键已存在且幂等键不同时返回 409 DUPLICATE_REGISTRATION。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_mobile_already_registered",
+      "title": "手机号已注册且唯一键不同返回 409 MOBILE_ALREADY_REGISTERED",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "| 手机号已存在、唯一键不同 | 409 `MOBILE_ALREADY_REGISTERED` |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "`409 MOBILE_ALREADY_REGISTERED` 只表示手机号已注册；前端根据 P-04 查询到的"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-42ced5ce95ff",
+          "rule_id": "BR-21"
+        },
+        {
+          "rule_key": "RK-ef51d27c937a",
+          "rule_id": "BR-18"
+        },
+        {
+          "rule_key": "RK-deb60e373901",
+          "rule_id": "BR-56"
+        }
+      ],
+      "preconditions": [
+        {
+          "kind": "db_state",
+          "state_key": "state_partner_registered"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P0",
+      "body": {
+        "name": "赵六",
+        "mobile": "13900139000",
+        "sms_code": "123456",
+        "city": "南京",
+        "id_card": "110105194912310038",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "seed-key-998"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 409
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "MOBILE_ALREADY_REGISTERED"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-21 规定手机号已存在但唯一键不同时返回 409 MOBILE_ALREADY_REGISTERED；请求使用另一个合法身份证号。",
+      "note": null,
+      "mock_bindings": {},
+      "assumptions": [
+        "画像未声明 Location 响应头，因此用 409 + error_code 证明本服务不返回跳转地址；跳转逻辑属于前端/P-04。"
+      ]
+    },
+    {
+      "case_key": "register_id_card_occupied_generic_message",
+      "title": "身份证被占用返回 400 REGISTRATION_UNAVAILABLE 且不暴露可枚举文案",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "| 身份证已存在、唯一键不同 | 400 `REGISTRATION_UNAVAILABLE`（通用提示） |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "身份证占用不使用「该身份证已注册」这类可枚举文案。"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-93bd5aec1ad5",
+          "rule_id": "BR-13"
+        },
+        {
+          "rule_key": "RK-b007f22321c4",
+          "rule_id": "BR-14"
+        }
+      ],
+      "preconditions": [
+        {
+          "kind": "db_state",
+          "state_key": "state_partner_id_card_occupied"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P0",
+      "body": {
+        "name": "孙七",
+        "mobile": "13800138000",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "seed-key-997"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "REGISTRATION_UNAVAILABLE"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "ne",
+          "expect": "该身份证已注册"
+        }
+      ],
+      "assert_strength": "L1",
+      "rationale": "BR-13/BR-14 规定身份证占用返回通用 400 REGISTRATION_UNAVAILABLE，禁止使用可枚举文案；预置状态占用同一身份证。",
+      "note": null,
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "sms_send_same_mobile_within_cooldown",
+      "title": "同号 60 秒内重复发送返回 429 SMS_COOLDOWN",
+      "level": "business",
+      "category": "business",
+      "priority": "P0",
+      "endpoint": "POST /api/partner/sms/send",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+          "quote": "| 429 | `SMS_COOLDOWN` | 60 秒内重复发送 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-b5c2cb77d54e",
+          "rule_id": "BR-05"
+        }
+      ],
+      "steps": [
+        {
+          "name": "first",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138000"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "second",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138000"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 429
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "SMS_COOLDOWN"
+            }
+          ]
+        }
+      ],
+      "assert_strength": "L2",
+      "rationale": "BR-05 规定同号 60 秒内重复发送返回 429 SMS_COOLDOWN；第一次成功建立冷却窗口。",
+      "mock_bindings": {
+        "http:host:sms-gateway.internal POST /v1/messages": "success"
+      }
+    },
+    {
+      "case_key": "sms_captcha_required_from_third_request",
+      "title": "同号第 3 次请求起要求图形验证码",
+      "level": "business",
+      "category": "business",
+      "priority": "P0",
+      "endpoint": "POST /api/partner/sms/send",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 频控规则",
+          "quote": "| 图形验证码 | 同号第 3 次起 | `CAPTCHA_REQUIRED` |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+          "quote": "| 400 | `CAPTCHA_REQUIRED` | 已触发图形验证码但未提供 token |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 频控规则",
+          "quote": "每次请求都计入尝试次数，因此「第 3 次起要求图形验证码」按请求次数而非成功次数\n计算。"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-e05a487fde65",
+          "rule_id": "BR-08"
+        },
+        {
+          "rule_key": "RK-2e101dd5af91",
+          "rule_id": "BR-09"
+        },
+        {
+          "rule_key": "RK-e397722a1497",
+          "rule_id": "BR-10"
+        }
+      ],
+      "steps": [
+        {
+          "name": "first",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138001"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "second",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138001"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 429
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "SMS_COOLDOWN"
+            }
+          ]
+        },
+        {
+          "name": "third",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138001"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        }
+      ],
+      "assert_strength": "L3",
+      "rationale": "BR-08/09/10：第 2 次请求虽因冷却失败仍计入次数，因此第 3 次请求触发 CAPTCHA_REQUIRED。",
+      "mock_bindings": {
+        "http:host:sms-gateway.internal POST /v1/messages": "success"
+      }
+    },
+    {
+      "case_key": "sms_daily_limit_after_ten_requests",
+      "title": "同号当日第 11 次请求返回 429 SMS_DAILY_LIMIT",
+      "level": "business",
+      "category": "business",
+      "priority": "P0",
+      "endpoint": "POST /api/partner/sms/send",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+          "quote": "| 429 | `SMS_DAILY_LIMIT` | 单号最近 24 小时超过 10 次 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 频控规则",
+          "quote": "每次请求都计入尝试次数，因此「第 3 次起要求图形验证码」按请求次数而非成功次数\n计算。"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-9191fe629f9b",
+          "rule_id": "BR-06"
+        },
+        {
+          "rule_key": "RK-e397722a1497",
+          "rule_id": "BR-10"
+        }
+      ],
+      "steps": [
+        {
+          "name": "send_01",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_02",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 429
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "SMS_COOLDOWN"
+            }
+          ]
+        },
+        {
+          "name": "send_03",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_04",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_05",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_06",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_07",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_08",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_09",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_10",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "CAPTCHA_REQUIRED"
+            }
+          ]
+        },
+        {
+          "name": "send_11",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 429
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "SMS_DAILY_LIMIT"
+            }
+          ]
+        }
+      ],
+      "assert_strength": "L3",
+      "rationale": "BR-06/10：每次请求（含冷却/验证码失败）都计数，第 11 次请求先命中每日上限。",
+      "mock_bindings": {
+        "http:host:sms-gateway.internal POST /v1/messages": "success"
+      }
+    },
+    {
+      "case_key": "sms_ip_hourly_limit_after_twenty_requests",
+      "title": "单 IP 每小时第 21 次请求返回 429 SMS_IP_LIMIT",
+      "level": "business",
+      "category": "business",
+      "priority": "P1",
+      "endpoint": "POST /api/partner/sms/send",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+          "quote": "| 429 | `SMS_IP_LIMIT` | 单 IP 最近 60 分钟超过 20 次 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-cf94631dac66",
+          "rule_id": "BR-07"
+        }
+      ],
+      "steps": [
+        {
+          "name": "send_01",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138001"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_02",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138002"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_03",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138003"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_04",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138004"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_05",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138005"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_06",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138006"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_07",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138007"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_08",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138008"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_09",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138009"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_10",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138010"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_11",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138011"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_12",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138012"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_13",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138013"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_14",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138014"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_15",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138015"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_16",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138016"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_17",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138017"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_18",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138018"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_19",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138019"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_20",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138020"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "send_21",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138021"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 429
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "SMS_IP_LIMIT"
+            }
+          ]
+        }
+      ],
+      "assert_strength": "L3",
+      "rationale": "BR-07：前 20 个不同号码各成功一次，第 21 次请求从同一 IP 发出时命中每小时上限。",
+      "mock_bindings": {
+        "http:host:sms-gateway.internal POST /v1/messages": "success"
+      }
+    },
+    {
+      "case_key": "sms_channel_unavailable",
+      "title": "短信通道超时或失败返回 503 SMS_CHANNEL_UNAVAILABLE",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 短信通道失败",
+          "quote": "- 调用短信通道超时 5 秒；超时或失败返回 503 `SMS_CHANNEL_UNAVAILABLE`，提示"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 错误",
+          "quote": "| 503 | `SMS_CHANNEL_UNAVAILABLE` | 短信通道超时或发送失败 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-8581f236b81a",
+          "rule_id": "BR-42"
+        }
+      ],
+      "endpoint": "POST /api/partner/sms/send",
+      "category": "negative",
+      "priority": "P0",
+      "body": {
+        "mobile": "13800138021"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 503
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "SMS_CHANNEL_UNAVAILABLE"
+        },
+        {
+          "kind": "body_field",
+          "target": "message",
+          "op": "exists",
+          "expect": null
+        }
+      ],
+      "assert_strength": "L2",
+      "rationale": "BR-42 明确通道超时/失败返回 503 SMS_CHANNEL_UNAVAILABLE；Mock 注入短信网关失败分支。",
+      "assumptions": [
+        "OpenAPI 快照尚未声明 503 响应，依据 docs/design.md 3.3「短信通道失败」与错误表断言。"
+      ],
+      "mock_bindings": {
+        "http:host:sms-gateway.internal POST /v1/messages": "rule_BR-42"
+      }
+    },
+    {
+      "case_key": "sms_code_attempts_exceeded",
+      "title": "同一验证码累计 5 次错误后作废，正确验证码也返回 SMS_CODE_ATTEMPTS_EXCEEDED",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 验证码签发与时效",
+          "quote": "- 同一验证码最多允许 5 次校验失败，第 5 次失败后立即作废，必须重新获取；"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `SMS_CODE_ATTEMPTS_EXCEEDED` | 错误累计达到 5 次，验证码已作废 |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_SMS_CODE` | 验证码错误，且未达到 5 次 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-e2e269050df5",
+          "rule_id": "BR-37"
+        },
+        {
+          "rule_key": "RK-21d8574fb237",
+          "rule_id": "BR-38"
+        },
+        {
+          "rule_key": "RK-54198c262de1",
+          "rule_id": "BR-04"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P0",
+      "body": null,
+      "asserts": [],
+      "steps": [
+        {
+          "name": "send_code",
+          "endpoint": "POST /api/partner/sms/send",
+          "body": {
+            "mobile": "13800138022"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            }
+          ]
+        },
+        {
+          "name": "wrong_01",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138022",
+            "sms_code": "000000",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "attempt-key-01"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "INVALID_SMS_CODE"
+            }
+          ]
+        },
+        {
+          "name": "wrong_02",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138022",
+            "sms_code": "000000",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "attempt-key-02"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "INVALID_SMS_CODE"
+            }
+          ]
+        },
+        {
+          "name": "wrong_03",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138022",
+            "sms_code": "000000",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "attempt-key-03"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "INVALID_SMS_CODE"
+            }
+          ]
+        },
+        {
+          "name": "wrong_04",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138022",
+            "sms_code": "000000",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "attempt-key-04"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "INVALID_SMS_CODE"
+            }
+          ]
+        },
+        {
+          "name": "wrong_05",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138022",
+            "sms_code": "000000",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "attempt-key-05"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "in",
+              "expect": [
+                "INVALID_SMS_CODE",
+                "SMS_CODE_ATTEMPTS_EXCEEDED"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "correct_after_limit",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138022",
+            "sms_code": "123456",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "attempt-key-06"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 400
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "SMS_CODE_ATTEMPTS_EXCEEDED"
+            }
+          ]
+        }
+      ],
+      "assert_strength": "L3",
+      "rationale": "BR-37/BR-38：第 5 次校验失败后验证码作废，后续即使提交正确验证码也返回 SMS_CODE_ATTEMPTS_EXCEEDED。",
+      "assumptions": [
+        "第 5 次失败返回 INVALID_SMS_CODE 还是 SMS_CODE_ATTEMPTS_EXCEEDED 存在边界歧义，使用 in 断言覆盖两种设计口径。",
+        "示例环境验证码固定为 123456；用例先调用 sms/send 建立验证码记录。"
+      ],
+      "mock_bindings": {
+        "http:host:sms-gateway.internal POST /v1/messages": "success"
+      }
+    },
+    {
+      "case_key": "register_name_outer_spaces_allowed",
+      "title": "姓名首尾空白不 trim 且空格计入长度，合法姓名注册成功",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+          "quote": "- `name` 长度按 Unicode 码点计数（Python `len`），首尾空白不做 trim，空格计入长度；"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 请求参数",
+          "quote": "| `name` | string | 是 | 2–20 字符 | 中文、字母、空格、`·`；不能纯数字/符号 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-2b7d4d54be3f",
+          "rule_id": "BR-48"
+        },
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "boundary",
+      "priority": "P2",
+      "body": {
+        "name": " 张三 ",
+        "mobile": "13800138023",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-name-outer-spaces"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 200
+        },
+        {
+          "kind": "body_field",
+          "target": "status",
+          "op": "eq",
+          "expect": "pending"
+        },
+        {
+          "kind": "body_field",
+          "target": "partner_id",
+          "op": "exists",
+          "expect": null
+        }
+      ],
+      "assert_strength": "L2",
+      "rationale": "BR-48/BR-02：首尾空格不裁剪、空格计入长度，` 张三 ` 长度为 5 且包含中文，应通过姓名规则。",
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_name_fullwidth_rejected",
+      "title": "姓名包含全角字母时返回 400 INVALID_NAME",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+          "quote": "- 不允许全角字母/数字、全角空格（U+3000）及其他符号；"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_NAME` | 姓名不符合业务规则 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-73a9395ce979",
+          "rule_id": "BR-49"
+        },
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P1",
+      "body": {
+        "name": "ＡＢ",
+        "mobile": "13800138026",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-name-fullwidth"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_NAME"
+        }
+      ],
+      "assert_strength": "L2",
+      "rationale": "BR-49/BR-02：全角字母不在允许字符集内，应由姓名业务规则返回 400 INVALID_NAME。",
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_name_spaces_only",
+      "title": "姓名只有空格时返回 400 INVALID_NAME",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+          "quote": "- 姓名必须至少包含一个中文或 ASCII 字母，纯空格、纯符号、纯数字均不通过；"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+          "quote": "| 400 | `INVALID_NAME` | 姓名不符合业务规则 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-67c225171fe7",
+          "rule_id": "BR-50"
+        },
+        {
+          "rule_key": "RK-fcdb6785d7aa",
+          "rule_id": "BR-02"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P2",
+      "body": {
+        "name": "  ",
+        "mobile": "13800138027",
+        "sms_code": "123456",
+        "city": "贵阳",
+        "id_card": "11010519491231002X",
+        "agreement_checked": true,
+        "agreement_version": "v1.0",
+        "idempotency_key": "reg-name-spaces-only"
+      },
+      "asserts": [
+        {
+          "kind": "status_code",
+          "op": "eq",
+          "expect": 400
+        },
+        {
+          "kind": "body_field",
+          "target": "error_code",
+          "op": "eq",
+          "expect": "INVALID_NAME"
+        }
+      ],
+      "assert_strength": "L2",
+      "rationale": "BR-50/BR-02：姓名长度为 2 满足长度约束，但不含任何中文或 ASCII 字母，应返回 400 INVALID_NAME。",
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_id_card_lowercase_normalized",
+      "title": "身份证末位小写 x 转大写后与同一业务唯一键匹配",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 字段规范化与姓名规则",
+          "quote": "- `id_card` 与业务唯一键中的身份证统一转大写后再比较与入库。"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "| 唯一键已存在且 `idempotency_key` 相同、请求体一致 | 返回原档案，HTTP 200，`partner_id` 不变 |"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-e1d1fc36b631",
+          "rule_id": "BR-51"
+        },
+        {
+          "rule_key": "RK-ef51d27c937a",
+          "rule_id": "BR-18"
+        },
+        {
+          "rule_key": "RK-54b6a8eb1318",
+          "rule_id": "BR-19"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "business",
+      "priority": "P1",
+      "body": null,
+      "asserts": [],
+      "steps": [
+        {
+          "name": "first_lowercase",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138024",
+            "sms_code": "123456",
+            "city": "贵阳",
+            "id_card": "11010519491231002x",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "reg-lower-x"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            },
+            {
+              "kind": "body_field",
+              "target": "partner_id",
+              "op": "exists",
+              "expect": null
+            }
+          ]
+        },
+        {
+          "name": "second_uppercase_same_key",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138024",
+            "sms_code": "123456",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "reg-lower-x"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            },
+            {
+              "kind": "body_field",
+              "target": "partner_id",
+              "op": "eq",
+              "expect": {
+                "$ref": "first_lowercase.partner_id"
+              }
+            }
+          ]
+        }
+      ],
+      "assert_strength": "L3",
+      "rationale": "BR-51/BR-18/BR-19：小写 x 与大写 X 归一化后属于同一业务唯一键和同一请求体，第二次应返回首次 partner_id。",
+      "mock_bindings": {}
+    },
+    {
+      "case_key": "register_idempotency_key_conflict",
+      "title": "同唯一键同幂等键但请求体不一致返回 409 IDEMPOTENCY_KEY_CONFLICT",
+      "level": "business",
+      "transport": "http",
+      "coverage_role": "primary",
+      "requirement_refs": [
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "| 唯一键已存在且 `idempotency_key` 相同、请求体不同 | 409 `IDEMPOTENCY_KEY_CONFLICT` |"
+        },
+        {
+          "doc": "docs/design.md",
+          "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 幂等与重复注册",
+          "quote": "请求体一致性按 `name`、`mobile`、`id_card`（大写）、`city`、`agreement_version`\n比较；任一字段变化视为不同请求。"
+        }
+      ],
+      "rule_refs": [
+        {
+          "rule_key": "RK-b9761fab3cc1",
+          "rule_id": "BR-54"
+        },
+        {
+          "rule_key": "RK-88249f9b80de",
+          "rule_id": "BR-55"
+        },
+        {
+          "rule_key": "RK-54b6a8eb1318",
+          "rule_id": "BR-19"
+        }
+      ],
+      "endpoint": "POST /api/partner/register",
+      "category": "negative",
+      "priority": "P0",
+      "body": null,
+      "asserts": [],
+      "steps": [
+        {
+          "name": "first_submit",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "张三",
+            "mobile": "13800138025",
+            "sms_code": "123456",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "reg-conflict"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 200
+            },
+            {
+              "kind": "body_field",
+              "target": "partner_id",
+              "op": "exists",
+              "expect": null
+            }
+          ]
+        },
+        {
+          "name": "second_changed_name",
+          "endpoint": "POST /api/partner/register",
+          "body": {
+            "name": "李四",
+            "mobile": "13800138025",
+            "sms_code": "123456",
+            "city": "贵阳",
+            "id_card": "11010519491231002X",
+            "agreement_checked": true,
+            "agreement_version": "v1.0",
+            "idempotency_key": "reg-conflict"
+          },
+          "asserts": [
+            {
+              "kind": "status_code",
+              "op": "eq",
+              "expect": 409
+            },
+            {
+              "kind": "body_field",
+              "target": "error_code",
+              "op": "eq",
+              "expect": "IDEMPOTENCY_KEY_CONFLICT"
+            }
+          ]
+        }
+      ],
+      "assert_strength": "L3",
+      "rationale": "BR-54/BR-55/BR-19：业务唯一键与幂等键相同但 name 变化，请求体视为不一致，应返回 409 而不是首次档案。",
+      "mock_bindings": {}
+    }
+  ],
+  "uncovered_requirements": [
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档",
+      "reason": "文档版本/范围说明，无可执行接口行为。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 一、概述 > 1.2 建设目标",
+      "reason": "建设目标为背景说明，无可观测接口行为。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 一、概述 > 1.3 不在本期范围",
+      "reason": "明确不在本期范围，无法构造用例。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 二、总体设计 > 2.1 系统上下文",
+      "reason": "系统上下文与前后端职责说明，无接口行为可断言。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 二、总体设计 > 2.2 技术选型",
+      "reason": "技术选型说明，不是接口行为。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 二、总体设计 > 2.3 模块划分",
+      "reason": "模块划分与分层约束，无法通过接口直接观测。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.2 健康检查",
+      "reason": "健康检查无业务规则引用，不属于本期业务用例。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 图形验证码契约",
+      "reason": "图形验证码由外部服务签发，示例环境接受任意非空 token，CAPTCHA_INVALID 分支不可达。",
+      "rule_keys": [
+        "RK-27def6ca9607",
+        "RK-aef02461ba06"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 城市列表配置",
+      "reason": "CITY_LIST 配置在服务启动时加载，当前画像与 Mock 无法切换为空/失败配置。",
+      "rule_keys": [
+        "RK-0f04fc213b28",
+        "RK-2270b37d1605"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 协议元数据",
+      "reason": "协议元数据仅落库，未通过响应字段或画像内调试接口暴露；需数据库断言或专用测试接口。",
+      "rule_keys": [
+        "RK-688ec12eb515",
+        "RK-83dbe1f39182",
+        "RK-c401b0c2729a",
+        "RK-c786351e5661",
+        "RK-e0400def32f3"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.5 测试支持接口",
+      "reason": "测试支持接口不在 OpenAPI 画像范围，无法通过被测接口断言。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.6 OpenAPI 快照",
+      "reason": "OpenAPI 快照生成说明，不是接口行为。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.1 实体关系",
+      "reason": "数据库实体关系为内部结构，当前画像未暴露可断言接口。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.2 partner（合伙人主档）",
+      "reason": "主档字段仅落库，响应不返回身份证/协议元数据等字段。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.3 partner_audit_log（审核日志）",
+      "reason": "审核日志仅落库，画像不含可读取日志的接口。",
+      "rule_keys": [
+        "RK-d2d2df562935"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.4 partner_seq（序号表）",
+      "reason": "序号表为内部实现，接口只暴露 partner_id。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.5 事务与并发",
+      "reason": "事务回滚与真实并发冲突无法用单进程顺序请求构造。",
+      "rule_keys": [
+        "RK-d88ca5c53771",
+        "RK-dab1ae36c5fb",
+        "RK-ff48f61206c3"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 四、数据库设计 > 4.6 数据安全",
+      "reason": "数据安全约束涉及日志、掩码与调试接口，当前画像无法直接观测。",
+      "rule_keys": [
+        "RK-14cee17a910d",
+        "RK-2a847a10ae14",
+        "RK-8441f643b13e",
+        "RK-93cccaa68d09"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 六、非功能设计",
+      "reason": "性能基线需要压测环境与并发统计，单接口用例无法验证。",
+      "rule_keys": [
+        "RK-7255e61ae7e3"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 七、约束与实现差异 > 7.1 已知约束",
+      "reason": "生产网关鉴权/部署约束，示例服务无鉴权且画像不含网关。",
+      "rule_keys": [
+        "RK-60baf9d77c09"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 七、约束与实现差异 > 7.2 与需求文档的差异",
+      "reason": "部署/差异说明，无接口行为可断言。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 七、约束与实现差异 > 7.3 待业务确认",
+      "reason": "待业务确认项，按用户意见作为信息项保留，不阻塞用例。"
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 八、部署与运行",
+      "reason": "该 section 的规则依赖不可观测状态、外部时钟/服务或配置，当前接口与 Mock 无法构造。"
+    },
+    {
+      "doc": "docs/requirements.md",
+      "section": "合伙人注册需求文档",
+      "reason": "文档版本/范围说明，无可执行接口行为。"
+    },
+    {
+      "doc": "docs/requirements.md",
+      "section": "合伙人注册需求文档 > 四、需求背景",
+      "reason": "需求背景为业务动机，不定义接口行为。"
+    },
+    {
+      "doc": "docs/requirements.md",
+      "section": "合伙人注册需求文档 > 五、需求范围 > 5.1 本次做",
+      "reason": "需求范围说明，不定义可执行接口约束。"
+    },
+    {
+      "doc": "docs/requirements.md",
+      "section": "合伙人注册需求文档 > 六、功能详细说明 > 6.1 产品流程图 > 6.2.1 P-03 合伙人注册（p-register）",
+      "reason": "该 section 已有关联用例，但以下规则依赖不可观测状态、外部时钟/服务或配置，当前接口与 Mock 无法单独构造。",
+      "rule_keys": [
+        "RK-6ef0b7b08ea3",
+        "RK-d869bfddf8e8"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 验证码签发与时效",
+      "reason": "该 section 已有关联用例，但以下规则依赖不可观测状态、外部时钟/服务或配置，当前接口与 Mock 无法单独构造。",
+      "rule_keys": [
+        "RK-616729cde108",
+        "RK-9749d67fe795"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.4 提交注册 > 错误",
+      "reason": "该 section 已有关联用例，但以下规则依赖不可观测状态、外部时钟/服务或配置，当前接口与 Mock 无法单独构造。",
+      "rule_keys": [
+        "RK-84c646a8f260"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 短信通道失败",
+      "reason": "该 section 已有关联用例，但以下规则依赖不可观测状态、外部时钟/服务或配置，当前接口与 Mock 无法单独构造。",
+      "rule_keys": [
+        "RK-1c52485c015e",
+        "RK-4f91ae1eb7a3"
+      ]
+    },
+    {
+      "doc": "docs/design.md",
+      "section": "合伙人注册服务 · 设计文档 > 三、接口设计 > 3.3 发送短信验证码 > 频控规则",
+      "reason": "该 section 已有关联用例，但以下规则依赖不可观测状态、外部时钟/服务或配置，当前接口与 Mock 无法单独构造。",
+      "rule_keys": [
+        "RK-5b5f731d5892"
+      ]
+    }
+  ]
+}

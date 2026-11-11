@@ -1,0 +1,386 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AstSight Partner Onboarding Example",
+    "description": "最小示例：P-03 合伙人注册。固定验证码 123456，仅供自动化测试。",
+    "version": "1.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/partner/sms/send": {
+      "post": {
+        "tags": [
+          "partner"
+        ],
+        "summary": "Send Sms",
+        "operationId": "send_sms_api_partner_sms_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendSmsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendSmsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "手机号非法或缺少图形验证码",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求体字段校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "频控命中",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "短信通道不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/partner/register": {
+      "post": {
+        "tags": [
+          "partner"
+        ],
+        "summary": "Register",
+        "operationId": "register_api_partner_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段校验失败或资料不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "重复注册或幂等键冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求体字段校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "城市列表配置不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "properties": {
+          "error_code": {
+            "type": "string",
+            "title": "Error Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error_code",
+          "message"
+        ],
+        "title": "ErrorResponse"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 2,
+            "title": "Name",
+            "description": "2–20 个字符，允许中文、字母、空格与间隔号",
+            "examples": [
+              "张三"
+            ]
+          },
+          "mobile": {
+            "type": "string",
+            "pattern": "^1[3-9]\\d{9}$",
+            "title": "Mobile",
+            "description": "11 位手机号",
+            "examples": [
+              "13800138000"
+            ]
+          },
+          "sms_code": {
+            "type": "string",
+            "pattern": "^\\d{6}$",
+            "title": "Sms Code",
+            "description": "6 位数字验证码；示例服务固定为 123456",
+            "examples": [
+              "123456"
+            ]
+          },
+          "city": {
+            "type": "string",
+            "enum": [
+              "贵阳",
+              "成都",
+              "长沙",
+              "武汉",
+              "南京"
+            ],
+            "title": "City",
+            "description": "城市枚举五选一"
+          },
+          "id_card": {
+            "type": "string",
+            "maxLength": 18,
+            "minLength": 18,
+            "title": "Id Card",
+            "description": "18 位身份证号，必须通过 GB 11643 校验位",
+            "examples": [
+              "11010519491231002X"
+            ]
+          },
+          "agreement_checked": {
+            "type": "boolean",
+            "title": "Agreement Checked",
+            "description": "协议必须由用户主动勾选"
+          },
+          "agreement_version": {
+            "type": "string",
+            "title": "Agreement Version",
+            "description": "勾选时展示的协议版本；当前为 v1.0",
+            "examples": [
+              "v1.0"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "description": "注册提交幂等键；重试必须沿用同一个值",
+            "examples": [
+              "reg-13800138000-001"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "mobile",
+          "sms_code",
+          "city",
+          "id_card",
+          "agreement_checked",
+          "agreement_version",
+          "idempotency_key"
+        ],
+        "title": "RegisterRequest"
+      },
+      "RegisterResponse": {
+        "properties": {
+          "partner_id": {
+            "type": "string",
+            "title": "Partner Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "pending",
+            "title": "Status"
+          },
+          "audit_status": {
+            "type": "string",
+            "const": "pending",
+            "title": "Audit Status"
+          },
+          "audit_step": {
+            "type": "integer",
+            "const": 1,
+            "title": "Audit Step"
+          },
+          "submit_at": {
+            "type": "string",
+            "title": "Submit At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "partner_id",
+          "status",
+          "audit_status",
+          "audit_step",
+          "submit_at"
+        ],
+        "title": "RegisterResponse"
+      },
+      "SendSmsRequest": {
+        "properties": {
+          "mobile": {
+            "type": "string",
+            "pattern": "^1[3-9]\\d{9}$",
+            "title": "Mobile",
+            "description": "11 位手机号，1 开头、第二位 3–9",
+            "examples": [
+              "13800138000"
+            ]
+          },
+          "captcha_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captcha Token",
+            "description": "图形验证码 token；第 3 次起必填，示例服务接受任意非空值"
+          },
+          "scene": {
+            "type": "string",
+            "const": "register",
+            "title": "Scene",
+            "default": "register"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mobile"
+        ],
+        "title": "SendSmsRequest"
+      },
+      "SendSmsResponse": {
+        "properties": {
+          "cooldown_seconds": {
+            "type": "integer",
+            "title": "Cooldown Seconds",
+            "description": "距离下次可发送的秒数"
+          },
+          "remaining_today": {
+            "type": "integer",
+            "title": "Remaining Today",
+            "description": "当日剩余可尝试次数"
+          },
+          "captcha_required": {
+            "type": "boolean",
+            "title": "Captcha Required",
+            "description": "后续是否要求图形验证码"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cooldown_seconds",
+          "remaining_today",
+          "captcha_required"
+        ],
+        "title": "SendSmsResponse"
+      }
+    }
+  }
+}

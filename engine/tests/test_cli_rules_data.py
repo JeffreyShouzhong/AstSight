@@ -39,7 +39,11 @@ def test_rules_prepare_cli_writes_context_and_a1_prompt(
 def _extract_draft(user: str) -> dict:
     """模拟模型：从上下文视图里选一个 section，产出带原文引用的草案。"""
     context = json.loads(user)["context"]
-    document = context["documents"][0]
+    document = next(
+        doc
+        for doc in context["documents"]
+        if doc["doc"].endswith("requirements.md")
+    )
     section = document["sections"][0]
     quote = section["text"].splitlines()[0].lstrip("- ").strip()
     return {
@@ -138,6 +142,45 @@ def test_rules_extract_dry_run_does_not_write_ruleset(
     assert payload["written"] is False
     assert not (project / "ruleset.json").exists()
     assert not (project / "ruleset.md").exists()
+
+
+def test_rules_c1_accepts_optional_design_and_openapi(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    project = _copy_example(tmp_path)
+    design = project / "docs" / "design.md"
+    design.write_text("# 设计\n\n注册接口返回 200。\n", encoding="utf-8")
+    # 明确验证“无 OpenAPI 也能完成 C1”，而不触发项目内自动发现。
+    (project / "openapi.json").unlink()
+    monkeypatch.setattr("astsight.cli._rules_llm", lambda: _ExtractLLM())
+
+    code = main(
+        [
+            "rules",
+            "c1",
+            "--project",
+            str(project),
+            "--requirements",
+            "docs/requirements.md",
+            "--design",
+            "docs/design.md",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["written"] is True
+    assert payload["contract_rules"] == 0
+    assert "openapi_missing" in payload["warnings"]
+    assert (project / "ruleset.json").is_file()
+    assert (project / "ruleset.md").is_file()
+
+    context = json.loads(Path(payload["context"]).read_text(encoding="utf-8"))
+    assert {document["doc"] for document in context["documents"]} == {
+        "docs/requirements.md",
+        "docs/design.md",
+    }
 
 
 def test_rules_import_cli_writes_review_markdown(tmp_path: Path, capsys) -> None:

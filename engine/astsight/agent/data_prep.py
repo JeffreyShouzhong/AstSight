@@ -174,6 +174,19 @@ def _case_payload(case: TestCase) -> dict[str, Any]:
             "headers": case.headers,
             "body": case.body,
         },
+        "steps": [
+            {
+                "name": step.name,
+                "endpoint": step.endpoint,
+                "request": {
+                    "path_params": step.path_params,
+                    "query": step.query,
+                    "headers": step.headers,
+                    "body": step.body,
+                },
+            }
+            for step in case.steps
+        ],
         "mock_bindings": dict(case.mock_bindings),
     }
 

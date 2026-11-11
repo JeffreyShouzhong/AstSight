@@ -98,6 +98,57 @@ def _synthetic_routes(operations: list[Any]) -> list[dict[str, Any]]:
     return routes
 
 
+def _merge_routes_with_operations(
+    routes: list[dict[str, Any]], operations: list[Any]
+) -> list[dict[str, Any]]:
+    """用代码路由的真实 handler 补 OpenAPI 端点。
+
+    A4 只设计契约接口，代码里独有的内部路由（如 `/_reset`）不进上下文；
+    但命中 OpenAPI 的路由保留 handler/file/source，供下游扫描使用。
+    """
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for route in routes:
+        method = str(route.get("method") or "").upper()
+        path = str(route.get("path") or "")
+        if method and path:
+            index.setdefault((method, normalize_path(path)), route)
+    merged: list[dict[str, Any]] = []
+    for operation in operations:
+        key = (operation.method.upper(), normalize_path(operation.path))
+        matched = index.get(key)
+        if matched is None:
+            merged.append(
+                {
+                    "method": operation.method,
+                    "path": operation.path,
+                    "handler": f"{operation.method} {operation.path}",
+                    "file": "",
+                    "source": "openapi",
+                    "confidence": "verified",
+                }
+            )
+            continue
+        merged.append({**matched, "method": operation.method, "path": operation.path})
+    return merged
+
+
+def _model_payload(value: Any | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value if isinstance(value, dict) else None
+
+
+def _has_code_routes(routes: list[dict[str, Any]]) -> bool:
+    """至少一条路由来自代码且有 handler；纯 OpenAPI 补入项不算。"""
+    return any(
+        str(route.get("source") or "") != "openapi"
+        and str(route.get("handler") or "").strip()
+        for route in routes
+    )
+
+
 def _canonical_routes(routes: list[dict[str, Any]]) -> list[dict[str, str]]:
     """路由的稳定投影：用于 context_id，不把偶然顺序带进身份。"""
     items = [
@@ -151,6 +202,9 @@ def build_context(
     routes: list[dict[str, Any]] | None = None,
     changed_apis: list[dict[str, Any]] | None = None,
     codegraph_client: Any | None = None,
+    data_catalog: Any | None = None,
+    mock_semantic: Any | None = None,
+    extra_warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     project_path = Path(project).resolve()
     if not project_path.is_dir():
@@ -162,7 +216,7 @@ def build_context(
     if not documents:
         raise ContextError("需求文档目录中没有 .md/.markdown/.txt 文件")
 
-    warnings: list[str] = []
+    warnings: list[str] = list(extra_warnings or [])
     source = discover_openapi(
         project_path,
         _resolve_local_source(openapi, project_path) if openapi else None,
@@ -185,7 +239,11 @@ def build_context(
         warnings.append("openapi_missing")
 
     if routes:
-        effective_routes = list(routes)
+        effective_routes = (
+            _merge_routes_with_operations(routes, operations)
+            if operations
+            else list(routes)
+        )
         routes_source = (
             "openapi"
             if all(
@@ -214,14 +272,20 @@ def build_context(
     document_payload = [document.model_dump(mode="json") for document in documents]
     doc_versions = {document.doc: document.version for document in documents}
     routes_hash = sha256_json(_canonical_routes(effective_routes))
-    context_id = sha256_json(
-        {
-            "schema_version": CONTEXT_SCHEMA_VERSION,
-            "documents": document_fingerprint(documents),
-            "openapi_sha256": openapi_hash,
-            "routes_sha256": routes_hash,
-        }
-    )
+    catalog_payload = _model_payload(data_catalog)
+    mock_payload = _model_payload(mock_semantic)
+    identity: dict[str, Any] = {
+        "schema_version": CONTEXT_SCHEMA_VERSION,
+        "documents": document_fingerprint(documents),
+        "openapi_sha256": openapi_hash,
+        "routes_sha256": routes_hash,
+    }
+    # 只在实际提供时进入身份，避免没有造数/Mock 输入的项目 context_id 漂移。
+    if catalog_payload is not None:
+        identity["data_catalog_sha256"] = sha256_json(catalog_payload)
+    if mock_payload is not None:
+        identity["mock_semantics_sha256"] = sha256_json(mock_payload)
+    context_id = sha256_json(identity)
 
     openapi_info: dict[str, Any] = {}
     if source:
@@ -251,6 +315,8 @@ def build_context(
         "changed_apis": list(changed_apis or []),
         "profiles": profiles,
         "profile_unmapped": unmapped,
+        "data_catalog": catalog_payload,
+        "mock_semantics": mock_payload,
         "excluded_sections": _excluded_sections(documents),
         "allowed_assert_kinds": {
             "status_code": ["eq", "in", "between"],
@@ -385,6 +451,8 @@ def prepare_context(
     codegraph: str = "auto",
     codegraph_module_root: str | None = None,
     full_index: bool | None = None,
+    data_catalog: Any | None = None,
+    mock_semantic: Any | None = None,
 ) -> PreparedContext:
     project_path = Path(project).resolve()
     source = discover_openapi(
@@ -392,17 +460,27 @@ def prepare_context(
         _resolve_local_source(openapi, project_path) if openapi else None,
         base_url,
     )
-    if routes is None and scan_routes and not source:
-        # 没有 API 契约时，接口事实只能从代码补：路由插件/CodeGraph 给出
-        # method+path+handler，字段仍标 contract_incomplete，不猜。
-        scanned, _audit, scanned_client, _notes = inventory_routes(
-            project_path,
-            codegraph=codegraph,
-            codegraph_module_root=codegraph_module_root,
-            full_index=full_index,
-        )
-        routes = scanned or None
-        codegraph_client = codegraph_client or scanned_client
+    extra_warnings: list[str] = []
+    if routes is None and scan_routes:
+        # 有 OpenAPI 也要扫代码：契约给字段，代码给真实 handler 和下游依赖。
+        # 纯 OpenAPI 项目扫不到代码路由时保持 routes=None，回退到合成路由，
+        # 不改变既有 context_id。
+        try:
+            scanned, _audit, scanned_client, _notes = inventory_routes(
+                project_path,
+                codegraph=codegraph,
+                codegraph_module_root=codegraph_module_root,
+                full_index=full_index,
+                openapi_source=source,
+            )
+        except Exception as exc:  # 路由扫描是增强证据，失败不阻断上下文生成
+            extra_warnings.append(
+                f"route_scan_failed:{type(exc).__name__}: {exc}"[:300]
+            )
+        else:
+            if _has_code_routes(scanned):
+                routes = scanned
+                codegraph_client = codegraph_client or scanned_client
     context = build_context(
         project,
         requirements,
@@ -411,6 +489,9 @@ def prepare_context(
         routes=routes,
         changed_apis=changed_apis,
         codegraph_client=codegraph_client,
+        data_catalog=data_catalog,
+        mock_semantic=mock_semantic,
+        extra_warnings=extra_warnings,
     )
     return write_context(context, project=project, out=out)
 

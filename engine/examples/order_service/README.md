@@ -29,8 +29,10 @@ python -m uvicorn app:app --host 127.0.0.1 --port 8010
 `docs/` 是需求→用例流程的输入样例：
 
 - `api-design.md`：5 个接口的字段表与约束；
-- `requirements.md`：订单状态流转需求（其中 pay/cancel 需要前置状态）；
-- `PRD-sample.md`：独立的合伙人注册/审核/工作台 PRD，仅作文档解析样例，不参与订单服务覆盖率。
+- `requirements.md`：订单状态流转需求（其中 pay/cancel 需要前置状态）。
+
+合伙人注册的最小需求样本文档移到了
+`../partner_onboarding/docs/requirements.md`，不再放在订单服务目录下。
 
 `case_samples/cases.draft.json` 是人工/Skill 产出的草案样例：
 

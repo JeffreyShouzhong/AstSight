@@ -14,6 +14,7 @@ from astsight.cases.draft import (
 )
 from astsight.cases.requirements import parse_sections, read_documents
 from astsight.cases.validate import validate_draft
+from contracts import DataCatalog, MockSemantic, Rule, RuleSet, RuleSource
 
 API_DOC = """# 订单服务
 
@@ -494,3 +495,133 @@ def test_assertion_grounding_warning(tmp_path: Path) -> None:
     )
     result = validate_draft(_draft(context, [case]), context, project=project)
     assert any(item.code == "assertion.not_grounded" for item in result.warnings)
+
+
+def test_error_response_fields_and_codes_are_contract_facts(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    spec = json.loads((project / "openapi.json").read_text(encoding="utf-8"))
+    spec["components"] = {
+        "schemas": {
+            "ErrorResponse": {
+                "type": "object",
+                "required": ["error_code", "message"],
+                "properties": {
+                    "error_code": {"type": "string"},
+                    "message": {"type": "string"},
+                },
+            }
+        }
+    }
+    spec["paths"]["/orders"]["post"]["responses"]["400"] = {
+        "description": "bad request",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+            }
+        },
+    }
+    (project / "openapi.json").write_text(
+        json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+    )
+
+    context = build_context(project, ["docs/api.md"])
+    profile = next(p for p in context["profiles"] if p["endpoint"] == "POST /orders")
+
+    assert profile["response_fields"]["400"] == ["error_code", "message"]
+    assert profile["error_codes"] == [400, 422]
+
+
+def test_prepare_context_uses_code_handlers_and_drops_internal_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    scanned = [
+        {
+            "method": "POST",
+            "path": "/orders",
+            "handler": "create_order",
+            "file": "app.py",
+            "source": "graph_repaired",
+            "confidence": "verified",
+        },
+        {
+            "method": "POST",
+            "path": "/_reset",
+            "handler": "reset",
+            "file": "app.py",
+            "source": "graph_repaired",
+            "confidence": "verified",
+        },
+    ]
+    seen: dict = {}
+
+    def fake_inventory(project_path: Path, **kwargs):
+        seen.update(kwargs)
+        return scanned, {}, None, []
+
+    monkeypatch.setattr("astsight.cases.context.inventory_routes", fake_inventory)
+
+    prepared = prepare_context(project, ["docs/api.md"])
+    endpoints = {p["endpoint"]: p for p in prepared.context["profiles"]}
+
+    assert seen["openapi_source"]
+    assert endpoints["POST /orders"]["handler"] == "create_order"
+    assert "POST /_reset" not in endpoints
+
+
+def test_context_packages_catalog_and_mock_semantics(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    baseline = build_context(project, ["docs/api.md"])
+    catalog = DataCatalog(generated_at="2026-11-09T00:00:00Z")
+    semantic = MockSemantic(generated_at="2026-11-09T00:00:00Z")
+
+    enriched = build_context(
+        project,
+        ["docs/api.md"],
+        data_catalog=catalog,
+        mock_semantic=semantic,
+    )
+
+    assert enriched["data_catalog"]["schema_version"] == 1
+    assert enriched["mock_semantics"]["schema_version"] == 1
+    assert enriched["context_id"] != baseline["context_id"]
+
+
+def test_rule_uncovered_warning_until_declared(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    context = build_context(project, ["docs/api.md"])
+    ruleset = RuleSet(
+        ruleset_id="rs-test",
+        rules=[
+            Rule(
+                rule_key="RK-test",
+                rule_id="BR-01",
+                text="quantity 必须在 1 到 99 之间",
+                source=RuleSource(
+                    doc="docs/api.md", section="订单服务 > POST /orders"
+                ),
+            )
+        ],
+    )
+
+    result = validate_draft(
+        _draft(context, [_case()]), context, project=project, ruleset=ruleset
+    )
+    assert any(item.code == "rule.uncovered" for item in result.warnings)
+
+    declared = _draft(
+        context,
+        [_case()],
+        uncovered_requirements=[
+            {
+                "doc": "docs/api.md",
+                "section": "订单服务 > POST /orders",
+                "reason": "需要多请求或人工构造",
+                "rule_keys": ["RK-test"],
+            }
+        ],
+    )
+    result = validate_draft(
+        declared, context, project=project, ruleset=ruleset
+    )
+    assert not any(item.code == "rule.uncovered" for item in result.warnings)

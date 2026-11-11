@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from contracts import (
     CaseEntry,
@@ -285,13 +285,74 @@ def _review_json(proposal: dict[str, Any]) -> dict[str, Any]:
 
 
 def _request_summary(candidate: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         "path_params": candidate.get("path_params") or {},
         "query": candidate.get("query") or {},
         "headers": candidate.get("headers") or {},
         "body": candidate.get("body"),
         "mock_bindings": candidate.get("mock_bindings") or {},
     }
+    if candidate.get("steps"):
+        summary["steps"] = candidate["steps"]
+    return summary
+
+
+def _step_request_summary(step: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "path_params": step.get("path_params") or {},
+        "query": step.get("query") or {},
+        "headers": step.get("headers") or {},
+        "body": step.get("body"),
+    }
+
+
+def _conflict_topics(
+    candidate: dict[str, Any], ruleset: RuleSet | None
+) -> list[str]:
+    if ruleset is None:
+        return []
+    keys = {
+        str(ref.get("rule_key") or "")
+        for ref in candidate.get("rule_refs") or []
+        if ref.get("rule_key")
+    }
+    topics: list[str] = []
+    for conflict in ruleset.conflicts:
+        if keys & set(conflict.rule_keys) and conflict.topic not in topics:
+            topics.append(conflict.topic)
+    return topics
+
+
+def _review_flags(
+    item: dict[str, Any], ruleset: RuleSet | None
+) -> tuple[list[str], list[str]]:
+    candidate = item.get("candidate") or {}
+    topics = _conflict_topics(candidate, ruleset)
+    flags: list[str] = []
+    if topics:
+        flags.append("规则冲突")
+    if candidate.get("steps"):
+        flags.append("多步骤")
+    if candidate.get("preconditions"):
+        flags.append("前置状态")
+    other_warnings = [
+        warning
+        for warning in item.get("warnings") or []
+        if warning.get("code") != "rule.conflict"
+    ]
+    if other_warnings:
+        flags.append("其他告警")
+    return topics, flags
+
+
+def _review_priority(topics: list[str], flags: list[str]) -> int:
+    if topics:
+        return 0
+    if "多步骤" in flags:
+        return 1
+    if "前置状态" in flags or "其他告警" in flags:
+        return 2
+    return 3
 
 
 def _render_review_md(
@@ -326,12 +387,49 @@ def _render_review_md(
         "`approve` 或 `reject`。`deprecate` 必须逐项显式 approve，不会批量自动废弃。",
         "> 修改用例内容请改 `cases.draft.json` 后重新 `cases import`；本审核文件只承载决定。",
         "",
-        "## 待审项",
-        "",
-        "| # | action | endpoint | case_key | title | fingerprint |",
-        "|---|---|---|---|---|---|",
         ]
     )
+    items = proposal["items"]
+    assessed: list[tuple[int, dict[str, Any], list[str], list[str], int]] = []
+    for index, item in enumerate(items, 1):
+        topics, flags = _review_flags(item, ruleset)
+        assessed.append((index, item, topics, flags, _review_priority(topics, flags)))
+    conflict_cases = [entry for entry in assessed if entry[4] == 0]
+    step_cases = [entry for entry in assessed if entry[4] == 1]
+    medium = [entry for entry in assessed if entry[4] == 2]
+    low = [entry for entry in assessed if entry[4] == 3]
+    conflict_topics = {
+        topic for _, _, topics, _, _ in conflict_cases for topic in topics
+    }
+    lines.extend(
+        [
+            "## 审核导航",
+            "",
+            "先按类型成组判断，再逐条写 `approve` / `reject`；同一冲突 topic 的用例"
+            "通常可以采用同一结论，不必重复推理。",
+            "",
+            f"- **规则冲突**：{len(conflict_topics)} 个 topic，涉及 "
+            f"{len(conflict_cases)} 条用例；先裁决 topic，再套用到用例",
+            f"- **多步骤**：{len(step_cases)} 条；逐条核对中间状态、计数和跨步骤引用",
+            f"- **前置状态 / 其他告警**：{len(medium)} 条；核对表/列/where/set 是否自包含",
+            f"- **常规**：{len(low)} 条；单一请求、无额外告警，可集中浏览参数与断言",
+            "",
+            "建议顺序：",
+            "1. 先裁决规则冲突（见下一节），同一 topic 的用例按同一结论处理。",
+            "2. 再核对多步骤用例的中间状态和计数。",
+            "3. 再核对带前置状态的用例。",
+            "4. 最后集中浏览常规单请求用例。",
+            "",
+        ]
+    )
+    if step_cases:
+        lines.append("多步骤用例：")
+        for index, item, _, _, _ in step_cases:
+            step_count = len((item.get("candidate") or {}).get("steps") or [])
+            lines.append(
+                f"- `#{index}` `{item['case_key']}`（{step_count} 步）"
+            )
+        lines.append("")
     if ruleset is not None and ruleset.conflicts:
         rule_index = ruleset.rule_index()
         lines.extend(["## 规则冲突（请在本次用例审核中确认）", ""])
@@ -352,10 +450,29 @@ def _render_review_md(
             )
             if conflict.reason:
                 lines.append(f"  - {conflict.reason}")
+            affected = [
+                f"`#{index}` `{item['case_key']}`"
+                for index, item, topics, _, _ in assessed
+                if conflict.topic in topics
+            ]
+            lines.append(
+                "  - 涉及用例："
+                + ("、".join(affected) if affected else "无（本提案未引用该冲突规则）")
+            )
         lines.append("")
-    for index, item in enumerate(proposal["items"], 1):
+    lines.extend(
+        [
+        "## 待审项",
+        "",
+        "| # | 风险 | action | endpoint | case_key | title | fingerprint |",
+        "|---|---|---|---|---|---|---|",
+        ]
+    )
+    for index, item, _, flags, priority in assessed:
+        risk = "高" if priority <= 1 else ("中" if priority == 2 else "常规")
+        risk_cell = f"{risk}（{' / '.join(flags)}）" if flags else risk
         lines.append(
-            f"| {index} | {item['action']} | `{item['endpoint']}` | "
+            f"| {index} | {risk_cell} | {item['action']} | `{item['endpoint']}` | "
             f"`{item['case_key']}` | {item['title']} | "
             f"`{item['fingerprint'][:12]}…` |"
         )
@@ -418,22 +535,58 @@ def _render_review_md(
                     f"- category: `{candidate.get('category')}` / priority "
                     f"`{candidate.get('priority')}` / strength "
                     f"`{candidate.get('assert_strength')}`",
-                    "",
-                    "请求：",
-                    "```json",
-                    json.dumps(
-                        _request_summary(candidate), ensure_ascii=False, indent=2
-                    ),
-                    "```",
-                    "",
-                    "断言：",
-                    "```json",
-                    json.dumps(
-                        candidate.get("asserts") or [], ensure_ascii=False, indent=2
-                    ),
-                    "```",
                 ]
             )
+            steps = candidate.get("steps") or []
+            if steps:
+                lines.extend(["", "步骤（按顺序执行，共享 client / Mock 会话 / 前置状态）："])
+                for step_index, step in enumerate(steps, 1):
+                    lines.extend(
+                        [
+                            "",
+                            f"#### 步骤 {step_index} · `{step.get('name')}` · "
+                            f"`{step.get('endpoint')}`",
+                            "",
+                            "请求：",
+                            "```json",
+                            json.dumps(
+                                _step_request_summary(step),
+                                ensure_ascii=False,
+                                indent=2,
+                            ),
+                            "```",
+                            "",
+                            "断言：",
+                            "```json",
+                            json.dumps(
+                                step.get("asserts") or [],
+                                ensure_ascii=False,
+                                indent=2,
+                            ),
+                            "```",
+                        ]
+                    )
+            else:
+                lines.extend(
+                    [
+                        "",
+                        "请求：",
+                        "```json",
+                        json.dumps(
+                            _request_summary(candidate), ensure_ascii=False, indent=2
+                        ),
+                        "```",
+                        "",
+                        "断言：",
+                        "```json",
+                        json.dumps(
+                            candidate.get("asserts") or [],
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        "```",
+                    ]
+                )
             if candidate.get("rationale"):
                 lines.extend(["", f"设计依据：{candidate['rationale']}"])
             if candidate.get("note"):
@@ -743,6 +896,194 @@ def _load_review(proposal_dir: Path, proposal_id: str) -> dict[str, dict[str, An
             raise ProposalError(f"审核文件重复项: {key}")
         items[key] = item
     return items
+
+
+def _print_review_item(
+    index: int,
+    total: int,
+    item: dict[str, Any],
+    entry: dict[str, Any],
+    ruleset: RuleSet | None,
+    output_fn: Callable[[str], None],
+) -> None:
+    candidate = item.get("candidate") or {}
+    topics, flags = _review_flags(item, ruleset)
+    priority = _review_priority(topics, flags)
+    risk = "高" if priority <= 1 else ("中" if priority == 2 else "常规")
+    output_fn("")
+    output_fn(f"[{index}/{total}] {item['case_key']} · {item['title']}")
+    output_fn(
+        f"  {item['action']} · `{item['endpoint']}` · 风险 {risk}"
+        + (f"（{' / '.join(flags)}）" if flags else "")
+    )
+    output_fn(f"  当前决定: {entry.get('decision')}")
+    rule_index = ruleset.rule_index() if ruleset is not None else {}
+    for ref in candidate.get("rule_refs") or []:
+        key = str(ref.get("rule_key") or "")
+        rule = rule_index.get(key)
+        if rule is None:
+            output_fn(f"  规则: {ref.get('rule_id') or key}（规则库中未找到）")
+            continue
+        text = str(
+            rule.constraint
+            if hasattr(rule, "constraint")
+            else getattr(rule, "text", "")
+        ).replace("\n", " ")
+        output_fn(f"  规则: {rule.rule_id} {text[:120]}")
+    for ref in candidate.get("requirement_refs") or []:
+        output_fn(f"  需求: {ref.get('doc')}#{ref.get('section')}")
+    preconditions = candidate.get("preconditions") or []
+    if preconditions:
+        output_fn(
+            "  前置: " + json.dumps(preconditions, ensure_ascii=False)
+        )
+    steps = candidate.get("steps") or []
+    if steps:
+        output_fn(f"  步骤: {len(steps)} 步")
+        for step_number, step in enumerate(steps, 1):
+            output_fn(
+                f"    {step_number}. {step.get('name')} · "
+                f"`{step.get('endpoint')}`"
+            )
+            output_fn(
+                "       请求: "
+                + json.dumps(
+                    _step_request_summary(step), ensure_ascii=False
+                )
+            )
+            output_fn(
+                "       断言: "
+                + json.dumps(step.get("asserts") or [], ensure_ascii=False)
+            )
+    else:
+        output_fn(
+            "  请求: "
+            + json.dumps(_request_summary(candidate), ensure_ascii=False)
+        )
+        output_fn(
+            "  断言: "
+            + json.dumps(candidate.get("asserts") or [], ensure_ascii=False)
+        )
+    for warning in item.get("warnings") or []:
+        output_fn(
+            f"  告警: {warning.get('code')}: {warning.get('message')}"
+        )
+    if candidate.get("rationale"):
+        output_fn(f"  设计依据: {candidate['rationale']}")
+
+
+def interactive_review(
+    proposal_path: str | Path,
+    *,
+    only_pending: bool = False,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+) -> dict[str, Any]:
+    """逐条交互填写审核决定；只写 cases.review.json，不批准。
+
+    空输入或 `s` 跳过，`q` 保存并退出；`a`/`r` 后可跟备注。
+    """
+    proposal_dir, proposal = load_proposal(proposal_path)
+    review_path = proposal_dir / "cases.review.json"
+    review = load_json(review_path)
+    if review.get("proposal_id") != proposal["proposal_id"]:
+        raise ProposalError("审核文件 proposal_id 与 proposal 不一致")
+    review_items = {
+        str(item.get("proposal_key") or ""): item
+        for item in review.get("items") or []
+    }
+    ruleset: RuleSet | None = None
+    if proposal.get("base_ruleset"):
+        snapshot = proposal_dir / "rules_snapshot.json"
+        if snapshot.is_file():
+            ruleset = RuleSet.model_validate(load_json(snapshot))
+
+    items = proposal.get("items") or []
+    selected: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    for index, item in enumerate(items, 1):
+        entry = review_items.get(str(item.get("proposal_key") or ""))
+        if entry is None:
+            raise ProposalError(f"审核文件缺少项: {item.get('proposal_key')}")
+        if only_pending and entry.get("decision") != "pending":
+            continue
+        selected.append((index, item, entry))
+
+    if not selected:
+        output_fn("没有需要审核的条目（全部已处理）。")
+    else:
+        output_fn(
+            f"交互审核 {len(selected)} 条；输入 a/r/s/q，"
+            "决定只写入 cases.review.json，不会自动批准。"
+        )
+    stopped = False
+    for position, (index, item, entry) in enumerate(selected, 1):
+        _print_review_item(
+            index, len(items), item, entry, ruleset, output_fn
+        )
+        output_fn(
+            f"  进度 {position}/{len(selected)}；"
+            "a=approve，r=reject，s=跳过，q=保存退出；可带备注：a 按设计裁决"
+        )
+        while True:
+            try:
+                raw = input_fn("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                output_fn("")
+                output_fn("输入结束，已保存当前决定。")
+                stopped = True
+                break
+            if not raw:
+                break
+            command, _, note = raw.partition(" ")
+            command = command.lower()
+            if command in {"q", "quit"}:
+                stopped = True
+                break
+            if command in {"s", "skip"}:
+                break
+            if command in {"a", "approve", "r", "reject"}:
+                decision = (
+                    "approve" if command in {"a", "approve"} else "reject"
+                )
+                entry["decision"] = decision
+                note = note.strip()
+                if note:
+                    entry["note"] = note
+                save_json_atomic(review_path, review)
+                output_fn(f"  -> {decision}")
+                break
+            output_fn("  无效输入，请输入 a / r / s / q")
+        if stopped:
+            break
+
+    decisions = [
+        str(item.get("decision") or "pending")
+        for item in review_items.values()
+    ]
+    counts = {
+        "approve": decisions.count("approve"),
+        "reject": decisions.count("reject"),
+        "pending": decisions.count("pending"),
+    }
+    pending_keys = [
+        str(item.get("case_key") or "")
+        for item in review_items.values()
+        if str(item.get("decision") or "pending") == "pending"
+    ]
+    output_fn(
+        f"已保存：approve {counts['approve']} / reject {counts['reject']} / "
+        f"pending {counts['pending']}"
+    )
+    if counts["pending"]:
+        output_fn("仍有 pending；cases approve 会拒绝批准，继续运行本命令即可。")
+    elif counts["approve"] or counts["reject"]:
+        output_fn("全部条目已审核，可执行 cases approve --reviewer <NAME>。")
+    return {
+        "proposal_id": proposal["proposal_id"],
+        "review_path": str(review_path),
+        "counts": counts,
+        "pending": pending_keys,
+    }
 
 
 def _load_store_for_approval(

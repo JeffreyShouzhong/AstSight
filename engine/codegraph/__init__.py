@@ -19,8 +19,26 @@ from .client import (
 from .embedded import CodeGraphUnavailable, EmbeddedCodeGraphClient
 from .memory import InMemoryCodeGraphClient
 from .route_repair import RouteDeclaration, RoutePrefixRepair, RouteRepairReport
+from .runtime import (
+    CODEGRAPH_PACKAGE,
+    CODEGRAPH_VERSION,
+    default_module_root,
+    install,
+    installed_version,
+    is_installed,
+    resolve_module_root,
+    status,
+)
 
 __all__ = [
+    "CODEGRAPH_PACKAGE",
+    "CODEGRAPH_VERSION",
+    "default_module_root",
+    "install",
+    "installed_version",
+    "is_installed",
+    "resolve_module_root",
+    "status",
     "CodeGraphClient",
     "EmbeddedCodeGraphClient",
     "CodeGraphUnavailable",

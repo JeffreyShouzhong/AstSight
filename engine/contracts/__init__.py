@@ -50,6 +50,7 @@ from .mock_plan import MockPlan, MockPlanInjection, MockPlanRoute
 from .entities import (
     Assertion,
     Attempt,
+    CaseStep,
     ChangeRef,
     ChangedAPI,
     Constraint,
@@ -106,6 +107,7 @@ __all__ = [
     "CaseReview",
     "CaseSet",
     "CaseStatus",
+    "CaseStep",
     "ChangeRef",
     "ChangedAPI",
     "CheckDimension",
