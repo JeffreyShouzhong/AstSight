@@ -1,7 +1,7 @@
 # CodeGraph 集成设计
 
 > 依据：`framework-capability-design.md`（能力设计 v4.2）、`engine/codegraph/`（客户端与路由重建）
-> 输入：`@colbymchenry/codegraph` **1.6.2** 实包核对（`dist/*.d.ts` 全量类型）+ D:\testhub_platform\codegraph_lab 嵌入样例 + 本轮 11 组可复现实测
+> 输入：`@colbymchenry/codegraph` **1.6.2** 实包核对（`dist/*.d.ts` 全量类型）+ 本地嵌入样例 + 本轮 11 组可复现实测
 > 版本：**v2.0** · 2026-10-25（v1.0 见文末修订记录）
 
 ---

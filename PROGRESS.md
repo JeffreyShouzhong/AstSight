@@ -249,6 +249,14 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-12**：清理全仓 TestHub 内部引用，明确 AstSight 与 TestHub 无耦合：
+  `engine/README.md` 删除 `testhub-proto/` 历史原型隔离说明；
+  `doc/framework-capability-design.md` 的“旁挂对接/交给 TestHub 类平台/
+  C7 报告适配器（TestHub REST 推送）”改为通用“测试平台”；
+  `doc/CodeGraph-集成设计.md` 删除本机 `D:\testhub_platform\...` 路径；
+  `engine/tests/test_codegraph_embedded.py` 删除 `D:/testhub_platform/...`
+  的模块根候选，仅保留 `ASTSIGHT_CODEGRAPH_MODULE_ROOT`、仓库内
+  `node_modules` 与环境中的 Node。除本记录外，全仓已无 TestHub 字样。
 - **2026-11-12**：根 `README.md` 重写为面向使用者的当前版本说明：以“需求/变更 →
   规则 → 审核 → 用例 → 执行”的能力与三条使用路线为主线，补充环境要求、安装、
   `llm.json` 配置、产物位置与当前边界；移除设计基线版本号、命名边界表和按阶段

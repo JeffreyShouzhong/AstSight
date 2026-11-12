@@ -319,7 +319,6 @@ def _module_root_candidates() -> list[Path]:
     env = os.environ.get("ASTSIGHT_CODEGRAPH_MODULE_ROOT")
     if env:
         candidates.append(Path(env))
-    candidates.append(Path("D:/testhub_platform/codegraph_lab/node_modules"))
     candidates.append(Path(__file__).resolve().parents[1] / "node_modules")
     return candidates
 

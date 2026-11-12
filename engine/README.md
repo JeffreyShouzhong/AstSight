@@ -1,7 +1,7 @@
 # AstSight Engine · 正式实现
 
 > 项目名：**AstSight**（AST + Sight）｜ CLI：`astsight` ｜ Maven：`io.astsight:astsight-core`
-> 正式实现根目录，与 `testhub-proto/`（历史原型）隔离。
+> 正式实现根目录。
 > 设计依据：`framework-capability-design.md`（能力设计）+ `agent-architecture.md`（Agent 架构）。
 > **运行环境基线：Linux（服务器 / CI 容器）**；Windows 仅用于开发机本地调试，不作为部署与验收环境。
 >
