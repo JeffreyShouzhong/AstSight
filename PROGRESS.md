@@ -268,8 +268,9 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
     全量 **286 passed, 2 skipped**。
   - 文档同步：根 README、使用文档、快速上手指南、engine README、设计/架构文档与
     决策记录（第 14 节）。
-  - 本机未实际连接 PostgreSQL/MySQL（MySQL 无可用凭据、无 PostgreSQL 实例）；
-    已提供 `test_data_apply_live.py` 供有库环境复验，本地结果为 2 skipped。
+  - 真实 MySQL 联调已通过：MySQL 26.7，临时库 `astsight_test`，
+    `test_data_apply_live.py` 的 MySQL 用例 **1 passed**（建表 → apply →
+    teardown → drop）。本机无 PostgreSQL 实例，对应参数仍为 SKIP。
 - **2026-11-12**：清理全仓 TestHub 内部引用，明确 AstSight 与 TestHub 无耦合：
   `engine/README.md` 删除 `testhub-proto/` 历史原型隔离说明；
   `doc/framework-capability-design.md` 的“旁挂对接/交给 TestHub 类平台/
