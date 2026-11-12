@@ -26,6 +26,11 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、Open
 > 目前断言以 L1（状态码 / 字段存在 / 字段值）为主，L2–L4 业务不变量断言在
 > [路线图](ROADMAP.md)上。我们把「尚未实现」写清楚，而不是藏起来——这是刻意的诚实。
 
+这是一份真实运行报告（示例项目 [partner_onboarding](engine/examples/partner_onboarding)，
+38 个用例全部通过、门禁 PASS）：
+
+![AstSight 运行报告：38 用例全部通过，门禁 PASS](doc/images/partner_onboarding-report.png)
+
 ## 核心能力
 
 | 能力 | 说明 |
