@@ -137,8 +137,33 @@ class FailureDiagnosis(BaseModel):
         return value
 
 
+class MockBranchPatch(BaseModel):
+    """修复一个已存在的 Mock 语义分支；分支身份（dep_id/branch）不可改。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dep_id: str = Field(min_length=1, max_length=512)
+    branch: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2_000)
+    status: int | None = Field(default=None, ge=200, le=599)
+    headers: dict[str, str] | None = None
+    body: Any = None
+    semantics: str | None = Field(default=None, min_length=1, max_length=2_000)
+
+    def changed_fields(self) -> list[str]:
+        allowed = ("status", "headers", "body", "semantics")
+        return [name for name in allowed if name in self.model_fields_set]
+
+    @field_validator("branch")
+    @classmethod
+    def _branch(cls, value: str) -> str:
+        if not BRANCH_RE.match(value):
+            raise ValueError(f"branch 不合法: {value!r}")
+        return value
+
+
 class CasePatch(BaseModel):
-    """修复建议：只允许改请求/断言，不允许改身份和需求归属。"""
+    """修复建议：只允许改请求/断言/绑定，不允许改身份和需求归属。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -149,9 +174,13 @@ class CasePatch(BaseModel):
     headers: dict[str, str] | None = None
     body: Any = None
     asserts: list[Assertion] | None = None
+    mock_bindings: dict[str, str] | None = None
+    mock_branches: list[MockBranchPatch] = Field(default_factory=list, max_length=20)
 
     def changed_fields(self) -> list[str]:
-        allowed = ("path_params", "query", "headers", "body", "asserts")
+        allowed = (
+            "path_params", "query", "headers", "body", "asserts", "mock_bindings"
+        )
         return [name for name in allowed if name in self.model_fields_set]
 
     @field_validator("asserts")
@@ -163,12 +192,27 @@ class CasePatch(BaseModel):
             raise ValueError("asserts 超过 50 条")
         return values
 
+    @field_validator("mock_bindings")
+    @classmethod
+    def _mock_bindings(cls, values: dict[str, str] | None):
+        if values is not None and not values:
+            raise ValueError("mock_bindings 不能为空")
+        return values
+
+
+class RepairDecision(FailureDiagnosis):
+    """A5/A6 合并节点输出：一个失败用例的归因 + 可选修复。"""
+
+    patch: CasePatch | None = None
+
 
 class RepairPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
-    repairs: list[CasePatch] = Field(default_factory=list, max_length=MAX_PATCHES)
+    schema_version: int = 2
+    diagnoses: list[RepairDecision] = Field(
+        default_factory=list, max_length=MAX_PATCHES
+    )
 
 
 __all__ = [
@@ -179,6 +223,8 @@ __all__ = [
     "DiagnosisEvidence",
     "DownstreamBranchSpec",
     "FailureDiagnosis",
+    "MockBranchPatch",
+    "RepairDecision",
     "RepairPlan",
     "SemanticAnalysis",
     "SemanticBehavior",

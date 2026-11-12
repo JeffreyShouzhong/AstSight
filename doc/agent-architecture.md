@@ -66,9 +66,11 @@
                               └───────────┬───────────┘
                                           ▼
                               ┌───────────────────────┐
-                              │ A5 结果诊断 (Agent)    │
-                              │ 失败 → 归因 → 重试决策 │
-                              └───────────────────────┘
+                              │ A5/A6 诊断修复 (Agent) │
+                              │ 失败 → 归因 → 有界修复 │
+                              └───────────┬───────────┘
+                                          │ 修复后重跑（≤3 轮）
+                                          └──────────────► 执行器
 ```
 
 **节点职责速览**：
@@ -83,10 +85,10 @@
 | S3 画像构建 | C3 / C3.5 | **能力服务** | 否 | 接口 → 完整档案+下游依赖 | 跟随 S2 |
 | C5a 数据目录 | C5a | **能力服务 + LLM 适配** | 是（语义辅助） | DDL+seed+画像 → 表/列/业务态目录 | 事实源就绪、A4 之前 |
 | C5b 造数计划 | C5b | **能力服务 + LLM 适配** | 是（业务态候选） | 已批准用例+catalog → 逐用例计划 | A4.5 通过后 |
-| A5 结果诊断 | C7.3 | **Agent** | 是（弱） | 失败 → 归因 → 重试决策 | 执行失败时 |
+| A5/A6 诊断修复 | C7.3 | **Agent** | 是 | 失败 → 归因 → 用例/Mock 有界修复 → 重跑 | 执行失败时 |
 | — Orchestrator | 全流程 | 编排器 | 是（调度） | 串起全链路，管理状态 | — |
 
-> 注：A1 是框架内的 LLM 分析 Agent（需求 → 规则）；A4 是确定性的导入/校验/版本化节点，**框架内不生成用例草案**——业务级/代码级草案由规则驱动的适配层/人工产出。C5 拆为 **C5a 数据目录**（A4 之前，LLM 只补字段业务语义与候选状态）与 **C5b 造数计划**（A4.5 之后，LLM 只补业务态/取值候选）；DDL 解析、FK 闭包、拓扑排序、白名单/类型/枚举校验与 SQL 渲染均为**确定性核心**，模型不输出 SQL。C6 的模板编码、C7.1/C7.2/C7.4 也是确定性工具（图中归入共享工具层）。A5 是另一个框架内 Agent（失败诊断）；A6 自修复是**可选扩展**，只能生成新草案并重新走 proposal/approve，不能直接改用例。A1 与 S2 是**两个独立入口**，分别对应“需求/契约变更”与“代码变更”，可独立触发也可同时触发。
+> 注：A1 是框架内的 LLM 分析 Agent（需求 → 规则）；A4 是确定性的导入/校验/版本化节点，**框架内不生成用例草案**——业务级/代码级草案由规则驱动的适配层/人工产出。C5 拆为 **C5a 数据目录**（A4 之前，LLM 只补字段业务语义与候选状态）与 **C5b 造数计划**（A4.5 之后，LLM 只补业务态/取值候选）；DDL 解析、FK 闭包、拓扑排序、白名单/类型/枚举校验与 SQL 渲染均为**确定性核心**，模型不输出 SQL。C6 的模板编码、C7.1/C7.2/C7.4 也是确定性工具（图中归入共享工具层）。A5/A6 是另一个框架内 Agent：诊断与修复合并为同一个 LLM 节点，默认最多重跑 3 轮。用例补丁仍生成新 proposal，但以 `astsight-agent:repair` 身份自动批准；Mock 分支补丁直接热更新到运行中的 Mock 服务。A1 与 S2 是**两个独立入口**，分别对应“需求/契约变更”与“代码变更”，可独立触发也可同时触发。
 
 ---
 
@@ -362,50 +364,60 @@ diff、生成待审 proposal；**不生成用例，不调用 LLM**。
 - approve 重新推导/重算 fingerprint，review 文件只取 decision/reviewer/note
 - 只有 approved 用例进入 C6；C6 编码由确定性模板完成，复杂编排可另接 LLM 但需双重自检
 
-### A5 结果诊断 Agent（失败 → 归因 → 重试决策）
+### A5/A6 诊断修复 Agent（失败 → 归因 → 有界修复 → 重跑）
 
-**职责**：对失败用例自动归因，决定是否重试（`report.json` 的归因部分）。
+**职责**：对失败用例归因；在证据支持时直接修用例或 Mock 语义，然后有界重跑。
 
 ```
-输入：失败用例 + 执行上下文（响应/日志/环境）
+输入：失败用例 + 执行上下文（响应/异常/Mock 调用/Mock 语义）
       │
       ▼
 ┌─────────────────────────────────┐
-│ 1. 信号提取节点（确定性）          │ 状态码/异常/断言/耗时/Mock 命中/fallback
-│ 2. 归因分类节点（确定性规则为主）  │  六类根因：code_defect/case_error/data_error/mock_error/change_induced/adapter_error
-│ 3. 疑难归因节点（LLM，可选）      │  规则判不了的复杂失败 → LLM 辅助（兜底）
-│ 4. 动作归属节点（确定性）         │  user（反馈用户）vs framework（回流框架升级）
-│ 5. 重试决策节点（确定性）         │  仅非 SUT 问题重试，≤3 次，留痕
+│ 1. 信号提取节点（确定性）          │ 状态码/异常/断言/耗时/Mock 命中/绑定
+│ 2. 确定性归因节点（确定性）        │ 4xx → case_error/change_induced；5xx → sut_bug；未命中 → unknown
+│ 3. 诊断+修复节点（LLM，单次调用）  │ 七类根因 + 置信度 + 可选用例/Mock 补丁
+│ 4. 修复护栏节点（确定性）          │ 身份不可改；断言条数/强度不得下降；重新 validate_draft
+│ 5. 落地节点（确定性）              │ 用例补丁 → proposal → astsight-agent:repair 自动批准
+│                                    │ Mock 补丁 → 写回 mock_semantics.json → 路由表热更新
 └─────────────────────────────────┘
       │
       ▼
-输出：归因结果（root_cause + action_target + confidence）+ 重试计划（喂给执行器）
+输出：诊断记录 + 修复审计 + 下一轮执行（默认最多 3 轮）
 ```
 
 **关键决策**：
-- **归因主体是确定性规则**（错误码集合、超时关键词、DB 锁等待特征），LLM 只兜底疑难项
-- **六类根因 + 动作归属路由**：`code_defect`/`case_error`/`change_induced` → `user`（反馈用户改进）；`data_error`/`mock_error`/`adapter_error` → `framework`（回流框架升级）。判定要点：用户资产写错→user，框架能力不足→framework
-- **transport 错误先归一**：gRPC `status.code`、Dubbo sidecar 的 `rpc_status/exception_type`、HTTP status/超时统一进错误信封，再按根因归类；不得把 gRPC `UNAVAILABLE` 直接当 5xx 判成 `code_defect`
-- **适配器错误独立成类**：descriptor 加载失败、sidecar 启动/版本/stdio 协议错误归 `adapter_error`（framework），不计入 SUT 缺陷；gRPC→sidecar 回退失败也先归此类，除非响应证明是 SUT 业务缺陷
-- **归因不确定 → 不重试**，标 `unknown` 交人工——错误重试会掩盖真实缺陷
-- **下游失败先看 Mock 证据，再判 SUT**：`mock_hits=0` 且存在真实出站 → `mock_error`
-  （注入失效，按资损风险处理），绝不归 `code_defect`；`mock_hits>0` 但 `fallback_triggered=true`
-  → `mock_error`（分支或降级配置错）；Mock 已按用例绑定分支返回、SUT 仍失败，才进入
-  `code_defect`/`case_error`。证据字段：`dep_id`、`branch`、`strategy`、`hits`、`fallback`
-- SUT bug **永不重试**，这是铁律
-- **主提示词**：`prompts/a5_result_diagnosis.md`——只驱动第 3 步疑难归因节点，输出契约含 `root_cause`（六类）/`action_target`（user|framework）/`confidence`（诚实原则：证据不足必 low）/`evidence`（可溯源）/`verify_action`
+- **确定性归因先行**：错误码、超时、收集失败等规则可判的失败先分类；LLM 节点拿到这些信号
+  和完整失败现场，负责确认“是不是代码缺陷”，并在非代码缺陷时给出补丁
+- **七类根因 + 动作归属路由**：`code_defect`/`case_error`/`change_induced` → `user`；
+  `data_error`/`mock_error`/`adapter_error`/`env_error` → `framework`。判定要点：用户资产写错→user，
+  框架能力不足→framework
+- **transport 错误先归一**：gRPC `status.code`、Dubbo sidecar 的 `rpc_status/exception_type`、
+  HTTP status/超时统一进错误信封，再按根因归类；不得把 gRPC `UNAVAILABLE` 直接当 5xx 判成 `code_defect`
+- **下游失败先看 Mock 证据，再判 SUT**：`mock_hits=0` 且存在真实出站 → `mock_error`（注入失效）；
+  `mock_hits>0` 但 `fallback_triggered=true` → `mock_error`（分支或降级配置错）；Mock 已按绑定返回、
+  SUT 仍失败，才进入 `code_defect`/`case_error`
+- **SUT bug 不自动修**：5xx 只有在 LLM 归因为 `mock_error`、且用例确实绑定了被测下游分支时，
+  才允许修 Mock；归因为 `case_error` 的 5xx 补丁一律拒绝，避免把代码缺陷改绿
+- **主提示词**：`prompts/a5_diagnose_repair.md`——一次输出 N 条
+  `diagnosis + optional patch`，含 `root_cause`/`action_target`/`confidence`/`evidence`/`verify_action`
 
-### A6 用例自修复（可选扩展，非默认链路）
+### A6 用例与 Mock 修复（合并进 A5 节点）
 
-**职责**：A5 判定 `case_error` 后，生成**候选用例补丁**，再走一次完整的 proposal/approve。
+**职责**：A5 判定 `case_error` / `mock_error` 后，直接生成可执行补丁。
 
-- **只改可执行输入**：允许修改 `path_params/query/headers/body/asserts`；不得修改
-  `case_key/level/transport/endpoint/rule_refs/change_refs/mock_bindings`，也不得改前置状态来“绕过”失败
-- **数据问题不改用例**：`data_error` / `data_unavailable` 只建议重新生成 C5b 计划或修复数据库，
-  不触发 A6，避免把造数缺陷伪装成用例修复
-- **仍是人工资产**：A6 输出 `cases.draft.json` 级别的补丁，必须重新校验、diff、人工批准后才进入
-  `caseset.json`；A6 不自动批准、不直接修改已批准用例
-- **可关闭**：默认 `max_repair_rounds=0`；开启后每轮都留痕（原断言/补丁/证据/审批人），
+- **用例可改**：`path_params/query/headers/body/asserts/mock_bindings`；不得修改
+  `case_key/level/transport/endpoint/path/steps/rule_refs/requirement_refs/category/priority`，
+  也不得改前置状态来“绕过”失败
+- **Mock 可改**：只改用例实际绑定的已存在分支，字段限 `status/headers/body/semantics`；
+  分支身份 `dep_id + branch` 不可新增或改名
+- **断言护栏**：断言总条数不得减少，推导强度（L1–L4）不得下降；`asserts` 是整体替换，
+  必须保留 `status_code`。删除断言或降强直接拒绝并留痕
+- **Mock 热更新**：修复后的 `MockSemantic` 写回 `<project>/.astsight/mock_semantics.json`，
+  并替换运行中 `RouteTable` 的分支 stub，下一轮立即生效，不重启 Mock、不丢端口
+- **用例补丁仍走 proposal**：重新 `validate_draft` → 生成新 proposal → 以
+  `astsight-agent:repair` 身份自动批准（`deprecate` 仍然只能人工批准）→ 重新加载用例 → 重跑
+- **可关闭**：默认 `max_repair_rounds=3`，CLI 上限 5；每轮留痕
+  `diagnosis.json`/`repair.json`/`repair-N.draft.json`/`repair-N.mock_semantics.json`，
   修复后失败仍可回溯到原始用例版本
 
 ---
@@ -698,19 +710,21 @@ agent：ByteBuddy Agent 加载 → filter jar 追加进 classloader
 >
 > 唯一豁免：Cache/Redis 等随测随建的基础设施，不作为"下游服务"处理。SUT → gRPC 下游仍 `mock="unsupported"`，只能靠用例排除/`blocked`（v4.4 决策：gRPC 下游指向 gripmock 假服务器，target 改写显式可审计；未重定向的真实出网仍触发告警）；Dubbo 下游由 agent Filter 拦截，但同样受 `egress_guard` 约束（agent 失效时仍可能真实出网）。
 
-#### 5.1.4 与 A5 结果诊断 Agent 的接口
+#### 5.1.4 与 A5/A6 诊断修复 Agent 的接口
 
-执行编排子图在"归因"节点调用 A5，边界如下：
+执行编排子图在"归因"节点调用 A5/A6，边界如下：
 
 | 项 | 内容 |
 |---|---|
-| 触发 | 有失败用例，且确定性归因规则未命中（疑难项）|
-| 输入 | 失败用例的 `case + execution + context`（对齐 `prompts/a5_result_diagnosis.md` 的输入契约）|
-| 输出 | `root_cause + action_target + confidence + evidence + verify_action` |
-| 回环决策 | `action_target` 为测试侧可重试 → 回环执行；`user`/终态 → 进报告 |
-| 归因确定性路径 | 大多数失败由**确定性规则**（错误码集合、超时关键词、DB 锁特征）直接归因，**不经过 A5**；只有规则没覆盖的疑难项才兜底给 LLM |
+| 触发 | 有 failed/error 用例；`env_flake`/`framework_error` 等确定性已定案项不送 LLM |
+| 输入 | 失败用例的 `case + execution + mock_evidence + mock_semantics + profile`（对齐 `prompts/a5_diagnose_repair.md`）|
+| 输出 | 每条失败的 `root_cause + action_target + confidence + evidence + verify_action + optional patch` |
+| 修复护栏 | 身份字段不可改；断言条数/推导强度不得下降；补丁重新 `validate_draft` |
+| 落地 | 用例补丁 → 新 proposal → `astsight-agent:repair` 自动批准；Mock 补丁 → 写回语义库并热更新路由表 |
+| 回环决策 | 有实际补丁且未超过 `max_repair_rounds`（默认 3）→ 重跑；否则进报告 |
 
-> 关键：A5 的 LLM 只兜底**疑难归因**，不是每个失败都过 LLM。这是"LLM 用量最小化"在 C7 的落地——绝大多数失败（超时、5xx、断言值不符）都是确定性可判的。
+> 关键：确定性归因先跑，LLM 负责确认代码缺陷并只对 `case_error`/`mock_error` 出补丁。
+> 5xx 只有在归因为 `mock_error` 且用例确实绑定了下游分支时才允许修 Mock；把 5xx 当断言错误去改，直接拒绝。
 
 ---
 
@@ -739,18 +753,18 @@ State：changed_apis / profiles / ruleset / data_plan / cases / report / 门禁�
 
 ### 6.3 长期记忆（资产）= 版本化事实源文件
 
-**原则：只读引用 + 人工维护。** 资产是事实源，运行结果不得自动反写污染它，任何更新须过人工审核。
+**原则：只读引用 + 人工维护（运行期修复留痕例外）。** 资产是事实源，运行结果不得静默反写污染它；唯一的自动写入是 A5/A6 在护栏内的用例/Mock 修复，且必须以 `astsight-agent:repair` 身份留下审计记录。
 
 | 资产 | 内容 | 维护方式 | 消费方 |
 |---|---|---|---|
 | 术语表 | 业务术语/字段语义 | 人工维护，随项目演进 | C3 语义附着、C4 校验 |
 | 规则库 `ruleset.json` | 业务规则 BR / 契约规则 CR、`rule_key`、questions/gaps/conflicts、prompt/model 版本 | 只能由 `rules extract`/`rules import` 写入；规则被 approved 用例引用后才算确认 | C4 设计/选择、覆盖与漂移报告 |
-| 用例库 `caseset.json` | 已审核可执行用例（`TC-NNNN`、`level`、`rule_refs`、版本、fingerprint、review_log、history） | 只能由 `cases approve` 写入；proposal 不自动入库 | C6 编码、C7 判定、报告 |
+| 用例库 `caseset.json` | 已审核可执行用例（`TC-NNNN`、`level`、`rule_refs`、版本、fingerprint、review_log、history） | 初始入库只能由 `cases approve` 写入（`cases import` 只生成 proposal）；运行期修复由 A5/A6 生成 proposal 并以 `astsight-agent:repair` 身份自动批准，护栏见 A6 | C6 编码、C7 判定、报告 |
 | Mock 语义模板 | 下游依赖的语义分支枚举 | 人工维护 | C3.5.1 语义绑定、C7 执行 |
 
 > 用例库是**唯一执行与判定资产**：草案和 proposal 只是审核过程材料，不参与编码与判定；
-> `review_log` 追加式记录审核决定，`history` 保留被替代的旧版本供 replay。已被拒绝的草案
-> 不进入 store，修改后必须重新 import 生成新 proposal。
+> `review_log` 追加式记录审核决定（含 `astsight-agent:repair`），`history` 保留被替代的旧版本供 replay。已被拒绝的草案
+> 不进入 store，修改后必须重新 import 生成新 proposal（运行期修复同理）。
 
 **为什么不用向量库**：这三类资产是**结构化、字段级、需精确匹配**的，存成可 diff、可编辑的 JSON/YAML 文件，配合确定性查表即可。向量库适合"语义相似"的模糊召回，但事实源环节最怕模糊——一个字段约束记错就是假绿。
 
@@ -910,8 +924,8 @@ A1 的 LLM 节点只是一次结构化输出（规则分析），不存在跨步
 
 | 权衡点 | 决策 | 理由 |
 |---|---|---|
-| 节点数量 | 2 Agent（A1/A5）+ 确定性节点/能力服务 + 1 编排 | 确定性能力下沉为节点/服务，Agent 只保留会思考的部分 |
-| LLM 用量 | 框架内 A1 规则分析（重）、A5 诊断（弱）、C5a/C5b 语义辅助（轻）；用例草案生成在适配层（规则驱动） | LLM 用在"理解/生成/诊断"，不用在"校验/追溯/判定" |
+| 节点数量 | 2 Agent（A1 / A5+A6）+ 确定性节点/能力服务 + 1 编排 | 确定性能力下沉为节点/服务，Agent 只保留会思考的部分 |
+| LLM 用量 | 框架内 A1 规则分析（重）、A5/A6 诊断修复（弱）、C5a/C5b 语义辅助（轻）；用例草案生成在适配层（规则驱动） | LLM 用在"理解/生成/诊断"，不用在"校验/追溯/判定" |
 | 编排粒度 | LangGraph 确定性骨架 + DeepAgents Agent 本体 | 编排要可预测，Agent 要可思考 |
 | 失败策略 | 事实源失败即中止，生成失败可降级 | 上游错了下游全垃圾 |
 | 人工介入 | 审核门 + 低置信度确认作为图中节点 | 幻觉防不住，只能人兜底 |
@@ -931,7 +945,7 @@ A1 的 LLM 节点只是一次结构化输出（规则分析），不存在跨步
 | C5 数据准备 | C5a 目录 + C5b 造数器工具 + 语义适配器 | 语义辅助（LLM 候选，确定性校验/SQL） |
 | C4 两级用例设计 | A4a/A4b 导入节点 + A4.5 人工断点 | 无（草案由框架外/规则驱动生成） |
 | C6 用例编码 | 编码工具 | 无（模板为主；复杂编排可选 LLM） |
-| C7 执行验证 | A5 诊断 Agent + 执行器/报告器工具 | 弱 |
+| C7 执行验证 | A5/A6 诊断修复 Agent + 执行器/报告器工具 | 弱 |
 
 > **能力服务的命名规范**：凡无 LLM 的确定性能力，统一以 `S` 前缀命名（Service），以 `A` 前缀标识真 Agent（含 LLM 自主决策）。当前框架内 A1（需求分析）与 A5（失败诊断）是真 Agent；A4 保留 A 前缀是历史编号，实际形态是能力服务；A4.5 是人工断点。
 

@@ -44,7 +44,7 @@ from .routes import RouteEntry, RouteResolution, RouteTable
 from .sessions import MAX_SESSION_HISTORY, SessionError, SessionManager
 
 _DATA_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-_FORBIDDEN_RESPONSE_HEADERS = {
+FORBIDDEN_RESPONSE_HEADERS = {
     "connection",
     "keep-alive",
     "proxy-authenticate",
@@ -147,7 +147,7 @@ def _build_stub_response(
     response_limit: int,
 ) -> Response:
     forbidden = sorted(
-        key for key in stub.headers if key.lower() in _FORBIDDEN_RESPONSE_HEADERS
+        key for key in stub.headers if key.lower() in FORBIDDEN_RESPONSE_HEADERS
     )
     if forbidden:
         raise MockResponseError(

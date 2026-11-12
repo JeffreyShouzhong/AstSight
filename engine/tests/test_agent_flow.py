@@ -162,6 +162,12 @@ def _mock_semantics(dep_id: str, section: str) -> dict:
     }
 
 
+def _mock_semantics_bad_body(dep_id: str, section: str) -> dict:
+    payload = _mock_semantics(dep_id, section)
+    payload["deps"][0]["branches"][0]["stub"]["body"] = {"price": 2500}
+    return payload
+
+
 def _draft(
     dep_id: str,
     section: str,
@@ -261,7 +267,6 @@ def _config(project: Path, port: int, *, approve: str | None) -> FlowConfig:
             "warning",
         ],
         approve_as=approve,
-        max_repair_rounds=0,
         out=".astsight/agent",
         timeout=180.0,
         sut_timeout=30.0,
@@ -313,6 +318,12 @@ def test_agent_flow_runs_with_injected_mock_and_approval(tmp_path: Path) -> None
     assert not (evidence.get("by_result") or {}).get("unexpected_dep")
 
 
+def test_agent_flow_defaults_to_three_repair_rounds(tmp_path: Path) -> None:
+    project = _copy_example(tmp_path)
+    config = _config(project, _free_port(), approve=None)
+    assert config.max_repair_rounds == 3
+
+
 def test_agent_flow_stops_at_pending_proposal(tmp_path: Path) -> None:
     project = _copy_example(tmp_path)
     dep_id = _dep_id(project)
@@ -333,32 +344,32 @@ def test_agent_flow_repairs_case_error_and_reruns(tmp_path: Path) -> None:
     dep_id = _dep_id(project)
     section = _section(project)
     port = _free_port()
-    diagnosis = [
-        {
-            "case_id": "TC-0002",
-            "phenomenon": "期望总额 9999，实际 5000",
-            "root_cause": "case_error",
-            "action_target": "user",
-            "confidence": "high",
-            "evidence": [{"fact": "stub 单价 2500 × 2 = 5000", "source": "mock_plan"}],
-            "verify_action": "把期望总额改为 5000",
-        }
-    ]
-    repair = {
-        "schema_version": 1,
-        "repairs": [
+    diagnosis_and_repair = {
+        "schema_version": 2,
+        "diagnoses": [
             {
-                "case_key": "quote_success",
-                "reason": "Mock 单价 2500 × 数量 2 = 5000",
-                "asserts": [
-                    {"kind": "status_code", "op": "eq", "expect": 200},
-                    {
-                        "kind": "body_field",
-                        "target": "total_cents",
-                        "op": "eq",
-                        "expect": 5000,
-                    },
+                "case_id": "TC-0002",
+                "phenomenon": "期望总额 9999，实际 5000",
+                "root_cause": "case_error",
+                "action_target": "user",
+                "confidence": "high",
+                "evidence": [
+                    {"fact": "stub 单价 2500 × 2 = 5000", "source": "mock_plan"}
                 ],
+                "verify_action": "把期望总额改为 5000",
+                "patch": {
+                    "case_key": "quote_success",
+                    "reason": "Mock 单价 2500 × 数量 2 = 5000",
+                    "asserts": [
+                        {"kind": "status_code", "op": "eq", "expect": 200},
+                        {
+                            "kind": "body_field",
+                            "target": "total_cents",
+                            "op": "eq",
+                            "expect": 5000,
+                        },
+                    ],
+                },
             }
         ],
     }
@@ -367,8 +378,7 @@ def test_agent_flow_repairs_case_error_and_reruns(tmp_path: Path) -> None:
             _rules(section),
             _mock_semantics(dep_id, section),
             _draft(dep_id, section, total_cents=9999),
-            diagnosis,
-            repair,
+            diagnosis_and_repair,
         ]
     )
     config = _config(project, port, approve="tester")
@@ -379,7 +389,8 @@ def test_agent_flow_repairs_case_error_and_reruns(tmp_path: Path) -> None:
     assert result.status == "pass", (result.steps, result.warnings, result.report)
     assert result.steps["repair_1"]["applied"][0]["case_key"] == "quote_success"
     assert result.steps["repair_1"]["verdict"] == "pass"
-    assert len(llm.calls) == 5
+    assert result.steps["repair_1"]["reviewer"] == "astsight-agent:repair"
+    assert len(llm.calls) == 4
 
     store = json.loads((project / "caseset.json").read_text(encoding="utf-8"))
     repaired = next(
@@ -387,3 +398,76 @@ def test_agent_flow_repairs_case_error_and_reruns(tmp_path: Path) -> None:
     )
     assert repaired["version"] == 2
     assert store["history"][0]["case_key"] == "quote_success"
+
+
+def test_agent_flow_repairs_mock_structure_and_reruns(tmp_path: Path) -> None:
+    project = _copy_example(tmp_path)
+    dep_id = _dep_id(project)
+    section = _section(project)
+    port = _free_port()
+    draft_payload = _draft(dep_id, section)
+    draft_payload["cases"] = draft_payload["cases"][:1]
+    merged = {
+        "schema_version": 2,
+        "diagnoses": [
+            {
+                "case_id": "TC-0001",
+                "phenomenon": "Mock 返回 price，SUT 读取 unit_price_cents 抛出 KeyError 并返回 500",
+                "root_cause": "mock_error",
+                "action_target": "framework",
+                "confidence": "high",
+                "evidence": [
+                    {
+                        "fact": "KeyError: 'unit_price_cents'",
+                        "source": "execution.message",
+                    },
+                    {
+                        "fact": "success 分支返回 {'price': 2500}",
+                        "source": "mock_semantics",
+                    },
+                ],
+                "verify_action": "修正 success 分支响应结构后重跑",
+                "patch": {
+                    "case_key": "quote_success",
+                    "reason": "SUT 读取 unit_price_cents，Mock 却返回 price",
+                    "mock_branches": [
+                        {
+                            "dep_id": dep_id,
+                            "branch": "success",
+                            "reason": "与 SUT 消费字段对齐",
+                            "body": {"unit_price_cents": 2500},
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    llm = ScriptedLLM(
+        [
+            _rules(section),
+            _mock_semantics_bad_body(dep_id, section),
+            draft_payload,
+            merged,
+        ]
+    )
+    config = _config(project, port, approve="tester")
+    config.max_repair_rounds = 1
+
+    result = run_flow(config, llm=llm)
+
+    assert result.status == "pass", (result.steps, result.warnings, result.report)
+    assert result.steps["repair_1"]["mock_hot_updated"]
+    assert result.steps["repair_1"]["run_dir"]
+    assert len(llm.calls) == 4
+    store = json.loads((project / "caseset.json").read_text(encoding="utf-8"))
+    assert store["cases"][0]["version"] == 1
+    semantics = json.loads(
+        (project / ".astsight" / "mock_semantics.json").read_text(encoding="utf-8")
+    )
+    branch = next(
+        item
+        for dep in semantics["deps"]
+        for item in dep["branches"]
+        if item["branch"] == "success"
+    )
+    assert branch["stub"]["body"] == {"unit_price_cents": 2500}

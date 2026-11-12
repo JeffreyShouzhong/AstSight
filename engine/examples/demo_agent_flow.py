@@ -1,4 +1,4 @@
-"""一条命令演示：规则 → Mock 语义 → 造数目录 → 用例 → 审核 → 造数计划 → 执行 → 诊断。
+"""一条命令演示：规则 → Mock 语义 → 造数目录 → 用例 → 审核 → 造数计划 → 执行 → 诊断修复。
 
     export ASTSIGHT_LLM_API_KEY=...
     export ASTSIGHT_LLM_MODEL=...
@@ -50,7 +50,7 @@ def main() -> int:
     parser.add_argument(
         "--no-auto-approve", action="store_true", help="停在待审 proposal，不自动批准"
     )
-    parser.add_argument("--max-repair-rounds", type=int, default=1)
+    parser.add_argument("--max-repair-rounds", type=int, default=3)
     parser.add_argument("--mode", choices=("full", "delta"), default="full")
     parser.add_argument("--codegraph", choices=("auto", "off"), default="off")
     parser.add_argument(

@@ -77,7 +77,7 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 | `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
 | `astsight/data/` C5 | ✅（SQLite/PostgreSQL/MySQL） | DDL/seed → `data_catalog.json`；批准后 → `data_plan.json`；参数化 SQL、FK 拓扑、事务化 apply/teardown；方言决定占位符与标识符引用，plan 与数据库不一致时拒执行 |
-| `astsight/agent/` | ✅ 首版 | A1 规则适配、C3.5.1 Mock 语义适配、C5a/C5b 造数适配、A4 用例设计、MockPlan、SUT 启动注入、A5 诊断、A6 有界修复与端到端编排 |
+| `astsight/agent/` | ✅ 首版 | A1 规则适配、C3.5.1 Mock 语义适配、C5a/C5b 造数适配、A4 用例设计、MockPlan、SUT 启动注入、A5/A6 合并诊断修复（含 Mock 分支热更新）与端到端编排 |
 | `examples/order_service` | ✅ | 18 接口 FastAPI 示例 + 可重置种子数据 + 示例草案 |
 | `examples/downstream_service` | ✅ | 上游报价 → 下游价格服务的 HTTP Mock 示例（环境变量注入） |
 | `examples/demo_delta.py` | ✅ | 一条命令跑真实 git / 真实服务 / 真实 pytest |
@@ -93,10 +93,13 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
   未提交的本地 `llm.json` 读取，不落盘到运行产物、不进报告。`rules extract`（别名 `rules c1`）是需求/设计文档入口（框架内调用模型）；
   `rules prepare` + 外部模型 + `rules import` 是同一流程的两段式拆分，
   供 Claude Code Skill、人工、模型网关或离线批处理使用。
-- **Agent 自动批准是显式选择**：`--approve-as <reviewer>` 只自动批准 new/update/revive；
-  `deprecate` 永远 reject，必须人工逐项批准。不提供 `--approve-as` 时流程停在待审 proposal。
-- **审核不能自动化**：`cases approve` 必须显式给 `--reviewer`；没有任何“自动全量批准”参数。
-  示例 demo 的自动批准仅用于演示，并明确拒绝自动批准 `deprecate`。
+- **初始用例审核不能自动化**：`cases approve` 必须显式给 `--reviewer`；`agent run`
+  也只在提供 `--approve-as <reviewer>` 时批准 new/update/revive，`deprecate` 永远 reject。
+  不提供 `--approve-as` 时流程停在待审 proposal。
+- **运行期修复是 Agent 动作，不是人工审核**：A5/A6 合并为一个节点，诊断后可直接改
+  用例请求/断言/绑定和 Mock 分支；用例补丁生成新 proposal 后以
+  `astsight-agent:repair` 身份自动批准，Mock 补丁热更新到运行中的 Mock 服务。
+  修复不得删除/削弱断言，身份字段不可改；`deprecate` 仍然只能人工批准。
 - **多请求限于单用例内串行**：`steps[]` 按顺序共享同一个 `client`/Mock 会话执行，
   支持 `{"$ref": "<step>.<field>"}` 读取更早步骤的响应（body/query/path_params/断言
   expect/`db_row.where`，不支持 header；`body_schema` 不解析引用）。不生成跨用例捕获、
@@ -586,8 +589,9 @@ python -m astsight mock semantics --project $PROJECT \
   → A4 用例设计（模型读规则 + 画像 + Mock 语义 + 造数目录，走 validate_draft）
   → proposal（只生成待审；--approve-as 显式批准 new/update/revive）
   → C5b 造数计划（批准后，有 catalog 时）→ MockPlan → 启动内嵌 Mock
-  → 注入环境变量启动 SUT → pytest 执行 → 确定性归因 → A5 诊断（只解释失败）
-  → A6 修复建议（可选、只改请求/断言）→ 新 proposal → 有界重跑
+  → 注入环境变量启动 SUT → pytest 执行 → 确定性归因 → A5/A6 诊断+修复（同一节点）
+  → 用例补丁走新 proposal（`astsight-agent:repair` 自动批准）/ Mock 补丁热更新
+  → 有界重跑（默认最多 3 轮）
 ```
 
 模型配置可以写配置文件，也可以用环境变量。推荐把模板复制成不含密钥的本地配置：
@@ -661,15 +665,16 @@ PYTHONPATH=. python -m astsight agent run \
   --mode full --codegraph off \
   --base-url http://127.0.0.1:8020 \
   --sut-command "python -m uvicorn app:app --host 127.0.0.1 --port 8020 --log-level warning" \
-  --approve-as demo --max-repair-rounds 1
+  --approve-as demo
 ```
 
 也可以在临时目录里跑（不会把 `caseset.json` 写进示例目录；`--keep` 保留产物）：
 
 ```bash
-python examples/demo_agent_flow.py --max-repair-rounds 1
-python examples/demo_agent_flow.py --keep --max-repair-rounds 1
-python examples/demo_agent_flow.py --keep --no-auto-approve   # 停在待审 proposal
+python examples/demo_agent_flow.py
+python examples/demo_agent_flow.py --keep
+python examples/demo_agent_flow.py --keep --max-repair-rounds 0   # 关闭自动修复
+python examples/demo_agent_flow.py --keep --no-auto-approve       # 停在待审 proposal
 ```
 
 边界：
@@ -680,8 +685,10 @@ python examples/demo_agent_flow.py --keep --no-auto-approve   # 停在待审 pro
   `not_run` 结束并给出 `routes_missing`，不生成猜测性用例；
 - C5 造数在 `agent run` 中只有提供 `--ddl` 才生成目录；提供 `--db-url` 才执行 apply/teardown。
   没有 plan/DB 时带 `preconditions` 的用例标 `blocked`，不会静默跳过；
-- A6 默认关闭（`--max-repair-rounds 0`）；只修 `path_params/query/headers/body/asserts`，
-  不改用例身份、规则引用、前置状态或 Mock 绑定，数据错误不触发 A6；
+- A5/A6 默认最多 3 轮（`--max-repair-rounds`，上限 5；0 关闭自动修复）。可修
+  `path_params/query/headers/body/asserts/mock_bindings` 与实际绑定的 Mock 分支
+  `status/headers/body/semantics`；不改用例身份、规则引用、前置状态，数据/环境错误不触发修复。
+  5xx 只有在归因为 `mock_error` 时才允许修 Mock，避免把真实代码缺陷“修绿”；
 - 启动期注入只支持环境变量形式的 `url_override` 与显式 `http_proxy`；配置文件、注册中心、
   DNS 改写会显式告警为 unsupported；
 - 下游自动识别目前只覆盖 Python 的 `requests`/`httpx`/`urllib` 调用点；
@@ -697,7 +704,12 @@ profiles.json  ruleset.json  mock_semantics.json  data_catalog.json  data_plan.j
 caseset.json  requirement_coverage.json  pending_proposals.json
 cases.json     codegen.json  generated/
 results.xml    execution.json  report.json  report.md
+diagnosis.json  diagnosis_meta.json  repair.json
+repair-N.draft.json  repair-N.mock_semantics.json   # 第 N 轮修复产生的补丁
 ```
+
+`diagnosis.json` 是合并后的 A5/A6 输出（归因 + 可选补丁），`repair.json` 汇总应用/拒绝
+记录；`repair-N.*` 是每轮实际落盘的用例草案与 Mock 语义快照，便于复盘。
 
 用例库相关产物：
 
@@ -827,8 +839,8 @@ python -m pytest -q
 
 ## 下一步
 
-- A1/A4/A5 已接：`prompts/a1_requirement_analysis.md`、`prompts/a4_case_design.md`、
-  `prompts/a5_result_diagnosis.md`；下一步是真实需求文档上的规则抽取质量与覆盖评估。
+- A1/A4/A5+A6 已接：`prompts/a1_requirement_analysis.md`、`prompts/a4_case_design.md`、
+  `prompts/a5_diagnose_repair.md`；下一步是真实需求文档上的规则抽取质量与覆盖评估。
 - C5 已打通 SQLite/PostgreSQL/MySQL：下一步补 DB 反射/DBML、跨库 schema 限定名与更复杂的
   跨表业务态；方言只覆盖用例级 fixture，不承担建库/迁移。
 - 关系断言：L3/L4 目前需要草案显式写 `$ref`；下一步可基于规则表达式自动生成跨字段/

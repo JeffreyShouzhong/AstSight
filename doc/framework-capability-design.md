@@ -1982,8 +1982,10 @@ Dubbo 草案片段：
 - **规则确认隐含在用例批准中**：审核文件展示规则原文、`authority`、`source.kind` 与
   `reasoning`；批准引用 B 级规则的用例即视为确认该规则。未被任何 approved 用例引用的
   B 级规则在报告中列为“未确认规则”
-- **审核不可绕过**：框架不提供自动批准；`cases approve` 必须显式 `--reviewer`；demo 的自动
-  批准只用于演示，且只批准 `new/update/revive`，不批准 `deprecate`
+- **初始用例审核不可绕过**：`cases approve` 必须显式 `--reviewer`；`agent run` 只在
+  `--approve-as` 下批准 `new/update/revive`，不批准 `deprecate`。运行期 A5/A6 修复是
+  Agent 动作：用例补丁以 `astsight-agent:repair` 身份自动批准并留痕，Mock 补丁直接热更新，
+  不冒充人工审核
 - 拒绝项不进入 store；需要改用例时修改草案后重新 import，**不能在审核文件里直接改用例内容**
 - 每条用例携带 `rule_refs`、`requirement_refs`、`change_refs`，报告可从失败用例反查到规则、
   文档 section 与变更
@@ -2234,7 +2236,7 @@ Dubbo 草案片段：
 | 环境不满足（`No provider available`、注册中心不可达、agent 未激活） | `env_error` | framework | 测试环境不满足前提，用例 `blocked`；不计入 SUT 缺陷 |
 | —（C7.3 未单列） | `change_induced` | user | 变更导致行为变化，反馈用户确认 |
 
-> 关键：**重试视角的"环境抖动/竞争残留"不是根因，而是重试的触发信号**——它们不需要归属到 user/framework，重试通过即消除。真正的根因归属只看六类：`code_defect/case_error/data_error/mock_error/change_induced/adapter_error`，这六类才映射到 `action_target`（user/framework），进入 6.5 缺陷案例库的只有 `framework` 侧（`data_error`/`mock_error`/`adapter_error`）。详见 `agent-architecture.md` A5 章节与 `prompts/a5_result_diagnosis.md`。
+> 关键：**重试视角的"环境抖动/竞争残留"不是根因，而是重试的触发信号**——它们不需要归属到 user/framework，重试通过即消除。真正的根因归属只看六类：`code_defect/case_error/data_error/mock_error/change_induced/adapter_error`，这六类才映射到 `action_target`（user/framework），进入 6.5 缺陷案例库的只有 `framework` 侧（`data_error`/`mock_error`/`adapter_error`）。详见 `agent-architecture.md` A5/A6 章节与 `prompts/a5_diagnose_repair.md`。
 
 #### C7.4 报告合并
 

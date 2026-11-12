@@ -27,7 +27,8 @@
 | 模型配置文件 | ✅ 新增 | `engine/llm.example.json` 模板；`llm.json` 自动发现（cwd → `~/.astsight/llm.json`）或 `--llm-config` / `ASTSIGHT_LLM_CONFIG`；环境变量覆盖文件 |
 | 用户文档 | ✅ 已整理 | 根 `README.md` 重写为面向使用者的当前版本说明；新增《快速上手指南》；删除 4 份历史调研文档，保留设计/架构/决策文档给维护者 |
 | 造数方言 | ✅ PostgreSQL/MySQL | `data/dialects.py`；SQL 占位符/标识符按方言渲染；`psycopg` / `PyMySQL` 驱动按需导入；计划方言与 `--db-url` 不一致时 `dialect_mismatch`；`data catalog --dialect`、`agent run --db-dialect` |
-| 断言深度 | ✅ 2026-11-12 | `header/contains`、`body_schema`（OpenAPI 响应 schema）、只读 `db_row`；`assert_strength` 按内容推导（L1–L4）；全量 **297 passed, 2 skipped** |
+| 断言深度 | ✅ 2026-11-12 | `header/contains`、`body_schema`（OpenAPI 响应 schema）、只读 `db_row`；`assert_strength` 按内容推导（L1–L4） |
+| A5/A6 诊断修复 | ✅ 2026-11-12 | A5/A6 合并为单次 LLM 调用（`schema_version=2`）；默认最多 3 轮；用例补丁以 `astsight-agent:repair` 自动批准；断言不得删除/降强；Mock 结构失配可修并热更新路由表 |
 
 ## 本轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -251,6 +252,25 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-12**：A5/A6 合并为单个诊断修复 Agent：
+  - 删除“先诊断、再修复”的两次 LLM 调用；`diagnose_and_repair()` 一次输出归因 +
+    可选补丁（`RepairPlan.schema_version=2`），提示词统一为
+    `prompts/a5_diagnose_repair.md`，旧 A5/A6 提示词改为废弃指针。
+  - `--max-repair-rounds` 默认 **3**（上限 5，0 关闭）；`FlowConfig` 同步。每轮应用补丁
+    后重跑到 `<run_id>-repairN`，无变化即停止。
+  - 运行期修复不需要人工审核：用例补丁生成新 proposal 后以 `astsight-agent:repair`
+    身份自动批准 `new/update/revive`，`deprecate` 仍拒绝；初始用例入库仍需人工批准。
+  - 修复护栏：断言条数不得减少、推导强度 L1–L4 不得下降，用例身份/规则引用/前置状态
+    不可改；校验失败整条补丁回滚。
+  - 新增 Mock 结构失配修复：可改用例绑定的 Mock 分支 `status/headers/body/semantics`
+    或 `mock_bindings`；写回 `.astsight/mock_semantics.json` 并通过
+    `sync_mock_semantic` 热替换运行中 Mock 路由表，无需重启。5xx 只有归因为
+    `mock_error` 且用例有 Mock 绑定时才可修，避免把真实缺陷“修绿”。
+  - 运行产物新增 `diagnosis.json`、`diagnosis_meta.json`、`repair.json`、
+    `repair-N.draft.json`、`repair-N.mock_semantics.json`。
+  - 新增/更新测试：`test_agent_guards.py` 12 条、`test_agent_flow.py` 5 条（含
+    Mock 结构失配 → 热更新 → 重跑通过）；全量 **302 passed, 2 skipped**。
+  - 文档同步：README、ROADMAP、使用文档、Agent 架构、能力设计、决策记录 v4.13。
 - **2026-11-12**：断言深度与强度口径升级：
   - `Assertion` 增加 `where`；支持 `header/contains`、`body_schema/matches` 与
     `db_row`（`exists/absent/count_eq/eq/ne/gte/lte`）。

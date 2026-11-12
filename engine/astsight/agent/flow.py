@@ -1,12 +1,15 @@
 """端到端 Agent 流程（第一版）：
 
     代码变更 → 接口识别 → A1 语义分析 → A4 用例草案 → 校验/审核
-    → Mock 计划与运行时 → 注入并启动 SUT → 执行 → A5 诊断 → A6 修复（有界）
+    → Mock 计划与运行时 → 注入并启动 SUT → 执行 → A5/A6 诊断与修复（有界）
 
 边界：
-- 用例必须经过 proposal；`approve_as` 只自动批准 new/update/revive，
+- 初始用例必须经过 proposal；`approve_as` 只自动批准 new/update/revive，
   deprecate 永远 reject（人工逐项批准）。
-- 修复只作用于未批准草案的新一轮 proposal，不直接改已批准用例。
+- 运行期失败修复由 Agent 在同一节点诊断并打补丁，默认最多 3 轮；
+  用例补丁生成新的 proposal 并以 `astsight-agent:repair` 身份自动批准，
+  Mock 分支补丁直接热更新到已启动的 Mock 服务。两者都留下审计记录。
+- 修复不得删除断言或降低断言强度；身份字段与需求归属不可改。
 - 模型输出全部按不可信输入处理，证据校验失败即中止。
 """
 from __future__ import annotations
@@ -70,11 +73,10 @@ from ..rules import (
 )
 from .case_design import generate_case_design
 from .data_prep import generate_data_plans, generate_data_semantics
-from .diagnosis import DiagnosisOutcome, diagnose_failures
 from .errors import AgentError
 from .mock_semantics import generate_mock_semantic_candidates
-from .mockplan import build_mock_plan
-from .repair import propose_repairs
+from .mockplan import build_mock_plan, sync_mock_semantic
+from .repair import RepairOutcome, diagnose_and_repair
 from .rule_analysis import (
     generate_rule_draft,
     import_rule_draft_for_flow,
@@ -83,6 +85,7 @@ from .rule_analysis import (
 from .sut import start_sut
 
 _APPROVE_ACTIONS = {"new", "update", "revive"}
+_REPAIR_REVIEWER = "astsight-agent:repair"
 _SUT_ID_RE = re.compile(r"[^0-9A-Za-z_.-]+")
 
 
@@ -104,7 +107,7 @@ class FlowConfig:
     case_base: str | None = None
     out: str = ".astsight/agent"
     approve_as: str | None = None
-    max_repair_rounds: int = 0
+    max_repair_rounds: int = 3
     max_cases: int = 200
     sut_command: list[str] | None = None
     sut_ready_url: str | None = None
@@ -410,25 +413,43 @@ def _changed_endpoints(impact: dict[str, Any]) -> set[str]:
     }
 
 
-def _diagnose(
+def _diagnose_and_repair(
     *,
     run_dir: RunDir,
     cases: list[Any],
+    draft: Any,
     llm: LLMClient,
     impact: dict[str, Any],
-) -> tuple[Any, list[dict[str, Any]]]:
+    context: dict[str, Any],
+    project: Path,
+    ruleset: RuleSet | None,
+    data_catalog: DataCatalog | None,
+    mock_semantic: MockSemantic | None,
+) -> RepairOutcome:
     entries = _read_entries(run_dir)
     try:
-        outcome = diagnose_failures(
+        outcome = diagnose_and_repair(
+            draft=draft,
             cases=cases,
             entries=entries,
             llm=llm,
+            context=context,
+            analysis=None,
+            project=project,
+            mock_semantic=mock_semantic,
             mock_summary=_read_mock_summary(run_dir),
             changed_endpoints=_changed_endpoints(impact),
+            case_keys={case.id: case.case_key for case in cases},
+            ruleset=ruleset,
+            data_catalog=data_catalog,
         )
     except AgentError as exc:
-        outcome = DiagnosisOutcome(errors=[f"{exc.code}: {exc.detail}"])
-    run_dir.write_json("diagnosis.json", outcome.by_case)
+        outcome = RepairOutcome(
+            draft=draft.model_copy(deep=True),
+            mock_semantic=mock_semantic,
+            errors=[f"{exc.code}: {exc.detail}"],
+        )
+    run_dir.write_json("diagnosis.json", outcome.diagnoses)
     run_dir.write_json(
         "diagnosis_meta.json",
         {
@@ -437,7 +458,16 @@ def _diagnose(
             "warnings": outcome.warnings,
         },
     )
-    return outcome, entries
+    run_dir.write_json(
+        "repair.json",
+        {
+            "applied": outcome.applied,
+            "rejected": outcome.rejected,
+            "mock_applied": outcome.mock_applied,
+            "mock_rejected": outcome.mock_rejected,
+        },
+    )
+    return outcome
 
 
 def _project_path(project: Path, raw: str | None, default: str) -> Path:
@@ -1035,110 +1065,125 @@ def run_flow(
             "verdict": result.status,
         }
 
-        # ── 8. 诊断 + 有界修复 ───────────────────────────────
-        diagnosis, entries = _diagnose(
-            run_dir=run_dir, cases=cases, llm=client, impact=impact
+        # ── 8. 诊断 + 有界修复（A5/A6 同一节点）──────────────
+        outcome = _diagnose_and_repair(
+            run_dir=run_dir,
+            cases=cases,
+            draft=draft,
+            llm=client,
+            impact=impact,
+            context=context,
+            project=project,
+            ruleset=ruleset,
+            data_catalog=catalog,
+            mock_semantic=mock_semantic,
         )
-        result.warnings.extend(diagnosis.warnings)
+        result.warnings.extend(outcome.warnings)
         steps["diagnosis"] = {
-            "cases": len(diagnosis.by_case),
-            "eligible_for_repair": sorted(diagnosis.eligible_case_ids),
-            "errors": diagnosis.errors,
+            "cases": len(outcome.diagnoses),
+            "eligible_for_repair": sorted(outcome.eligible_case_ids),
+            "errors": outcome.errors,
         }
-        if diagnosis.errors:
-            result.errors.extend(diagnosis.errors)
+        if outcome.errors:
+            result.errors.extend(outcome.errors)
 
-        key_by_id = {case.id: case.case_key for case in cases}
         for round_no in range(1, max(0, config.max_repair_rounds) + 1):
-            if not diagnosis.eligible_case_ids:
+            if not outcome.changed:
                 break
-            try:
-                repair = propose_repairs(
-                    draft=draft,
-                    failures=entries,
-                    diagnoses=diagnosis.by_case,
-                    context=context,
-                    analysis=None,
-                    llm=client,
+            round_step: dict[str, Any] = {
+                "applied": outcome.applied,
+                "rejected": outcome.rejected,
+                "mock_applied": outcome.mock_applied,
+                "mock_rejected": outcome.mock_rejected,
+                "diagnosed": sorted(outcome.diagnoses),
+            }
+            steps[f"repair_{round_no}"] = round_step
+            rerun = False
+
+            if outcome.mock_changed and outcome.mock_semantic is not None:
+                mock_semantic = outcome.mock_semantic
+                save_json_atomic(
+                    mock_semantic_path,
+                    mock_semantic.model_dump(mode="json"),
+                )
+                run_dir.write_json(
+                    "mock_semantics.json", mock_semantic.model_dump(mode="json")
+                )
+                save_json_atomic(
+                    run_dir.path / f"repair-{round_no}.mock_semantics.json",
+                    mock_semantic.model_dump(mode="json"),
+                )
+                if runtime is not None:
+                    hot_updated = sync_mock_semantic(runtime, mock_semantic)
+                    save_json_atomic(
+                        runtime.plan_path, runtime.plan.model_dump(mode="json")
+                    )
+                    round_step["mock_hot_updated"] = hot_updated
+                    rerun = True
+                else:
+                    result.warnings.append(
+                        "Mock 修复未应用：当前没有运行中的 Mock 服务"
+                    )
+
+            if outcome.case_changed:
+                draft = outcome.draft
+                repaired_validation = validate_draft(
+                    draft,
+                    context,
                     project=project,
-                    case_keys=key_by_id,
                     ruleset=ruleset,
                     data_catalog=catalog,
                     mock_semantic=mock_semantic,
+                    require_rules=True,
                 )
-            except AgentError as exc:
-                result.warnings.append(
-                    f"修复建议失败，停止修复：{exc.code}: {exc.detail}"[:500]
-                )
-                steps[f"repair_{round_no}"] = {"error": exc.code}
-                break
-            if not repair.changed:
-                steps[f"repair_{round_no}"] = {
-                    "applied": 0,
-                    "rejected": repair.rejected,
-                }
-                break
-            repaired_validation = validate_draft(
-                repair.draft,
-                context,
-                project=project,
-                ruleset=ruleset,
-                data_catalog=catalog,
-                mock_semantic=mock_semantic,
-                require_rules=True,
-            )
-            patch_errors = [
-                issue.message for issue in repaired_validation.errors
-            ]
-            if patch_errors:
-                result.warnings.append(
-                    "修复草案未通过校验，停止修复："
-                    + "；".join(patch_errors[:5])
-                )
-                break
+                patch_errors = [
+                    issue.message for issue in repaired_validation.errors
+                ]
+                if patch_errors:
+                    result.warnings.append(
+                        "修复草案未通过校验，停止修复："
+                        + "；".join(patch_errors[:5])
+                    )
+                    break
 
-            draft = repair.draft
-            draft_path = run_dir.path / f"repair-{round_no}.draft.json"
-            save_json_atomic(draft_path, draft.model_dump(mode="json"))
-            store = load_case_set(store_path) or empty_case_set(
-                project, context=context
-            )
-            rebuilt = build_proposal(
-                project=project,
-                draft_path=draft_path,
-                draft=draft,
-                context=context,
-                validation=repaired_validation,
-                store=store,
-                store_path=store_path,
-                ruleset=ruleset,
-                data_catalog=catalog,
-            )
-            steps[f"repair_{round_no}"] = {
-                "applied": repair.applied,
-                "rejected": repair.rejected,
-                "proposal": str(rebuilt.path) if rebuilt.path else None,
-                "diff": rebuilt.diff.counts(),
-            }
-            if rebuilt.path is None:
-                break
-            if not config.approve_as:
-                result.warnings.append(
-                    f"修复草案待审：{rebuilt.path}；未提供 --approve-as，停止修复重跑"
+                draft_path = run_dir.path / f"repair-{round_no}.draft.json"
+                save_json_atomic(draft_path, draft.model_dump(mode="json"))
+                store = load_case_set(store_path) or empty_case_set(
+                    project, context=context
                 )
-                break
-            _fill_decisions(rebuilt.path / "cases.review.json", config.approve_as)
-            approve_proposal(
-                proposal_path=rebuilt.path,
-                project=project,
-                case_base=store_path,
-                reviewer=config.approve_as,
-            )
-            store = load_case_set(store_path)
-            if store is None:
-                break
-            cases = _scope_cases(store, draft)
-            if not cases:
+                rebuilt = build_proposal(
+                    project=project,
+                    draft_path=draft_path,
+                    draft=draft,
+                    context=context,
+                    validation=repaired_validation,
+                    store=store,
+                    store_path=store_path,
+                    ruleset=ruleset,
+                    data_catalog=catalog,
+                )
+                round_step["proposal"] = str(rebuilt.path) if rebuilt.path else None
+                round_step["diff"] = rebuilt.diff.counts()
+                if rebuilt.path is not None:
+                    _fill_decisions(
+                        rebuilt.path / "cases.review.json", _REPAIR_REVIEWER
+                    )
+                    round_step["reviewer"] = _REPAIR_REVIEWER
+                    approve_proposal(
+                        proposal_path=rebuilt.path,
+                        project=project,
+                        case_base=store_path,
+                        reviewer=_REPAIR_REVIEWER,
+                    )
+                    store = load_case_set(store_path)
+                    if store is None:
+                        break
+                    cases = _scope_cases(store, draft)
+                    if not cases:
+                        break
+                    rerun = True
+
+            if not rerun:
                 break
 
             round_id = f"{run_id}-repair{round_no}"
@@ -1163,15 +1208,23 @@ def run_flow(
             result.status = str(
                 (report.get("gate") or {}).get("verdict") or "not_run"
             )
-            steps[f"repair_{round_no}"]["run_dir"] = str(round_dir.path)
-            steps[f"repair_{round_no}"]["verdict"] = result.status
-            key_by_id = {case.id: case.case_key for case in cases}
-            diagnosis, entries = _diagnose(
-                run_dir=round_dir, cases=cases, llm=client, impact=impact
+            round_step["run_dir"] = str(round_dir.path)
+            round_step["verdict"] = result.status
+            outcome = _diagnose_and_repair(
+                run_dir=round_dir,
+                cases=cases,
+                draft=draft,
+                llm=client,
+                impact=impact,
+                context=context,
+                project=project,
+                ruleset=ruleset,
+                data_catalog=catalog,
+                mock_semantic=mock_semantic,
             )
-            result.warnings.extend(diagnosis.warnings)
-            if not diagnosis.eligible_case_ids:
-                break
+            result.warnings.extend(outcome.warnings)
+            if outcome.errors:
+                result.errors.extend(outcome.errors)
 
         return result
     finally:

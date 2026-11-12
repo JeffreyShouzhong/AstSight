@@ -58,6 +58,37 @@ def _injection_for(dep: dict[str, Any]) -> MockPlanInjection:
     )
 
 
+def sync_mock_semantic(
+    runtime: Any, semantic: MockSemantic
+) -> list[str]:
+    """把修复后的 Mock 分支热更新到已启动的路由表。
+
+    服务端在每次请求时按分支名取 stub，因此替换 `RouteEntry.branches`
+    即可让下一轮执行看到新响应；不重启服务，避免丢掉端口与会话上下文。
+    """
+    changed: list[str] = []
+    dep_index = semantic.dep_index()
+    for entry in runtime.server.route_table.entries:
+        dep = dep_index.get(entry.route.dep_id)
+        if dep is None:
+            continue
+        for branch in dep.branches:
+            current = entry.branches.get(branch.branch)
+            if current == branch.stub:
+                continue
+            entry.branches[branch.branch] = branch.stub.model_copy(deep=True)
+            changed.append(f"{entry.route.dep_id}/{branch.branch}")
+    for route in runtime.plan.routes:
+        dep = dep_index.get(route.dep_id)
+        if dep is None:
+            continue
+        route.branches = {
+            branch.branch: branch.stub.model_copy(deep=True)
+            for branch in dep.branches
+        }
+    return changed
+
+
 def build_mock_plan(
     context: dict[str, Any],
     semantic: MockSemantic | SemanticAnalysis,
@@ -137,4 +168,4 @@ def build_mock_plan(
     return plan, warnings
 
 
-__all__ = ["build_mock_plan"]
+__all__ = ["build_mock_plan", "sync_mock_semantic"]

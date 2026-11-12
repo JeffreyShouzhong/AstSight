@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from astsight.agent.casegen import generate_case_draft, validate_case_bindings
-from astsight.agent.diagnosis import diagnose_failures
 from astsight.agent.errors import AgentError
 from astsight.agent.mockplan import build_mock_plan
 from astsight.agent.models import (
@@ -16,7 +15,7 @@ from astsight.agent.models import (
     SemanticAnalysis,
     SemanticBehavior,
 )
-from astsight.agent.repair import propose_repairs
+from astsight.agent.repair import diagnose_and_repair
 from astsight.agent.semantic import validate_semantics
 from astsight.agent.sut import injection_env
 from astsight.cases.context import build_context
@@ -269,29 +268,45 @@ def _entry(case_id: str, message: str, reason: str = "case_error") -> dict:
     }
 
 
-def _diagnosis(case_id: str, root: str = "case_error", confidence: str = "high") -> dict:
+def _diagnosis(
+    case_id: str,
+    root: str = "case_error",
+    confidence: str = "high",
+    *,
+    action_target: str | None = None,
+    patch: dict | None = None,
+) -> dict:
     return {
         "case_id": case_id,
         "phenomenon": "断言与需求不一致",
         "root_cause": root,
-        "action_target": "user",
+        "action_target": action_target
+        or ("framework" if root == "mock_error" else "user"),
         "confidence": confidence,
         "evidence": [{"fact": "quote 要求 1-99", "source": "requirements.md"}],
         "verify_action": "改为期望 422",
+        "patch": patch,
     }
 
 
+def _plan(*diagnoses: dict) -> dict:
+    return {"schema_version": 2, "diagnoses": list(diagnoses)}
+
+
 def test_diagnosis_eligibility_blocks_5xx_and_low_confidence() -> None:
+    context = _context()
+    draft = CaseDraft.model_validate(_draft_payload(context))
     llm = StubLLM(
         [
-            [
+            _plan(
                 _diagnosis("TC-0001"),
                 _diagnosis("TC-0002"),
                 _diagnosis("TC-0003", confidence="low"),
-            ]
+            )
         ]
     )
-    outcome = diagnose_failures(
+    outcome = diagnose_and_repair(
+        draft,
         cases=[_case("TC-0001"), _case("TC-0002"), _case("TC-0003")],
         entries=[
             _entry("TC-0001", "expected 200 got 422"),
@@ -299,34 +314,38 @@ def test_diagnosis_eligibility_blocks_5xx_and_low_confidence() -> None:
             _entry("TC-0003", "unexpected body"),
         ],
         llm=llm,
+        context=context,
+        analysis=None,
+        project=EXAMPLE,
+        case_keys={"TC-0001": "quote_success"},
     )
     assert outcome.eligible_case_ids == {"TC-0001"}
-    assert outcome.by_case["TC-0002"]["eligible_for_repair"] is False
-    assert outcome.by_case["TC-0003"]["eligible_for_repair"] is False
+    assert outcome.diagnoses["TC-0002"]["eligible_for_repair"] is False
+    assert outcome.diagnoses["TC-0003"]["eligible_for_repair"] is False
 
 
 def test_repair_rejects_forbidden_identity_change() -> None:
     context = _context()
     analysis = _analysis(context)
     draft = CaseDraft.model_validate(_draft_payload(context))
-    bad_plan = {
-        "schema_version": 1,
-        "repairs": [
-            {
+    bad_plan = _plan(
+        _diagnosis(
+            "TC-0001",
+            patch={
                 "case_key": "quote_success",
                 "reason": "改 endpoint",
                 "endpoint": "POST /api/v1/other",
-            }
-        ],
-    }
+            },
+        )
+    )
     with pytest.raises(AgentError) as exc:
-        propose_repairs(
+        diagnose_and_repair(
             draft,
-            failures=[_entry("TC-0001", "expected 200 got 500")],
-            diagnoses={"TC-0001": {**_diagnosis("TC-0001"), "eligible_for_repair": True}},
+            cases=[_case("TC-0001")],
+            entries=[_entry("TC-0001", "expected 200 got 500")],
+            llm=StubLLM(bad_plan),
             context=context,
             analysis=analysis,
-            llm=StubLLM(bad_plan),
             project=EXAMPLE,
             case_keys={"TC-0001": "quote_success"},
         )
@@ -337,29 +356,168 @@ def test_repair_rolls_back_invalid_patch() -> None:
     context = _context()
     analysis = _analysis(context)
     draft = CaseDraft.model_validate(_draft_payload(context))
-    plan = {
-        "schema_version": 1,
-        "repairs": [
-            {
+    plan = _plan(
+        _diagnosis(
+            "TC-0001",
+            patch={
                 "case_key": "quote_success",
                 "reason": "写入未知字段",
                 "body": {"unknown_field": 1},
-            }
-        ],
-    }
-    outcome = propose_repairs(
+            },
+        )
+    )
+    outcome = diagnose_and_repair(
         draft,
-        failures=[_entry("TC-0001", "expected 200 got 500")],
-        diagnoses={"TC-0001": {**_diagnosis("TC-0001"), "eligible_for_repair": True}},
+        cases=[_case("TC-0001")],
+        entries=[_entry("TC-0001", "expected 200 got 201")],
+        llm=StubLLM(plan),
         context=context,
         analysis=analysis,
-        llm=StubLLM(plan),
         project=EXAMPLE,
         case_keys={"TC-0001": "quote_success"},
     )
     assert not outcome.changed
     assert outcome.rejected[0]["reason"] == "validation_failed"
     assert outcome.draft.cases[0].body == {"sku": "ABC-1", "quantity": 2}
+
+
+def test_repair_rejects_assertion_deletion() -> None:
+    context = _context()
+    draft = CaseDraft.model_validate(_draft_payload(context))
+    plan = _plan(
+        _diagnosis(
+            "TC-0001",
+            patch={
+                "case_key": "quote_success",
+                "reason": "只保留状态码",
+                "asserts": [
+                    {"kind": "status_code", "op": "eq", "expect": 200},
+                ],
+            },
+        )
+    )
+    outcome = diagnose_and_repair(
+        draft,
+        cases=[_case("TC-0001")],
+        entries=[_entry("TC-0001", "expected 5000 got 5001")],
+        llm=StubLLM(plan),
+        context=context,
+        analysis=None,
+        project=EXAMPLE,
+        case_keys={"TC-0001": "quote_success"},
+    )
+    assert not outcome.changed
+    assert outcome.rejected[0]["reason"] == "assertion_count_decreased"
+
+
+def _mock_semantic(dep_id: str):
+    from contracts import MockBranch, MockDep, MockSemantic
+
+    return MockSemantic(
+        context_id="ctx",
+        deps=[
+            MockDep(
+                dep_id=dep_id,
+                endpoint="GET /prices/{}",
+                branches=[
+                    MockBranch(
+                        branch="success",
+                        semantics="价格存在",
+                        stub=MockStub(status=200, body={"unit_price_cents": 2500}),
+                    ),
+                    MockBranch(
+                        branch="not_found",
+                        semantics="价格不存在",
+                        stub=MockStub(status=404, body={"error": "not_found"}),
+                    ),
+                ],
+            )
+        ],
+    )
+
+
+def test_repair_applies_bound_mock_branch_patch() -> None:
+    context = _context()
+    dep_id = _dep_id(context)
+    payload = _draft_payload(context)
+    payload["cases"][0]["mock_bindings"] = {dep_id: "success"}
+    draft = CaseDraft.model_validate(payload)
+    plan = _plan(
+        _diagnosis(
+            "TC-0001",
+            root="mock_error",
+            patch={
+                "case_key": "quote_success",
+                "reason": "Mock 结构不符合 SUT 消费方式",
+                "mock_branches": [
+                    {
+                        "dep_id": dep_id,
+                        "branch": "success",
+                        "reason": "SUT 读取 data.unit_price_cents",
+                        "body": {"data": {"unit_price_cents": 2500}},
+                    }
+                ],
+            },
+        )
+    )
+    outcome = diagnose_and_repair(
+        draft,
+        cases=[_case("TC-0001")],
+        entries=[_entry("TC-0001", "KeyError: 'data'", reason="unknown")],
+        llm=StubLLM(plan),
+        context=context,
+        analysis=None,
+        project=EXAMPLE,
+        case_keys={"TC-0001": "quote_success"},
+        mock_semantic=_mock_semantic(dep_id),
+    )
+    assert outcome.mock_changed
+    assert outcome.mock_applied[0]["branch"] == "success"
+    branch = outcome.mock_semantic.branch_index()[(dep_id, "success")]
+    assert branch.stub.body == {"data": {"unit_price_cents": 2500}}
+    assert outcome.mock_rejected == []
+
+
+def test_repair_rejects_mock_branch_not_bound() -> None:
+    context = _context()
+    dep_id = _dep_id(context)
+    payload = _draft_payload(context)
+    payload["cases"][0]["mock_bindings"] = {dep_id: "success"}
+    draft = CaseDraft.model_validate(payload)
+    plan = _plan(
+        _diagnosis(
+            "TC-0001",
+            root="mock_error",
+            patch={
+                "case_key": "quote_success",
+                "reason": "改未绑定的分支",
+                "mock_branches": [
+                    {
+                        "dep_id": dep_id,
+                        "branch": "not_found",
+                        "reason": "不该允许",
+                        "status": 200,
+                    }
+                ],
+            },
+        )
+    )
+    outcome = diagnose_and_repair(
+        draft,
+        cases=[_case("TC-0001")],
+        entries=[_entry("TC-0001", "unexpected body", reason="unknown")],
+        llm=StubLLM(plan),
+        context=context,
+        analysis=None,
+        project=EXAMPLE,
+        case_keys={"TC-0001": "quote_success"},
+        mock_semantic=_mock_semantic(dep_id),
+    )
+    assert not outcome.changed
+    assert any(
+        item["reason"].startswith("mock_branch_not_bound")
+        for item in outcome.mock_rejected
+    )
 
 
 def test_validate_case_bindings_reports_unbound_dependency() -> None:

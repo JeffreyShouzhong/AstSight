@@ -5,11 +5,10 @@
 from .case_design import CaseDesignResult, generate_case_design
 from .casegen import generate_case_draft, validate_case_bindings
 from .data_prep import DataPlanDraft, generate_data_plans, generate_data_semantics
-from .diagnosis import DiagnosisOutcome, diagnose_failures
 from .errors import AgentError
 from .flow import FlowConfig, FlowResult, run_flow
-from .mockplan import build_mock_plan
-from .repair import propose_repairs
+from .mockplan import build_mock_plan, sync_mock_semantic
+from .repair import RepairOutcome, diagnose_and_repair
 from .rule_analysis import generate_rule_draft, import_rule_draft_for_flow
 from .semantic import SemanticValidation, analyze_semantics, validate_semantics
 from .sut import SutProcess, injection_env, start_sut
@@ -18,14 +17,14 @@ __all__ = [
     "AgentError",
     "CaseDesignResult",
     "DataPlanDraft",
-    "DiagnosisOutcome",
     "FlowConfig",
     "FlowResult",
+    "RepairOutcome",
     "SemanticValidation",
     "SutProcess",
     "analyze_semantics",
     "build_mock_plan",
-    "diagnose_failures",
+    "diagnose_and_repair",
     "generate_case_design",
     "generate_case_draft",
     "generate_data_plans",
@@ -33,9 +32,9 @@ __all__ = [
     "generate_rule_draft",
     "import_rule_draft_for_flow",
     "injection_env",
-    "propose_repairs",
     "run_flow",
     "start_sut",
+    "sync_mock_semantic",
     "validate_case_bindings",
     "validate_semantics",
 ]

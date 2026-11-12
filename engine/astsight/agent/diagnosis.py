@@ -1,28 +1,20 @@
-"""A5 失败诊断：确定性归因之后的疑难失败兜底。
+"""A5/A6 失败现场打包：确定性归因之后，把疑难失败整理成 LLM 可消费的输入。
 
-LLM 只解释失败，不重试、不改用例、不改审核决定。确定性归因保持原样，
-LLM 结论单独存放；只有 `case_error` + 高置信度才允许进入修复建议阶段。
+本模块只做选择与裁剪，不调用模型、不改草案；真正的诊断 + 修复合并节点在
+`repair.py`。确定性归因保持原样，LLM 结论单独存放，修复前仍需过确定性护栏。
 """
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from ..llm import LLMClient, LLMError
-from .errors import AgentError
-from .models import FailureDiagnosis
+from contracts import MockSemantic
 
-_ENGINE_ROOT = Path(__file__).resolve().parents[2]
-_AST_SIGHT_ROOT = _ENGINE_ROOT.parent
-_PROMPT_PATH = _AST_SIGHT_ROOT / "prompts" / "a5_result_diagnosis.md"
 MAX_FAILURES = 20
 MAX_MESSAGE_CHARS = 8_000
 _SECRET_HEADERS = ("authorization", "cookie", "token", "secret", "api-key", "x-api-key")
 _5XX_RE = re.compile(r"\b5\d{2}\b")
-_ACTION_BY_ROOT = {
+ACTION_BY_ROOT = {
     "code_defect": "user",
     "case_error": "user",
     "change_induced": "user",
@@ -31,21 +23,7 @@ _ACTION_BY_ROOT = {
     "adapter_error": "framework",
     "env_error": "framework",
 }
-
-
-@dataclass
-class DiagnosisOutcome:
-    by_case: dict[str, dict[str, Any]] = field(default_factory=dict)
-    eligible_case_ids: set[str] = field(default_factory=set)
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-
-def load_diagnosis_prompt(path: str | Path | None = None) -> str:
-    prompt_path = Path(path) if path else _PROMPT_PATH
-    if not prompt_path.is_file():
-        raise AgentError("diagnosis_prompt_missing", str(prompt_path))
-    return prompt_path.read_text(encoding="utf-8")
+REPAIRABLE_ROOTS = {"case_error", "mock_error"}
 
 
 def _safe_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -58,7 +36,7 @@ def _safe_headers(headers: dict[str, str]) -> dict[str, str]:
     return safe
 
 
-def _case_payload(case: Any) -> dict[str, Any]:
+def case_payload(case: Any, *, case_key: str | None = None) -> dict[str, Any]:
     refs = [
         {
             "doc": ref.doc,
@@ -70,7 +48,7 @@ def _case_payload(case: Any) -> dict[str, Any]:
     return {
         "id": getattr(case, "id", ""),
         "endpoint": getattr(case, "endpoint", ""),
-        "case_key": getattr(case, "id", ""),
+        "case_key": case_key or getattr(case, "id", ""),
         "category": getattr(case, "category", ""),
         "title": getattr(case, "title", ""),
         "method": getattr(case, "method", ""),
@@ -83,13 +61,18 @@ def _case_payload(case: Any) -> dict[str, Any]:
             assertion.model_dump(mode="json")
             for assertion in (getattr(case, "asserts", None) or [])
         ],
+        "steps": [
+            step.model_dump(mode="json")
+            for step in (getattr(case, "steps", None) or [])
+        ],
+        "assert_strength": str(getattr(case, "assert_strength", "")),
         "requirement_refs": refs,
         "mock_bindings": dict(getattr(case, "mock_bindings", {}) or {}),
         "source": getattr(case, "source", ""),
     }
 
 
-def _mock_payload(case_id: str, mock_summary: dict[str, Any] | None) -> dict[str, Any]:
+def mock_payload(case_id: str, mock_summary: dict[str, Any] | None) -> dict[str, Any]:
     summary = mock_summary or {}
     by_case = (summary.get("by_case") or {}).get(case_id) or {}
     unused = [
@@ -112,13 +95,44 @@ def _mock_payload(case_id: str, mock_summary: dict[str, Any] | None) -> dict[str
     }
 
 
-def _select(entries: list[dict[str, Any]], max_failures: int) -> list[dict[str, Any]]:
+def mock_semantics_payload(
+    case: Any, mock_semantic: MockSemantic | None
+) -> dict[str, Any]:
+    """只回传该用例绑定到的下游分支，避免把整份语义库塞进提示词。"""
+    if mock_semantic is None:
+        return {}
+    dep_index = mock_semantic.dep_index()
+    payload: dict[str, Any] = {}
+    for dep_id, bound_branch in (getattr(case, "mock_bindings", {}) or {}).items():
+        dep = dep_index.get(str(dep_id))
+        if dep is None:
+            continue
+        payload[str(dep_id)] = {
+            "endpoint": dep.endpoint,
+            "route_key": dep.route_key,
+            "bound_branch": str(bound_branch),
+            "branches": [
+                {
+                    "branch": branch.branch,
+                    "semantics": branch.semantics,
+                    "stub": branch.stub.model_dump(mode="json"),
+                }
+                for branch in dep.branches
+            ],
+        }
+    return payload
+
+
+def select_failures(
+    entries: list[dict[str, Any]], max_failures: int = MAX_FAILURES
+) -> list[dict[str, Any]]:
+    """确定性归因已能定案的失败不再交给 LLM，节省一次调用。"""
     selected: list[dict[str, Any]] = []
     for entry in entries:
         if entry.get("outcome") not in ("failed", "error"):
             continue
         reason = str((entry.get("diagnosis") or {}).get("reason") or "")
-        if reason not in ("unknown", "case_error", "change_induced"):
+        if reason not in ("unknown", "case_error", "change_induced", "sut_bug"):
             continue
         selected.append(entry)
         if len(selected) >= max_failures:
@@ -126,133 +140,73 @@ def _select(entries: list[dict[str, Any]], max_failures: int) -> list[dict[str, 
     return selected
 
 
-def _diagnosis_payload(
+def diagnosis_payload(
     entry: dict[str, Any],
     case: Any,
     mock_summary: dict[str, Any] | None,
     changed_endpoints: set[str],
+    *,
+    case_key: str | None = None,
+    mock_semantic: MockSemantic | None = None,
 ) -> dict[str, Any]:
-    case_payload = _case_payload(case)
+    case_payload_value = case_payload(case, case_key=case_key)
     message = str(entry.get("message") or "")[:MAX_MESSAGE_CHARS]
     return {
-        "case": case_payload,
+        "case": case_payload_value,
         "execution": {
             "status": entry.get("outcome"),
             "message": message,
             "duration": entry.get("duration"),
             "attempts": entry.get("attempts") or [],
             "deterministic_diagnosis": entry.get("diagnosis") or {},
-            "endpoint_changed": case_payload["endpoint"] in changed_endpoints,
+            "endpoint_changed": case_payload_value["endpoint"] in changed_endpoints,
         },
-        "mock_evidence": _mock_payload(str(entry.get("case_id") or ""), mock_summary),
+        "mock_evidence": mock_payload(str(entry.get("case_id") or ""), mock_summary),
+        "mock_semantics": mock_semantics_payload(case, mock_semantic),
         "change_set": {
-            "endpoint_changed": case_payload["endpoint"] in changed_endpoints,
+            "endpoint_changed": case_payload_value["endpoint"] in changed_endpoints,
         },
     }
 
 
-def _eligible(
-    diagnosis: FailureDiagnosis,
+def is_repairable(
+    diagnosis: Any,
     entry: dict[str, Any],
     case: Any,
 ) -> bool:
-    if diagnosis.root_cause != "case_error":
+    """只有高/中置信度、非 5xx、非正向超时的用例/ Mock 归因才允许自动修复。"""
+    if str(getattr(diagnosis, "root_cause", "")) not in REPAIRABLE_ROOTS:
         return False
-    if diagnosis.action_target != "user":
+    if str(getattr(diagnosis, "action_target", "")) != ACTION_BY_ROOT[
+        str(getattr(diagnosis, "root_cause", ""))
+    ]:
         return False
-    if diagnosis.confidence not in ("high", "medium"):
+    if str(getattr(diagnosis, "confidence", "")) not in ("high", "medium"):
         return False
+    root = str(getattr(diagnosis, "root_cause", ""))
     reason = str((entry.get("diagnosis") or {}).get("reason") or "")
-    if reason not in ("unknown", "case_error"):
+    if reason not in ("unknown", "case_error", "sut_bug"):
         return False
     message = str(entry.get("message") or "")
-    if _5XX_RE.search(message):
+    # 5xx 只能由 Mock 语义错误解释：若把 5xx 当作用例错误去改断言，
+    # 等于把真实代码缺陷“修绿”，必须拒绝。
+    if _5XX_RE.search(message) and root != "mock_error":
+        return False
+    if root == "mock_error" and not (getattr(case, "mock_bindings", {}) or {}):
         return False
     if str(getattr(case, "category", "")) == "positive" and "timeout" in message.lower():
         return False
     return True
 
 
-def diagnose_failures(
-    *,
-    cases: list[Any],
-    entries: list[dict[str, Any]],
-    llm: LLMClient,
-    mock_summary: dict[str, Any] | None = None,
-    changed_endpoints: set[str] | None = None,
-    max_failures: int = MAX_FAILURES,
-    prompt_path: str | Path | None = None,
-) -> DiagnosisOutcome:
-    cases_by_id = {str(getattr(case, "id", "")): case for case in cases}
-    selected = [entry for entry in _select(entries, max_failures) if entry.get("case_id") in cases_by_id]
-    outcome = DiagnosisOutcome()
-    if not selected:
-        return outcome
-
-    changed = changed_endpoints or set()
-    packages = [
-        _diagnosis_payload(
-            entry,
-            cases_by_id[str(entry["case_id"])],
-            mock_summary,
-            changed,
-        )
-        for entry in selected
-    ]
-    system = load_diagnosis_prompt(prompt_path)
-    user = json.dumps(
-        {
-            "diagnoses": packages,
-            "note": "确定性归因已先行；请只对这些疑难失败给出根因假设，不要改写用例。",
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    try:
-        payload = llm.complete_json(system=system, user=user)
-    except LLMError as exc:
-        raise AgentError("diagnosis_llm_failed", str(exc)) from exc
-    items = payload if isinstance(payload, list) else [payload]
-    requested = {str(entry["case_id"]) for entry in selected}
-    seen: set[str] = set()
-    for raw in items:
-        if not isinstance(raw, dict):
-            outcome.errors.append("diagnosis_invalid:非 JSON object")
-            continue
-        try:
-            diagnosis = FailureDiagnosis.model_validate(raw)
-        except Exception as exc:
-            outcome.errors.append(f"diagnosis_invalid:{str(exc)[:300]}")
-            continue
-        if diagnosis.case_id not in requested:
-            outcome.errors.append(f"diagnosis_unknown_case:{diagnosis.case_id}")
-            continue
-        if diagnosis.case_id in seen:
-            outcome.warnings.append(f"diagnosis_duplicate_case:{diagnosis.case_id}")
-            continue
-        seen.add(diagnosis.case_id)
-        expected_target = _ACTION_BY_ROOT[diagnosis.root_cause]
-        if diagnosis.action_target != expected_target:
-            outcome.warnings.append(
-                f"diagnosis_action_target_corrected:{diagnosis.case_id}:"
-                f"{diagnosis.action_target}->{expected_target}"
-            )
-            diagnosis = diagnosis.model_copy(update={"action_target": expected_target})
-        entry = next(item for item in selected if item["case_id"] == diagnosis.case_id)
-        case = cases_by_id[diagnosis.case_id]
-        record = diagnosis.model_dump(mode="json")
-        record["eligible_for_repair"] = _eligible(diagnosis, entry, case)
-        outcome.by_case[diagnosis.case_id] = record
-        if record["eligible_for_repair"]:
-            outcome.eligible_case_ids.add(diagnosis.case_id)
-    missing = requested - seen
-    for case_id in sorted(missing):
-        outcome.warnings.append(f"diagnosis_missing:{case_id}")
-    return outcome
-
-
 __all__ = [
-    "DiagnosisOutcome",
-    "diagnose_failures",
-    "load_diagnosis_prompt",
+    "ACTION_BY_ROOT",
+    "MAX_FAILURES",
+    "REPAIRABLE_ROOTS",
+    "case_payload",
+    "diagnosis_payload",
+    "is_repairable",
+    "mock_payload",
+    "mock_semantics_payload",
+    "select_failures",
 ]

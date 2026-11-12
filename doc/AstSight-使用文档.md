@@ -1140,7 +1140,7 @@ PYTHONPATH=. python -m astsight run \
   → 待审 proposal（--approve-as 可批准 new/update/revive）
   → C5b 造数计划 → MockPlan → 启动 Mock
   → 注入环境变量启动 SUT → pytest 执行
-  → 确定性归因 → A5 诊断 → 可选 A6 修复建议 → 有界重跑
+  → 确定性归因 → A5/A6 诊断+修复（同一节点）→ 有界重跑（默认最多 3 轮）
 ```
 
 基本命令：
@@ -1153,16 +1153,17 @@ PYTHONPATH=. python -m astsight agent run \
   --mode full --codegraph off \
   --base-url http://127.0.0.1:8020 \
   --sut-command "python -m uvicorn app:app --host 127.0.0.1 --port 8020 --log-level warning" \
-  --approve-as demo \
-  --max-repair-rounds 1
+  --approve-as demo
 ```
 
 边界：
 
-- `--approve-as` 只自动批准 `new/update/revive`；`deprecate` 永远拒绝；
+- `--approve-as` 只自动批准初始 proposal 的 `new/update/revive`；`deprecate` 永远拒绝；
 - 不提供 `--approve-as` 时停在待审 proposal；
-- A6 默认关闭（`--max-repair-rounds 0`），只修请求参数和断言，不改用例身份、
-  规则引用、前置状态或 Mock 绑定；
+- A5/A6 默认最多 3 轮（`--max-repair-rounds`，上限 5，0 关闭）。运行期修复可改用例
+  请求/断言/`mock_bindings` 和实际绑定的 Mock 分支；用例补丁以
+  `astsight-agent:repair` 身份自动批准，Mock 补丁热更新。修复不得删除断言或降强，
+  不改用例身份、规则引用或前置状态；
 - 没有 OpenAPI 时可以用代码路由，但字段格式/必填类用例无法生成；
 - 分析阶段 SUT 尚未启动，因此不能从 `--base-url` 拉取契约；
 - 启动期注入只支持环境变量形式的 `url_override` 和显式 `http_proxy`；

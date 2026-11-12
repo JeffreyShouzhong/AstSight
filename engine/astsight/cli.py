@@ -554,7 +554,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "不提供则停在待审 proposal",
     )
     agent_run.add_argument(
-        "--max-repair-rounds", type=int, default=0, help="A6 修复重跑轮数（默认 0）"
+        "--max-repair-rounds",
+        type=int,
+        default=3,
+        help="诊断/修复后重跑的最大轮数（默认 3；0 关闭自动修复）",
     )
     agent_run.add_argument("--max-cases", type=int, default=200)
     agent_run.add_argument(
