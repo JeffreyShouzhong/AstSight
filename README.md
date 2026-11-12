@@ -23,8 +23,10 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、Open
                                     造数计划 → pytest → 执行报告
 ```
 
-> 目前断言以 L1（状态码 / 字段存在 / 字段值）为主，L2–L4 业务不变量断言在
-> [路线图](ROADMAP.md)上。我们把「尚未实现」写清楚，而不是藏起来——这是刻意的诚实。
+> 目前支持状态码、响应字段、header、OpenAPI 响应 schema 和只读数据库行断言；
+> 强度 L1–L4 按内容自动推导。L3/L4 需要用例显式引用步骤响应，尚不能从需求文本
+> 自动推导业务关系——剩余边界列在[路线图](ROADMAP.md)上。我们把「尚未实现」写清楚，
+> 而不是藏起来——这是刻意的诚实。
 
 这是一份真实运行报告（示例项目 [partner_onboarding](engine/examples/partner_onboarding)，
 38 个用例全部通过、门禁 PASS）：
@@ -222,7 +224,8 @@ PYTHONPATH=. python -m astsight run \
 pytest 生成与执行、`agent run` 编排均已落地，示例项目 38 条用例全部通过。
 主要边界：
 
-- 断言以 L1 为主（状态码、字段存在、字段值）；更强的业务不变量断言尚未完整落地。
+- 断言覆盖状态码、响应字段、header、OpenAPI schema 和只读数据库行；L3/L4 关系断言
+  需要用例显式写 `$ref`，框架尚不能从需求文本自动推导业务不变量。
 - 造数支持 SQLite / PostgreSQL / MySQL；三者共用同一套 fixture 校验与事务语义，
   驱动分别为 stdlib `sqlite3`、`psycopg`、`PyMySQL`。
 - HTTP 是主路径；gRPC 仅 unary、Dubbo 2.7+ 通过 sidecar，Mock 实现仍在推进。

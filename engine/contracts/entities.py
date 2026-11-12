@@ -186,15 +186,26 @@ class Precondition(BaseModel):
 class Assertion(BaseModel):
     """一条可执行断言（C4 产出，C6 编码，C7 判定）。
 
-    `kind` 先支持 status_code / body_field / header；`expect` 允许任意 JSON 值。
+    支持 status_code / body_field / header / body_schema / db_row：
+    - `body_schema`：按 OpenAPI 响应 JSON Schema 校验 body，target=状态码；
+    - `db_row`：查询数据库验证落库状态，target=`table` 或 `table.column`；
+    - `where` 仅用于 db_row，值可以是 `$ref`，执行时解析。
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: str = Field(description="status_code / body_field / header")
-    target: str | None = Field(default=None, description="字段名或 header 名")
-    op: str = Field(default="eq", description="eq/ne/in/contains/exists/gte/lte")
-    expect: Any = Field(default=None, description="期望值")
+    kind: str = Field(
+        description="status_code / body_field / header / body_schema / db_row"
+    )
+    target: str | None = Field(default=None, description="字段名、header 名、状态码或表名")
+    op: str = Field(
+        default="eq",
+        description="eq/ne/in/contains/exists/absent/gte/lte/count_eq/matches",
+    )
+    expect: Any = Field(default=None, description="期望值；body_schema 为 JSON Schema")
+    where: dict[str, Any] = Field(
+        default_factory=dict, description="db_row 的 WHERE 等值条件"
+    )
 
 
 class CaseStep(BaseModel):

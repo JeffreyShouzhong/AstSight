@@ -543,7 +543,7 @@ PYTHONPATH=. python -m astsight cases prepare \
         {"kind": "status_code", "op": "eq", "expect": 400},
         {"kind": "body_field", "target": "error_code", "op": "eq", "expect": "40001"}
       ],
-      "assert_strength": "L1",
+      "assert_strength": "L2",
       "rationale": "规则 BR-01 明确给出错误码",
       "mock_bindings": {}
     }
@@ -608,6 +608,38 @@ PYTHONPATH=. python -m astsight cases prepare \
 - 步骤共享同一个 `client` 与 Mock 会话；`preconditions` 在第一步前 apply，
   `mock_bindings` 对整个用例生效；每条用例前仍会调用 `--reset-url`。
 - 最多 50 步/用例、单步 50 条断言；不要为凑覆盖把无关接口串成一条用例。
+- `db_row` 的 `where` 也支持 `$ref`；`body_schema` 的 `expect` 不做引用解析。
+
+#### 断言语言
+
+| kind | 允许的 op | target / expect |
+|---|---|---|
+| `status_code` | `eq` / `in` / `between` | target 留空，expect 为状态码、状态码列表或 `[low, high]` |
+| `body_field` | `exists` / `eq` / `ne` / `in` / `gte` / `lte` / `contains` | target 为响应顶层字段；`exists` 不需要 expect |
+| `header` | `exists` / `eq` / `contains` | target 为 header 名（如 `content-type`） |
+| `body_schema` | `matches` | target 为响应状态码（如 `"201"`）；expect 可省略，由 OpenAPI 响应 schema 自动回填 |
+| `db_row` | `exists` / `absent` / `count_eq` / `eq` / `ne` / `gte` / `lte` | target 为表名；`eq/ne/gte/lte` 用 `table.column`；`where` 为等值条件 |
+
+约束与执行语义：
+
+- `body_schema` 使用 OpenAPI 中该状态码的 JSON Schema（本地 `$ref` 已内联）；
+  该状态码没有 JSON Schema 时校验报错。生成的 pytest 需要 `jsonschema`。
+- `db_row` 只执行只读 `SELECT`；表名/列名先做标识符白名单校验，值全部参数化。
+  声明了 `db_row` 的项目应通过 `--data-catalog` 提供目录，导入时会校验
+  表、列和 `where` 列是否存在；缺目录只产生 `assertion.db_catalog_missing` warning。
+- 生成用例运行时若未设置 `ASTSIGHT_DB_URL`，`db_row` 断言会 skip 为
+  `data_unavailable`，不会伪装成通过。
+- 失败场景可加 `db_row` 断言验证“没有副作用”，例如创建失败后
+  `{"kind": "db_row", "target": "partners", "op": "absent", "where": {"mobile": "..."}}`。
+
+`assert_strength` 由断言内容自动推导，声明值仅作为设计意图：
+
+- L1：仅状态码、字段存在、`body_schema` 结构校验；
+- L2：`body_field` / `header` / `db_row` 的确定值比较；
+- L3：断言引用了更早步骤的响应（`$ref`）；
+- L4：同时引用两个及以上不同步骤（跨响应不变量）。
+
+声明值与推导值不一致会产生 `assert_strength.mismatch` warning，导入以推导值为准。
 
 完整字段规则见 `prompts/a4_case_design.md` 和上下文中的 `cases.schema.json`。
 
@@ -1314,8 +1346,8 @@ Git Bash 会把以 `/` 开头的参数改写成 Windows 路径。建议传完整
 
 ## 19. 边界与未实现
 
-- 断言强度仍以 L1 为主：状态码、字段存在、字段值；L2–L4 尚未实现。
-- 只支持单请求用例，不生成跨用例捕获或鉴权链路。
+- `db_row` 只做只读校验，不负责写入或等待异步落库；需要轮询的场景尚未支持。
+- 不生成跨用例捕获或鉴权链路；多请求仅限单条用例内的 `steps`。
 - C5 造数支持 SQLite/PostgreSQL/MySQL，但只覆盖用例级 fixture apply/teardown；
   不负责建库、迁移、连接池与跨库事务。
 - `replay` 模式未实现。

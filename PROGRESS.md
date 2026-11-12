@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-12
-> 分支：`main`
+> 分支：`feat/postgres-mysql-data`
 > 当前阶段：C6/C7 完成（`caseset.json` v4，38 条已批准用例 38/38 通过，门禁 PASS）
 
 ## 当前状态
@@ -27,6 +27,7 @@
 | 模型配置文件 | ✅ 新增 | `engine/llm.example.json` 模板；`llm.json` 自动发现（cwd → `~/.astsight/llm.json`）或 `--llm-config` / `ASTSIGHT_LLM_CONFIG`；环境变量覆盖文件 |
 | 用户文档 | ✅ 已整理 | 根 `README.md` 重写为面向使用者的当前版本说明；新增《快速上手指南》；删除 4 份历史调研文档，保留设计/架构/决策文档给维护者 |
 | 造数方言 | ✅ PostgreSQL/MySQL | `data/dialects.py`；SQL 占位符/标识符按方言渲染；`psycopg` / `PyMySQL` 驱动按需导入；计划方言与 `--db-url` 不一致时 `dialect_mismatch`；`data catalog --dialect`、`agent run --db-dialect` |
+| 断言深度 | ✅ 2026-11-12 | `header/contains`、`body_schema`（OpenAPI 响应 schema）、只读 `db_row`；`assert_strength` 按内容推导（L1–L4）；全量 **297 passed, 2 skipped** |
 
 ## 本轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -250,6 +251,22 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-12**：断言深度与强度口径升级：
+  - `Assertion` 增加 `where`；支持 `header/contains`、`body_schema/matches` 与
+    `db_row`（`exists/absent/count_eq/eq/ne/gte/lte`）。
+  - `cases/context.py` 从 OpenAPI 提取响应 JSON Schema（内联本地 `$ref`）和首个 2xx
+    Content-Type；`body_schema` 未写 `expect` 时由框架回填。
+  - `cases/strength.py` 新增：按断言内容推导 L1–L4（L3 含 `$ref`，L4 引用两个及以上
+    步骤）；声明值不一致产生 `assert_strength.mismatch` warning，导入以推导值为准。
+  - `db_row` 导入时按 data catalog 校验表/列/`where`（缺目录只 warning）；codegen 新增
+    `db_tools`/`schema_tools` fixture，只发只读 `SELECT`，未配置 `ASTSIGHT_DB_URL`
+    时显式 skip `data_unavailable`。`jsonschema==4.26.0` 加入运行时依赖。
+  - 模板正向用例自动增加 `body_schema` 与 `Content-Type` 断言；失败场景可用
+    `db_row/absent` 验证无副作用。
+  - 新增 `tests/test_case_assertions_advanced.py`（11 条，含 SQLite 运行时与 schema
+    运行时）；全量 **297 passed, 2 skipped**。
+  - 文档同步：使用文档断言语言/强度口径、`prompts/a4_case_design.md`、设计文档 3.2.5、
+    决策记录 v4.12、engine README。
 - **2026-11-12**：C5 造数扩展到 PostgreSQL/MySQL：
   - 新增 `engine/astsight/data/dialects.py`：URL 解析（含 `postgresql+psycopg://`、
     `mysql+pymysql://` 别名与密码脱敏）、方言归一化、占位符与标识符引用。

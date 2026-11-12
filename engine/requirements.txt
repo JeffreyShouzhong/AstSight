@@ -14,6 +14,8 @@ pydantic==2.14.1
 httpx==0.28.1
 PyYAML==6.0.3
 pytest==9.1.1
+# 生成用例的 body_schema 断言（OpenAPI 响应 JSON Schema）
+jsonschema==4.26.0
 
 # ── C5 造数数据库驱动（SQLite 用 stdlib，无需额外依赖）──
 psycopg[binary]==3.3.8

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -44,8 +45,11 @@ from .draft import (
 )
 from ..persistence import sha256_json
 from .requirements import normalize_text
+from .strength import derive_assert_strength
 
 _PATH_PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_DB_TARGET_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*)?$")
 _MAX_MOCK_BINDINGS = 64
 _MAX_DEP_ID_LENGTH = 512
 _MAX_BRANCH_LENGTH = 128
@@ -441,15 +445,26 @@ def _resolve_case_steps(
                 continue
             safe_headers[str(header_name)] = str(header_value)
         for assertion in raw.asserts:
-            _check_step_refs(
-                assertion.expect,
-                allowed_steps=allowed,
-                location=f"steps[{index}].asserts.expect",
-                case_key=case_key,
-                endpoint=canonical,
-                path=step_label,
-                result=result,
-            )
+            if assertion.kind != "body_schema":
+                _check_step_refs(
+                    assertion.expect,
+                    allowed_steps=allowed,
+                    location=f"steps[{index}].asserts.expect",
+                    case_key=case_key,
+                    endpoint=canonical,
+                    path=step_label,
+                    result=result,
+                )
+            if assertion.kind == "db_row" and assertion.where:
+                _check_step_refs(
+                    assertion.where,
+                    allowed_steps=allowed,
+                    location=f"steps[{index}].asserts.where",
+                    case_key=case_key,
+                    endpoint=canonical,
+                    path=step_label,
+                    result=result,
+                )
 
         resolved.append(
             (
@@ -478,11 +493,14 @@ def _check_assert(
     profile: dict[str, Any],
     path: str,
     result: ValidationResult,
+    data_catalog: DataCatalog | None = None,
 ) -> None:
     matrix = {
         "status_code": {"eq", "in", "between"},
         "body_field": {"exists", "eq", "ne", "in", "gte", "lte", "contains"},
-        "header": {"exists", "eq"},
+        "header": {"exists", "eq", "contains"},
+        "body_schema": {"matches"},
+        "db_row": {"exists", "absent", "eq", "ne", "gte", "lte", "count_eq"},
     }
     if assertion.kind not in matrix:
         result.errors.append(
@@ -506,6 +524,27 @@ def _check_assert(
                 endpoint=endpoint,
                 path=path,
             )
+        )
+        return
+
+    if assertion.kind == "body_schema":
+        _check_schema_assert(
+            assertion,
+            case_key=case_key,
+            endpoint=endpoint,
+            profile=profile,
+            path=path,
+            result=result,
+        )
+        return
+    if assertion.kind == "db_row":
+        _check_db_assert(
+            assertion,
+            data_catalog=data_catalog,
+            case_key=case_key,
+            endpoint=endpoint,
+            path=path,
+            result=result,
         )
         return
 
@@ -616,6 +655,240 @@ def _check_assert(
                     path=path,
                 )
             )
+
+
+def _check_schema_assert(
+    assertion: Any,
+    *,
+    case_key: str,
+    endpoint: str,
+    profile: dict[str, Any],
+    path: str,
+    result: ValidationResult,
+) -> None:
+    status = str(assertion.target or "").strip()
+    if not status.isdigit():
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.schema_status_invalid",
+                "body_schema 的 target 必须是响应状态码",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    schemas = profile.get("response_schemas") or {}
+    if status not in schemas:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.schema_unknown",
+                f"OpenAPI 未声明状态码 {status} 的 JSON Schema",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    if assertion.expect is not None and not isinstance(assertion.expect, dict):
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.schema_invalid",
+                "body_schema 的 expect 必须是 JSON Schema 对象或留空由框架回填",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+
+
+def _check_db_assert(
+    assertion: Any,
+    *,
+    data_catalog: DataCatalog | None,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    target = str(assertion.target or "").strip()
+    if not _DB_TARGET_RE.match(target):
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.db_target_invalid",
+                f"db_row 的 target 必须是 table 或 table.column: {target!r}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    table, _, column = target.partition(".")
+    op = assertion.op
+    if op in {"eq", "ne", "gte", "lte"} and not column:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.db_column_missing",
+                f"db_row/{op} 需要 table.column 形式的 target",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if op in {"exists", "absent", "count_eq"} and column:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.db_column_unexpected",
+                f"db_row/{op} 只接受表名，不接受列: {target!r}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if op == "count_eq":
+        if not isinstance(assertion.expect, int) or isinstance(assertion.expect, bool):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_count_invalid",
+                    "db_row/count_eq 的 expect 必须是非负整数",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        elif assertion.expect < 0:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_count_invalid",
+                    "db_row/count_eq 的 expect 不能为负数",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    elif op in {"exists", "absent"}:
+        if assertion.expect is not None:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_expect_unexpected",
+                    f"db_row/{op} 不需要 expect",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    elif assertion.expect is None:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.db_expect_missing",
+                f"db_row/{op} 缺少 expect",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    for name, value in (assertion.where or {}).items():
+        if not _IDENTIFIER_RE.match(str(name)):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_where_invalid",
+                    f"db_row where 列名非法: {name!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        elif value is None:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_where_invalid",
+                    f"db_row where.{name} 不能为 null；空值匹配请显式设计条件",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    if data_catalog is None:
+        result.warnings.append(
+            _issue(
+                "warning",
+                "assertion.db_catalog_missing",
+                "声明了 db_row 断言但未提供 data_catalog，无法校验表/列是否存在",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    tables = data_catalog.table_index()
+    table_spec = tables.get(table)
+    if table_spec is None:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.db_table_unknown",
+                f"db_row 表不在 data_catalog 中: {table!r}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    columns = table_spec.column_index()
+    if column and column not in columns:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.db_column_unknown",
+                f"db_row 列不在 data_catalog 中: {table}.{column}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    for name in assertion.where or {}:
+        if name not in columns:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_column_unknown",
+                    f"db_row where 列不在 data_catalog 中: {table}.{name}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+
+
+def _hydrate_schema_asserts(
+    assertions: list[Any], profile: dict[str, Any]
+) -> list[Any]:
+    """body_schema 未显式给 expect 时，用 OpenAPI schema 回填成可独立执行的断言。"""
+    schemas = profile.get("response_schemas") or {}
+    out: list[Any] = []
+    for assertion in assertions:
+        if (
+            assertion.kind == "body_schema"
+            and assertion.expect is None
+            and str(assertion.target or "") in schemas
+        ):
+            assertion = assertion.model_copy(
+                update={"expect": copy.deepcopy(schemas[str(assertion.target)])}
+            )
+        out.append(assertion)
+    return out
 
 
 def _grounded_in_quote(codes: list[int], quote_text: str) -> bool:
@@ -1005,6 +1278,39 @@ def _check_level_refs(
                     path=path,
                 )
             )
+
+
+def _check_assert_strength(
+    draft_case: DraftCase,
+    *,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    derived = derive_assert_strength(
+        [
+            *draft_case.asserts,
+            *(
+                assertion
+                for step in draft_case.steps
+                for assertion in step.asserts
+            ),
+        ],
+        steps=len(draft_case.steps) or 1,
+    )
+    if draft_case.assert_strength != derived:
+        result.warnings.append(
+            _issue(
+                "warning",
+                "assert_strength.mismatch",
+                f"声明 {draft_case.assert_strength.value}，按断言内容推导为 "
+                f"{derived.value}；导入以推导值为准",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
 
 
 def _check_profile_alignment(
@@ -1401,6 +1707,13 @@ def validate_draft(
             path=pseudo_path,
             result=result,
         )
+        _check_assert_strength(
+            draft_case,
+            case_key=key,
+            endpoint=endpoint_raw,
+            path=pseudo_path,
+            result=result,
+        )
         _check_rule_refs(
             draft_case,
             ruleset=ruleset,
@@ -1599,6 +1912,7 @@ def validate_draft(
                         profile=step_profile,
                         path=step_path,
                         result=result,
+                        data_catalog=data_catalog,
                     )
                 _check_grounding(
                     step.asserts,
@@ -1618,14 +1932,34 @@ def validate_draft(
             path=pseudo_path,
             result=result,
         )
+        hydrated_draft = canonical_draft.model_copy(
+            update={
+                "asserts": _hydrate_schema_asserts(
+                    canonical_draft.asserts, profile
+                )
+            }
+        )
+        hydrated_steps = [
+            (
+                step.model_copy(
+                    update={
+                        "asserts": _hydrate_schema_asserts(
+                            step.asserts, step_profile
+                        )
+                    }
+                ),
+                step_profile,
+            )
+            for step, step_profile in resolved_steps
+        ]
         case = to_test_case(
-            canonical_draft,
+            hydrated_draft,
             method=str(profile["method"]),
             path=str(profile["path"]),
             doc_versions=result.doc_versions,
             generator=draft.generator,
             ruleset=ruleset,
-            steps=[step for step, _ in resolved_steps],
+            steps=[step for step, _ in hydrated_steps],
         )
         _check_requirement_refs(
             canonical_draft,
@@ -1645,6 +1979,12 @@ def validate_draft(
                 *(
                     (f"asserts[{i}].expect", assertion.expect)
                     for i, assertion in enumerate(case.asserts)
+                    if assertion.kind != "body_schema"
+                ),
+                *(
+                    (f"asserts[{i}].where", assertion.where)
+                    for i, assertion in enumerate(case.asserts)
+                    if assertion.kind == "db_row" and assertion.where
                 ),
             ):
                 _check_step_refs(
@@ -1708,6 +2048,7 @@ def validate_draft(
                     profile=profile,
                     path=pseudo_path,
                     result=result,
+                    data_catalog=data_catalog,
                 )
             _check_grounding(
                 case.asserts,

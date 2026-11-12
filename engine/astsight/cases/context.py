@@ -5,6 +5,7 @@ OpenAPI 是可选增强：有则补字段/必填/枚举/错误码；没有则从
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -184,6 +185,81 @@ def _attach_error_codes(profiles: list[dict[str, Any]], spec: dict[str, Any]) ->
         profile["error_codes"] = sorted(set(codes))
 
 
+def _resolve_pointer(root: Any, ref: str) -> Any | None:
+    if not ref.startswith("#/"):
+        return None
+    node = root
+    for raw in ref[2:].split("/"):
+        part = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return None
+    return node
+
+
+def _inline_schema(
+    node: Any, root: Any, stack: set[str] | None = None, depth: int = 0
+) -> Any:
+    """解析本地 $ref，得到可独立执行的 JSON Schema；循环引用降级为空 schema。"""
+    if depth > 20:
+        return {}
+    stack = stack or set()
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            if ref in stack:
+                return {}
+            target = _resolve_pointer(root, ref)
+            if target is None:
+                return {}
+            return _inline_schema(target, root, stack | {ref}, depth + 1)
+        return {
+            key: _inline_schema(value, root, stack, depth + 1)
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_inline_schema(item, root, stack, depth + 1) for item in node]
+    return node
+
+
+def _attach_response_meta(
+    profiles: list[dict[str, Any]], spec: dict[str, Any]
+) -> None:
+    """带回响应 JSON Schema 与 2xx Content-Type，供 body_schema / header 断言。"""
+    paths = spec.get("paths") or {}
+    for profile in profiles:
+        item = paths.get(profile.get("path") or "") or {}
+        operation = item.get(str(profile.get("method", "")).lower()) or {}
+        schemas: dict[str, Any] = {}
+        content_type = ""
+        for code, response in (operation.get("responses") or {}).items():
+            if not isinstance(response, dict):
+                continue
+            content = response.get("content") or {}
+            for ctype, media in content.items():
+                if "json" not in str(ctype).lower():
+                    continue
+                schema = (media or {}).get("schema")
+                if isinstance(schema, dict):
+                    inlined = _inline_schema(schema, spec)
+                    try:
+                        size = len(
+                            json.dumps(inlined, ensure_ascii=False)
+                        )
+                    except (TypeError, ValueError):
+                        size = 0
+                    if inlined and size <= 256_000:
+                        schemas[str(code)] = inlined
+                if not content_type and str(code).startswith("2"):
+                    content_type = str(ctype)
+                break
+        if schemas:
+            profile["response_schemas"] = schemas
+        if content_type:
+            profile["response_content_type"] = content_type
+
+
 def _excluded_sections(documents: list[DocumentContent]) -> list[dict[str, str]]:
     return [
         {"doc": document.doc, "section": section.section}
@@ -269,6 +345,7 @@ def build_context(
     )
     if spec:
         _attach_error_codes(profiles, spec)
+        _attach_response_meta(profiles, spec)
     document_payload = [document.model_dump(mode="json") for document in documents]
     doc_versions = {document.doc: document.version for document in documents}
     routes_hash = sha256_json(_canonical_routes(effective_routes))
@@ -321,7 +398,9 @@ def build_context(
         "allowed_assert_kinds": {
             "status_code": ["eq", "in", "between"],
             "body_field": ["exists", "eq", "ne", "in", "gte", "lte", "contains"],
-            "header": ["exists", "eq"],
+            "header": ["exists", "eq", "contains"],
+            "body_schema": ["matches"],
+            "db_row": ["exists", "absent", "eq", "ne", "gte", "lte", "count_eq"],
         },
     }
 

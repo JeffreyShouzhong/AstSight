@@ -79,7 +79,7 @@
         {"kind": "status_code", "op": "eq", "expect": 400},
         {"kind": "body_field", "target": "error_code", "op": "eq", "expect": "40001"}
       ],
-      "assert_strength": "L1",
+      "assert_strength": "L2",
       "rationale": "规则 BR-01 明确给出错误码",
       "mock_bindings": {}
     }
@@ -104,13 +104,18 @@
 | `change_refs` | code 用例至少 1 条；`changed_api` 取自 `changed_apis[].handler` |
 | `preconditions` | `state_key` 必须存在于 `data_catalog.states`；没有 catalog 时不要编造 |
 | `category` | 小写标识，如 `positive` / `negative` / `boundary` / `change_regression` |
-| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq`；值必须来自规则原文或契约 |
+| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`（target 为响应状态码，expect 可省略由 OpenAPI 回填），`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`；值必须来自规则原文或契约 |
 | `steps` | 多请求用例；至少 2 步。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中 |
-| `assert_strength` | `L1` 状态码/字段存在；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨实体不变量；默认 `L1` |
+| `assert_strength` | 按断言内容填写：`L1` 状态码/字段存在/结构；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨两个及以上步骤的不变量。框架会按内容重新推导，不一致时产生 `assert_strength.mismatch` warning 并以推导值为准 |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
 | `path_params` / `query` / `headers` / `body` | 字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
 | `rationale` / `assumptions` / `note` | `rationale` 写该用例证明哪条规则的哪一面；`assumptions` 写契约缺口/歧义假设；`note` 写规则冲突 `topic` |
 | `uncovered_requirements` | 无法构造的 section 必写 `reason`；该 section 下未覆盖的业务规则写 `rule_keys`（不得漏掉 A/B 级规则） |
+
+失败场景可用 `db_row` 验证“没有副作用”：写入失败后断言目标表不存在对应行，
+例如 `{"kind": "db_row", "target": "partners", "op": "absent", "where": {"mobile": "13800138000"}}`。
+表名、列名和 `where` 键必须来自 context 的 data catalog；没有 catalog 时不要编造，
+否则导入会产生 `assertion.db_catalog_missing` warning 或表/列不存在错误。
 
 ### 多请求用例（`steps`）
 
@@ -151,8 +156,9 @@
 - `steps[].name` 匹配 `[a-z][a-z0-9_]{1,63}`，用例内唯一；`endpoint` 必须原样取自画像。
 - 每步至少 1 条断言，且至少 1 条 `status_code`；断言按该步的画像字段校验。
 - `$ref` 只能引用**更早**步骤的响应字段，格式 `{"$ref": "first.partner_id"}`；可用于
-  `steps[].body`、`query`、`path_params` 和断言 `expect`（含嵌套字段 `a.b`）。
-  Header 值不支持 `$ref`。跨步骤比较属于关系式，`assert_strength` 用 `L3`。
+  `steps[].body`、`query`、`path_params`、断言 `expect` 和 `db_row.where`（含嵌套字段 `a.b`）。
+  Header 值不支持 `$ref`；`body_schema` 的 `expect` 不解析引用。跨步骤比较属于关系式，
+  内容推导为 `L3`（引用两个及以上不同步骤时为 `L4`）。
 - 执行时同一用例的步骤共享 `client` 与 Mock 会话；`preconditions` 在第一步前 apply，
   `mock_bindings` 对整个用例生效。
 - 步骤数与断言数有上限；超过 50 步或单步 50 条断言会被拒绝。不要为了“凑覆盖”

@@ -30,6 +30,7 @@ from contracts import (
 )
 
 from ..persistence import sha256_json
+from .strength import derive_assert_strength
 
 MAX_DRAFT_BYTES = 5 * 1024 * 1024
 MAX_CASES = 500
@@ -286,6 +287,11 @@ def to_test_case(
         )
         for ref in draft_case.requirement_refs
     ]
+    effective_steps = steps if steps is not None else draft_case.steps
+    all_asserts = [
+        *draft_case.asserts,
+        *(assertion for step in effective_steps for assertion in step.asserts),
+    ]
     return TestCase(
         id=case_id,
         title=draft_case.title or draft_case.case_key,
@@ -309,10 +315,25 @@ def to_test_case(
         asserts=draft_case.asserts,
         steps=[step.model_copy(deep=True) for step in (steps or [])],
         source=_source_for(refs, generator),
-        assert_strength=draft_case.assert_strength,
+        assert_strength=derive_assert_strength(
+            all_asserts, steps=len(effective_steps)
+        ),
         note=draft_case.note,
         mock_bindings=dict(draft_case.mock_bindings),
     )
+
+
+def _assert_payload(assertion: Assertion) -> dict[str, Any]:
+    """指纹里的断言投影；where 为空时不写入，保持旧用例指纹不变。"""
+    payload = {
+        "kind": assertion.kind,
+        "target": assertion.target,
+        "op": assertion.op,
+        "expect": assertion.expect,
+    }
+    if assertion.where:
+        payload["where"] = assertion.where
+    return payload
 
 
 def case_fingerprint(case: TestCase, case_key: str) -> str:
@@ -346,15 +367,7 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
         "query": case.query,
         "headers": {str(k).lower(): v for k, v in case.headers.items()},
         "body": case.body,
-        "asserts": [
-            {
-                "kind": assertion.kind,
-                "target": assertion.target,
-                "op": assertion.op,
-                "expect": assertion.expect,
-            }
-            for assertion in case.asserts
-        ],
+        "asserts": [_assert_payload(assertion) for assertion in case.asserts],
         "assert_strength": case.assert_strength.value,
         # 为空时不写入，保持既有单请求用例指纹不变。
         **(
@@ -372,13 +385,7 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
                         },
                         "body": step.body,
                         "asserts": [
-                            {
-                                "kind": assertion.kind,
-                                "target": assertion.target,
-                                "op": assertion.op,
-                                "expect": assertion.expect,
-                            }
-                            for assertion in step.asserts
+                            _assert_payload(assertion) for assertion in step.asserts
                         ],
                     }
                     for step in case.steps

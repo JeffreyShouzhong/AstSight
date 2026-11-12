@@ -99,10 +99,15 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
   示例 demo 的自动批准仅用于演示，并明确拒绝自动批准 `deprecate`。
 - **多请求限于单用例内串行**：`steps[]` 按顺序共享同一个 `client`/Mock 会话执行，
   支持 `{"$ref": "<step>.<field>"}` 读取更早步骤的响应（body/query/path_params/断言
-  expect，不支持 header）。不生成跨用例捕获、鉴权链路、并发或重试编排；需要数据库
-  前置状态的用例仍用 `preconditions[].state_key` 引用 `data_catalog`，由 C5b 生成单用例
-  fixture。无 catalog/plan 或未配置 `ASTSIGHT_DB_URL` 时标 `blocked`，不伪造可执行用例。
-- **断言强度仍为 L1**：主要断言状态码/字段存在/字段值；尚未实现基于需求表达式的 L2–L4 判定。
+  expect/`db_row.where`，不支持 header；`body_schema` 不解析引用）。不生成跨用例捕获、
+  鉴权链路、并发或重试编排；需要数据库前置状态的用例仍用 `preconditions[].state_key`
+  引用 `data_catalog`，由 C5b 生成单用例 fixture。无 catalog/plan 或未配置
+  `ASTSIGHT_DB_URL` 时标 `blocked`，不伪造可执行用例。
+- **断言覆盖到结构与持久化**：支持 `status_code`、`body_field`、`header`（含 `contains`）、
+  OpenAPI `body_schema`（本地 `$ref` 内联）和只读 `db_row`（含 `count_eq`）。失败场景可断言
+  `db_row/absent` 验证无副作用。`assert_strength` 按内容推导：L1 状态/存在/结构、L2 确定值、
+  L3 `$ref` 关系、L4 引用两个及以上步骤；声明不一致会 warning，导入以推导值为准。
+  `db_row` 需要 `ASTSIGHT_DB_URL`，未配置时显式 skip `data_unavailable`。
 - **自动“矫正”仅两件事**：生成后 `compile` 自检 + 执行前 `pytest --collect-only`；执行后只对
   连接/超时类环境抖动重试（默认 1 次，上限 3），**不修改业务代码，不猜失败原因**。
 - **造数方言限于 SQLite/PostgreSQL/MySQL**：C5a/C5b 生成目录与逐用例计划，三者共用
@@ -793,6 +798,9 @@ python -m pytest -q
   注入 500 后 FAIL 且归因 `code_defect`、full 模式 39 条用例全通过。
 - `test_case_context_validation.py`：section 解析与元数据排除、context 确定性、
   草案端点/字段/断言/quote 校验、未覆盖需求、路径穿越与大小限制、文档过期。
+- `test_case_assertions_advanced.py`：OpenAPI 响应 schema 内联、`body_schema` 回填与
+  运行时校验、`db_row` 目录校验与 SQLite 运行时、header `contains`、断言强度推导与
+  `assert_strength.mismatch` warning。
 - `test_case_store.py`：fingerprint 口径、版本/编号不变量、六路 diff、批准与拒绝、
   history/superseded、幂等 import、乐观锁、空草案保护。
 - `test_case_review_e2e.py`：真实服务上的 prepare → import → approve → run 全链路，
@@ -823,7 +831,8 @@ python -m pytest -q
   `prompts/a5_result_diagnosis.md`；下一步是真实需求文档上的规则抽取质量与覆盖评估。
 - C5 已打通 SQLite/PostgreSQL/MySQL：下一步补 DB 反射/DBML、跨库 schema 限定名与更复杂的
   跨表业务态；方言只覆盖用例级 fixture，不承担建库/迁移。
-- 断言强度升级：在已审核用例上增加 L2/L3 判定（字段约束、状态迁移）。
+- 关系断言：L3/L4 目前需要草案显式写 `$ref`；下一步可基于规则表达式自动生成跨字段/
+  跨步骤不变量，并补异步落库的 `db_row` 轮询。
 - 文档接入扩展：PDF/Word、跨文档冲突识别。
 - 用例库并发写保护与数据库后端（当前为单进程 JSON + 原子替换）。
 - 路由插件扩到 Spring（当前 Spring 路由只有 CodeGraph 单源、证据 `inferred`）。

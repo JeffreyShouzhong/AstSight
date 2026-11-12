@@ -421,7 +421,7 @@ A4 不得自行合并或改写冲突规则，引用冲突规则的用例带 `rul
 | 实体 | 关键字段 | 说明 |
 | --- | --- | --- |
 | `CaseSet` | schema_version, fingerprint_version, id, project, store_version, sequence, ruleset{version, hash, id}, openapi, cases[], history[], review_log[], doc_versions, requirements[], uncovered_reasons | 已批准用例库；唯一可移植、可版本化的审计源 |
-| `CaseEntry` | id, case_key, level(business/code), transport, endpoint, coverage_role, category, priority, request(path_params/query/headers/body), preconditions[], mock_bindings{dep_id: branch}, asserts[{kind,target,op,expect}], assert_strength, rule_refs[], requirement_refs[], change_refs[], status, version, fingerprint, review, created_at, updated_at | 单条可执行用例；`id` 为 `TC-NNNN`，只在批准时分配 |
+| `CaseEntry` | id, case_key, level(business/code), transport, endpoint, coverage_role, category, priority, request(path_params/query/headers/body), preconditions[], mock_bindings{dep_id: branch}, asserts[{kind,target,op,expect,where}], assert_strength, rule_refs[], requirement_refs[], change_refs[], status, version, fingerprint, review, created_at, updated_at | 单条可执行用例；`id` 为 `TC-NNNN`，只在批准时分配 |
 | `RuleRef` | rule_key, rule_id, authority, source_kind | 用例引用的规则；`rule_key` 稳定，`rule_id/authority` 为批准时快照 |
 | `ChangeRef` | base, target, symbols[], changed_api | 代码级用例的变更来源；不进入 fingerprint |
 | `CaseReview` | decision, by, at, note, fingerprint | 最近一次审核决定；`fingerprint` 必须与条目一致 |
@@ -562,13 +562,18 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 
 | 档 | 形态 | 例 | 能抓到什么 |
 | --- | --- | --- | --- |
-| L1 | 状态码 / 字段存在 | `status==200`、`data.id != null` | 崩溃、契约破坏 |
-| L2 | 确定值 / 字段值 | `total == 108.00` | 计算错误（数据一变就误报） |
-| L3 | 关系式 | `refund <= order.paid` | 计算口径错误 |
-| L4 | 跨实体不变量 | 余额=流水和、库存≥0、状态机合法 | 资损、状态错乱 |
+| L1 | 状态码 / 字段存在 / 结构 | `status==200`、`data.id != null`、`body_schema` | 崩溃、契约破坏 |
+| L2 | 确定值 / 字段值 | `total == 108.00`、`db_row.status == "active"` | 计算错误（数据一变就误报） |
+| L3 | 关系式 | `{"$ref": "create.order_id"}` 与前一步响应比较 | 计算口径错误 |
+| L4 | 跨实体不变量 | 同时引用两个步骤的响应做一致性校验 | 资损、状态错乱 |
 
-**实现现状**：当前 codegen 支持状态码、字段存在、字段等值/范围/包含（L1–L2）。
-L3 关系式与 L4 跨实体不变量尚未实现；草案若只能给出 L1/L2 而需求要求更高强度，
+**实现现状**：codegen 支持状态码、`body_field`、`header`、OpenAPI `body_schema`
+和只读 `db_row` 断言；`body_field` / `db_row` 的 `expect` 与 `db_row.where`
+支持 `$ref` 引用更早步骤，因此 L3/L4 由步骤引用表达。`assert_strength` 按断言
+内容自动推导（L3：存在引用；L4：引用两个及以上不同步骤），不信任草案声明值；
+不一致时产生 `assert_strength.mismatch` warning。
+
+框架不自动把业务关系“翻译”成 L3/L4：草案若只能给出 L1/L2 而需求要求更高强度，
 必须在 `assumptions` 或 `uncovered_requirements` 中显式说明，**不得把降级断言标成已覆盖**。
 
 #### 3.2.6 门禁
@@ -1849,7 +1854,7 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
 
 | transport | 请求字段 | 允许的断言 `kind` | 禁止 |
 |---|---|---|---|
-| `http` | `path_params`、`query`、`headers`、`body` | `status_code`、`body_field`、`header` | 混用 RPC 断言 |
+| `http` | `path_params`、`query`、`headers`、`body` | `status_code`、`body_field`、`header`、`body_schema`、`db_row` | 混用 RPC 断言 |
 | `grpc` | `service`、`method`、`request`、`metadata`、`deadline_ms` | `grpc_status`、`response_field`、`metadata` | `status_code`、`body_field`；streaming |
 | `dubbo` | `interface`、`method`、`param_types`、`arguments`、`attachments`、`timeout_ms` | `rpc_status`、`result_field`、`exception_type` | `status_code`、`body_field`；无 `param_types` 的重载调用 |
 

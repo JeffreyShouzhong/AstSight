@@ -7,7 +7,8 @@
 - boundary         数值/长度/枚举的越界值，断言 4xx
 
 边界：单接口最多 `max_per_endpoint` 条（默认 8），避免笛卡尔积爆炸。
-断言强度一律 L1（状态码/字段存在）——模板不假装能判业务对错。
+断言强度由实际断言内容推导（状态码/字段存在为 L1，确定值为 L2）；
+模板不假装能判业务对错。
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from typing import Any
 from contracts import Assertion, AssertStrength, TestCase
 
 from ..profile.openapi import sample_value
+from .strength import derive_assert_strength
 
 _NEGATIVE_STATUS = {"kind": "status_code", "op": "between", "expect": [400, 499]}
 _MAX_BOUNDARY = 2
@@ -59,13 +61,31 @@ def _body_from_schema(schema: dict, seed: str, only_required: bool = True) -> di
 
 
 def success_asserts(profile: dict) -> list[Assertion]:
-    """正向用例断言：成功状态码 + 契约声明的响应字段存在。"""
+    """正向用例断言：成功状态码 + 响应字段存在 + schema/Content-Type。"""
     success = profile.get("success_codes") or [200]
+    first = str(success[0])
     asserts = [Assertion(**{"kind": "status_code", "op": "in", "expect": success})]
-    fields_for_code = (profile.get("response_fields") or {}).get(str(success[0]), [])
+    fields_for_code = (profile.get("response_fields") or {}).get(first, [])
     for field_name in fields_for_code[:5]:
         asserts.append(
             Assertion(kind="body_field", target=field_name, op="exists", expect=None)
+        )
+    schema = (profile.get("response_schemas") or {}).get(first)
+    if isinstance(schema, dict):
+        asserts.append(
+            Assertion(
+                kind="body_schema", target=first, op="matches", expect=schema
+            )
+        )
+    content_type = str(profile.get("response_content_type") or "")
+    if content_type:
+        asserts.append(
+            Assertion(
+                kind="header",
+                target="content-type",
+                op="contains",
+                expect=content_type.split(";")[0].strip(),
+            )
         )
     return asserts
 
@@ -263,6 +283,10 @@ def generate_cases(
                 )
                 boundary_made += 1
 
+        for case in endpoint_cases:
+            case.assert_strength = derive_assert_strength(
+                case.asserts, steps=1
+            )
         cases.extend(endpoint_cases[:max_per_endpoint])
 
     return cases

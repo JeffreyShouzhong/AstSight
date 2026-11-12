@@ -404,6 +404,117 @@ def step_tools():
     return _StepTools()
 
 
+def _db_quote(name, dialect):
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", name or ""):
+        raise RuntimeError(f"db_assert_invalid: identifier {name!r}")
+    return f"`{name}`" if dialect == "mysql" else f'"{name}"'
+
+
+class _DbTools:
+    """只读 db_row 断言；连接按需建立，未配置 ASTSIGHT_DB_URL 时显式 skip。"""
+
+    def __init__(self):
+        self._conn = None
+        self._dialect = None
+
+    def _connection(self):
+        if not DB_URL:
+            pytest.skip(
+                "data_unavailable: ASTSIGHT_DB_URL is not configured; "
+                "db assertion was not executed"
+            )
+        if self._conn is None:
+            self._conn, self._dialect = _connect_db(DB_URL)
+        return self._conn, self._dialect
+
+    def check(self, table, column, op, expect, where):
+        conn, dialect = self._connection()
+        marker = "?" if dialect == "sqlite" else "%s"
+        conditions = []
+        params = []
+        for name, value in (where or {}).items():
+            conditions.append(f"{_db_quote(name, dialect)} = {marker}")
+            params.append(value)
+        where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        table_sql = _db_quote(table, dialect)
+        cursor = conn.cursor()
+        try:
+            if op == "count_eq":
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM {table_sql}{where_sql}", params
+                )
+                actual = cursor.fetchone()[0]
+                assert actual == expect, (
+                    f"db_row expected count {expect}, got {actual}"
+                )
+                return
+            select = "1" if not column else _db_quote(column, dialect)
+            cursor.execute(
+                f"SELECT {select} FROM {table_sql}{where_sql} LIMIT 1", params
+            )
+            row = cursor.fetchone()
+            if op == "exists":
+                assert row is not None, "db_row expected a row, got none"
+            elif op == "absent":
+                assert row is None, f"db_row expected no row, got {row!r}"
+            elif op == "eq":
+                assert row is not None and row[0] == expect, (
+                    f"db_row expected {expect!r}, got {row!r}"
+                )
+            elif op == "ne":
+                assert row is not None and row[0] != expect, (
+                    f"db_row expected value != {expect!r}, got {row!r}"
+                )
+            elif op == "gte":
+                assert row is not None and row[0] >= expect, (
+                    f"db_row expected >= {expect!r}, got {row!r}"
+                )
+            elif op == "lte":
+                assert row is not None and row[0] <= expect, (
+                    f"db_row expected <= {expect!r}, got {row!r}"
+                )
+            else:
+                raise RuntimeError(f"db_assert_invalid: op {op!r}")
+        finally:
+            cursor.close()
+
+    def close(self):
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+
+class _SchemaTools:
+    def check(self, body, schema):
+        try:
+            import jsonschema
+        except ImportError as exc:
+            raise RuntimeError(
+                "schema_validation_unavailable: 请安装 jsonschema"
+            ) from exc
+        try:
+            jsonschema.validate(instance=body, schema=schema)
+        except jsonschema.ValidationError as exc:
+            location = "/".join(str(part) for part in exc.path) or "<root>"
+            raise AssertionError(
+                f"response schema mismatch at {location}: {exc.message}"
+            ) from exc
+
+
+@pytest.fixture()
+def db_tools():
+    tools = _DbTools()
+    try:
+        yield tools
+    finally:
+        tools.close()
+
+
+@pytest.fixture()
+def schema_tools():
+    return _SchemaTools()
+
+
 # ASTSIGHT MANUAL BEGIN
 # ASTSIGHT MANUAL END
 '''
@@ -529,8 +640,22 @@ def _assert_line(
         target = assertion.target or ""
         if op == "exists":
             return f"        assert {target!r} in {resp_var}.headers"
+        if op == "contains":
+            return (
+                f"        assert {expect_expr} in "
+                f"str({resp_var}.headers.get({target!r}, \"\"))"
+            )
         return (
             f"        assert {resp_var}.headers.get({target!r}) == {expect_expr}"
+        )
+    if kind == "body_schema":
+        return f"        schema_tools.check({body_var}, {expect!r})"
+    if kind == "db_row":
+        table, _, column = (assertion.target or "").partition(".")
+        where_expr = _expect_expr(assertion.where or {}, responses_expr)
+        return (
+            f"        db_tools.check({table!r}, {column or None!r}, "
+            f"{op!r}, {expect_expr}, {where_expr})"
         )
     return f"        # unsupported assertion: {kind}/{op}"
 
@@ -584,9 +709,11 @@ def _single_request_lines(case: TestCase) -> list[str]:
     # 先判状态码再解析 body：服务返回 500/非 JSON 时，失败信息应指向真正的
     # 问题（状态码），而不是被 JSONDecodeError 掩盖成一条无上下文的异常。
     inner = [f"        resp = client.request({', '.join(request_args)})"]
-    body_asserts = [a for a in case.asserts if a.kind == "body_field"]
+    body_asserts = [
+        a for a in case.asserts if a.kind in {"body_field", "body_schema"}
+    ]
     for assertion in case.asserts:
-        if assertion.kind != "body_field":
+        if assertion.kind not in {"body_field", "body_schema"}:
             inner.append(_assert_line(assertion))
     if body_asserts:
         inner.append("        body = resp.json()")
@@ -598,13 +725,14 @@ def _single_request_lines(case: TestCase) -> list[str]:
 def _steps_lines(case: TestCase) -> list[str]:
     needed: set[str] = set()
     for step in case.steps:
-        for value in (
-            step.body,
-            step.query,
-            step.path_params,
-            *(assertion.expect for assertion in step.asserts),
-        ):
+        for value in (step.body, step.query, step.path_params):
             needed.update(_ref_steps(value))
+        for assertion in step.asserts:
+            if assertion.kind == "body_schema":
+                continue
+            needed.update(_ref_steps(assertion.expect))
+            if assertion.kind == "db_row":
+                needed.update(_ref_steps(assertion.where))
     inner: list[str] = []
     for index, step in enumerate(case.steps):
         responses_expr = _responses_expr(case, index, needed)
@@ -624,10 +752,10 @@ def _steps_lines(case: TestCase) -> list[str]:
         )
         body_asserts = [
             assertion for assertion in step.asserts
-            if assertion.kind == "body_field"
+            if assertion.kind in {"body_field", "body_schema"}
         ]
         for assertion in step.asserts:
-            if assertion.kind != "body_field":
+            if assertion.kind not in {"body_field", "body_schema"}:
                 inner.append(
                     _assert_line(
                         assertion,
@@ -649,10 +777,23 @@ def _steps_lines(case: TestCase) -> list[str]:
     return inner
 
 
+def _case_assertions(case: TestCase) -> list[Any]:
+    return [
+        *case.asserts,
+        *(assertion for step in case.steps for assertion in step.asserts),
+    ]
+
+
 def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
     name = f"test_{case.id.replace('-', '_').lower()}_{case.category}"
     bindings = dict(sorted(case.mock_bindings.items()))
     requires_data = bool(case.preconditions)
+    assertions = _case_assertions(case)
+    fixtures = ["client", "mock_session", "data_state", "step_tools"]
+    if any(assertion.kind == "db_row" for assertion in assertions):
+        fixtures.append("db_tools")
+    if any(assertion.kind == "body_schema" for assertion in assertions):
+        fixtures.append("schema_tools")
     lines: list[str] = []
     if requires_data or has_data_plan:
         # 有前置状态或已生成 plan 的用例必须走 data_state fixture：
@@ -663,7 +804,7 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
         )
     lines.extend(
         [
-            f"    def {name}(self, client, mock_session, data_state, step_tools):",
+            f"    def {name}(self, {', '.join(fixtures)}):",
             f'        """case={case.id} endpoint={case.endpoint} category={case.category} '
             f'source={case.source}"""',
             # 未配置 Mock 时 fixture 是 no-op；配置后每个用例都有独立会话与证据。
