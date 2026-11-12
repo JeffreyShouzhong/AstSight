@@ -117,6 +117,7 @@ class DataPlan(BaseModel):
     schema_version: int = Field(default=1)
     plan_id: str = Field(default="")
     catalog_id: str = Field(default="")
+    dialect: str = Field(default="sqlite", description="SQL 方言（sqlite/postgres/mysql）")
     ruleset_hash: str = Field(default="")
     case_id: str | None = Field(default=None)
     case_key: str = Field(default="")

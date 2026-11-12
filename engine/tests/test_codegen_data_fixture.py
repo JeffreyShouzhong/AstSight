@@ -195,6 +195,31 @@ def test_data_fixture_is_blocked_without_database(
     assert record.message.startswith("data_unavailable")
 
 
+def test_data_fixture_rejects_plan_dialect_mismatch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("ASTSIGHT_DB_URL", raising=False)
+    case = _case()
+    bundle = _bundle(case)
+    generated = tmp_path / "generated"
+    generate_pytest([case], generated, data_bundle=bundle)
+
+    server, base_url = _serve(tmp_path / "app.db")
+    try:
+        execution = run_pytest(
+            generated, base_url=base_url,
+            data_plan_path=str(generated / "data_plan.json"),
+            database_url="postgresql://user:pass@127.0.0.1:1/appdb",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    record = execution.records[0]
+    assert record.outcome == "blocked"
+    assert "data_dialect_mismatch" in record.message
+
+
 def test_preconditions_without_plan_are_blocked(
     tmp_path: Path, monkeypatch
 ) -> None:

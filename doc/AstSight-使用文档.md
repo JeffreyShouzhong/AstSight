@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 适用版本 | M1 确定性闭环 + 规则驱动用例 + SQLite 造数 |
+| 适用版本 | M1 确定性闭环 + 规则驱动用例 + SQLite/PostgreSQL/MySQL 造数 |
 | 命令入口 | `python -m astsight`（在 `engine/` 下运行） |
 | 主要输入 | 代码库、需求/设计文档、OpenAPI（可选）、DDL/seed（可选） |
 | 主要输出 | 规则库、用例库、造数计划、pytest 用例、执行报告与门禁结论 |
@@ -152,14 +152,28 @@ export ANTHROPIC_MODEL=...
 
 ### 4.2 数据库
 
-C5 造数 v1 只支持 SQLite。运行或手工 apply 时通过 URL 指定：
+C5 造数支持 SQLite、PostgreSQL、MySQL。方言由 `--db-url` 决定，SQL 占位符与标识符
+引用在生成计划时按方言固化；运行或手工 apply 时通过 URL 指定：
 
 ```bash
+# SQLite（stdlib，无需额外驱动）
 --db-url sqlite:////absolute/path/to/service.db
+
+# PostgreSQL（需要 psycopg）
+--db-url postgresql://user:pass@127.0.0.1:5432/service
+
+# MySQL（需要 PyMySQL）
+--db-url mysql://user:pass@127.0.0.1:3306/service?charset=utf8mb4
 ```
 
-相对路径也可用，但建议使用绝对路径，避免工作目录变化后指错库。MySQL/PostgreSQL
-会标 `unsupported_dialect`，不会静默降级。
+SQLite 相对路径也可用，但建议使用绝对路径，避免工作目录变化后指错库。
+`data catalog` 需要显式传 `--dialect postgres|mysql`（默认 `sqlite`）；
+`agent run` 会从 `--db-url` 推断，也可以用 `--db-dialect` 覆盖。计划里的方言与
+`--db-url` 不一致时直接标 `data_dialect_mismatch`，不会把 SQLite 的 `?` 占位符
+发到 PostgreSQL/MySQL。
+
+事务语义一致：整批 statement 在一个事务内执行，失败回滚；teardown 按主键逆序删除。
+PostgreSQL/MySQL 的建表、迁移与连接池仍由被测项目负责，AstSight 只做用例级造数与回收。
 
 ### 4.3 Mock
 
@@ -788,7 +802,9 @@ PYTHONPATH=. python -m astsight run \
 ```
 
 没有 plan/DB 时，带 `preconditions` 的用例标 `blocked`，不会伪造状态或静默跳过。
-MySQL/PostgreSQL 标 `unsupported_dialect`。
+PostgreSQL/MySQL 分别用 `postgresql://user:pass@host:5432/db` 与
+`mysql://user:pass@host:3306/db`；计划方言与 URL 不一致时标
+`data_dialect_mismatch`。
 
 ---
 
@@ -1259,7 +1275,7 @@ python -m uvicorn app:app --host 127.0.0.1 --port 8030
 通常是：
 
 - 用例有 `preconditions`，但没有 `data_plan` 或 `--db-url`；
-- 数据库方言不是 SQLite；
+- 数据库方言不受支持，或 plan 方言与 `--db-url` 不一致；
 - Mock 依赖不可用或下游标 `unsupported`。
 
 查看 `report.json` 的阻塞原因，不要通过删断言或改用例身份绕过。
@@ -1300,7 +1316,8 @@ Git Bash 会把以 `/` 开头的参数改写成 Windows 路径。建议传完整
 
 - 断言强度仍以 L1 为主：状态码、字段存在、字段值；L2–L4 尚未实现。
 - 只支持单请求用例，不生成跨用例捕获或鉴权链路。
-- C5 造数 v1 只支持 SQLite；MySQL/PostgreSQL 标 `unsupported_dialect`。
+- C5 造数支持 SQLite/PostgreSQL/MySQL，但只覆盖用例级 fixture apply/teardown；
+  不负责建库、迁移、连接池与跨库事务。
 - `replay` 模式未实现。
 - gRPC Mock 未落地；HTTP Mock 只支持明文 HTTP。
 - 多 SUT 隔离、Dubbo 下游 Mock 的 Java agent 尚未实现。

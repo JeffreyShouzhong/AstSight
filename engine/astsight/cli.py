@@ -154,7 +154,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--db-url", default=None,
-        help="造数数据库 URL（v1 仅 sqlite:///）；缺省时相关用例标 blocked",
+        help="造数数据库 URL（sqlite:///、postgresql:// 或 mysql://）；"
+        "缺省时相关用例标 blocked",
     )
     run_parser.add_argument(
         "--ruleset", default=None,
@@ -403,7 +404,12 @@ def _build_parser() -> argparse.ArgumentParser:
     data_catalog.add_argument("--project", required=True)
     data_catalog.add_argument("--ddl", action="append", required=True, metavar="PATH")
     data_catalog.add_argument("--seed", default=None)
-    data_catalog.add_argument("--dialect", default="sqlite")
+    data_catalog.add_argument(
+        "--dialect",
+        default="sqlite",
+        choices=("sqlite", "postgres", "mysql"),
+        help="DDL 与造数 SQL 方言（默认 sqlite）",
+    )
     data_catalog.add_argument("--context", default=None, help="rules context 目录/JSON")
     data_catalog.add_argument(
         "--out", default=None, help="输出文件或目录（默认 .astsight/data）"
@@ -448,8 +454,14 @@ def _build_parser() -> argparse.ArgumentParser:
     data_plan.add_argument("--out", default=None)
     data_plan.add_argument("--json", action="store_true")
 
-    data_apply = data_sub.add_parser("apply", help="在 SQLite 中造数/回收")
-    data_apply.add_argument("--db-url", required=True, help="sqlite:///path/to.db")
+    data_apply = data_sub.add_parser(
+        "apply", help="在 SQLite/PostgreSQL/MySQL 中造数/回收"
+    )
+    data_apply.add_argument(
+        "--db-url",
+        required=True,
+        help="sqlite:///path、postgresql://user:pass@host/db 或 mysql://user:pass@host/db",
+    )
     data_apply.add_argument("--plan", required=True)
     data_apply.add_argument("--run-scope", default=None)
     data_apply.add_argument(
@@ -514,13 +526,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     agent_run.add_argument("--seed", default=None, help="C5a seed JSON（相对 project）")
     agent_run.add_argument(
+        "--db-dialect",
+        default=None,
+        choices=("sqlite", "postgres", "mysql"),
+        help="C5a 造数 SQL 方言；缺省从 --db-url 推断，否则 sqlite",
+    )
+    agent_run.add_argument(
         "--data-catalog", default=None, help="复用已有 data_catalog.json"
     )
     agent_run.add_argument(
         "--data-plan", default=None, help="复用已有 data_plan.json（跳过 C5b LLM）"
     )
     agent_run.add_argument(
-        "--db-url", default=None, help="造数数据库 URL；v1 仅 sqlite:///path"
+        "--db-url",
+        default=None,
+        help="造数数据库 URL（sqlite:///、postgresql:// 或 mysql://）",
     )
     agent_run.add_argument(
         "--skip-data", action="store_true", help="跳过 C5 数据目录与造数计划"
@@ -1659,6 +1679,7 @@ def _agent_command(args) -> int:
             data_catalog=args.data_catalog,
             data_plan=args.data_plan,
             database_url=args.db_url,
+            data_dialect=args.db_dialect,
             skip_data=args.skip_data,
         )
     except ValueError as exc:

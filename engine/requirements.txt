@@ -15,6 +15,10 @@ httpx==0.28.1
 PyYAML==6.0.3
 pytest==9.1.1
 
+# ── C5 造数数据库驱动（SQLite 用 stdlib，无需额外依赖）──
+psycopg[binary]==3.3.8
+PyMySQL==1.2.4
+
 # ── HTTP Mock 服务（C3.5.5，仅明文 HTTP）与 M1 内置示例服务 ──
 # HTTP Mock 是运行时依赖（内嵌 FastAPI/uvicorn），不再仅用于 examples
 fastapi==0.162.0

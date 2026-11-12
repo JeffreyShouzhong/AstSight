@@ -304,7 +304,9 @@ PYTHONPATH=. python -m astsight run \
 ```
 
 只生成 pytest、不执行：加 `--skip-execute`。没有前置状态用例时，`--data-plan` 和
-`--db-url` 可以省略。
+`--db-url` 可以省略。造数支持 SQLite、PostgreSQL、MySQL；PostgreSQL/MySQL 需要
+分别安装 `psycopg[binary]` / `PyMySQL`，`--db-url` 写成
+`postgresql://user:pass@host:5432/db` 或 `mysql://user:pass@host:3306/db`。
 
 ### 5.4 路线 C：按代码变更执行（已有用例库）
 

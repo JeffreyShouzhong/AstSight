@@ -173,6 +173,7 @@ def build_data_plan(
     order = [name for name in catalog.tables_order if name in merged]
     plan_payload = {
         "catalog_id": catalog.catalog_id,
+        "dialect": catalog.dialect,
         "case": _case_label(case),
         "fixtures": merged,
         "target_state": merged_target,
@@ -182,6 +183,7 @@ def build_data_plan(
         schema_version=1,
         plan_id=_plan_id(plan_payload),
         catalog_id=catalog.catalog_id,
+        dialect=catalog.dialect,
         ruleset_hash=sha256_json(ruleset.model_dump(mode="json")) if ruleset else "",
         case_id=getattr(case, "id", None),
         case_key=getattr(case, "case_key", ""),

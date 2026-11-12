@@ -26,6 +26,7 @@
 | C6/C7 执行 | ✅ 2026-11-11 | 运行 `20261111-155348-795-cases`：38/38 通过（100%），门禁 PASS；Mock 26 次调用全部 ok，0 unbound |
 | 模型配置文件 | ✅ 新增 | `engine/llm.example.json` 模板；`llm.json` 自动发现（cwd → `~/.astsight/llm.json`）或 `--llm-config` / `ASTSIGHT_LLM_CONFIG`；环境变量覆盖文件 |
 | 用户文档 | ✅ 已整理 | 根 `README.md` 重写为面向使用者的当前版本说明；新增《快速上手指南》；删除 4 份历史调研文档，保留设计/架构/决策文档给维护者 |
+| 造数方言 | ✅ PostgreSQL/MySQL | `data/dialects.py`；SQL 占位符/标识符按方言渲染；`psycopg` / `PyMySQL` 驱动按需导入；计划方言与 `--db-url` 不一致时 `dialect_mismatch`；`data catalog --dialect`、`agent run --db-dialect` |
 
 ## 本轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -249,6 +250,26 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-12**：C5 造数扩展到 PostgreSQL/MySQL：
+  - 新增 `engine/astsight/data/dialects.py`：URL 解析（含 `postgresql+psycopg://`、
+    `mysql+pymysql://` 别名与密码脱敏）、方言归一化、占位符与标识符引用。
+  - `render.py` 按 `catalog.dialect` 生成 SQL：SQLite `?`/双引号，MySQL `%s`/反引号，
+    PostgreSQL `%s`/双引号；布尔值仅在 SQLite 转 1/0。
+  - `DataPlan` 增加 `dialect`；`apply.py` 支持三种连接（stdlib `sqlite3`、`psycopg`、
+    `PyMySQL`），保留事务回滚与表存在性检查，计划/数据库方言不一致直接拒绝。
+  - 生成物 `conftest.py` 的 `data_state` 支持三种驱动，方言不一致标
+    `data_unavailable: data_dialect_mismatch`。
+  - CLI：`data catalog --dialect sqlite|postgres|mysql`、
+    `agent run --db-dialect`（缺省从 `--db-url` 推断）；`requirements.txt` 增加
+    `psycopg[binary]==3.3.8`、`PyMySQL==1.2.4`。
+  - 新增 `test_data_dialects.py`（URL/脱敏、三种方言 SQL、DDL、方言拒绝），
+    生成物新增方言不匹配用例；新增 `test_data_apply_live.py`（真实库联调，
+    未配置环境变量时 SKIP：建临时表 → apply → teardown → drop）。
+    全量 **286 passed, 2 skipped**。
+  - 文档同步：根 README、使用文档、快速上手指南、engine README、设计/架构文档与
+    决策记录（第 14 节）。
+  - 本机未实际连接 PostgreSQL/MySQL（MySQL 无可用凭据、无 PostgreSQL 实例）；
+    已提供 `test_data_apply_live.py` 供有库环境复验，本地结果为 2 skipped。
 - **2026-11-12**：清理全仓 TestHub 内部引用，明确 AstSight 与 TestHub 无耦合：
   `engine/README.md` 删除 `testhub-proto/` 历史原型隔离说明；
   `doc/framework-capability-design.md` 的“旁挂对接/交给 TestHub 类平台/

@@ -292,6 +292,7 @@ def build_catalog(
         states_out.append(state)
     sources_out = dict(sources or {})
     catalog_payload = {
+        "dialect": dialect,
         "tables": [table.model_dump(mode="json") for table in tables],
         "foreign_keys": [fk.model_dump(mode="json") for fk in foreign_keys],
         "order": order,

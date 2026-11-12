@@ -9,6 +9,9 @@ from typing import Any
 
 from contracts import DataCatalog, DataPlan
 
+from .dialects import normalize_dialect, placeholder as dialect_placeholder
+from .dialects import quote_identifier as dialect_quote
+
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 MAX_STATEMENTS = 10_000
 
@@ -17,14 +20,14 @@ class RenderError(ValueError):
     """标识符不安全或无法生成可回收 SQL。"""
 
 
-def quote_identifier(name: str) -> str:
+def quote_identifier(name: str, dialect: str = "sqlite") -> str:
     if not _IDENT_RE.match(name or ""):
         raise RenderError(f"非法标识符: {name!r}")
-    return f'"{name}"'
+    return dialect_quote(name, dialect)
 
 
-def _sql_value(value: Any) -> Any:
-    if isinstance(value, bool):
+def _sql_value(value: Any, dialect: str) -> Any:
+    if isinstance(value, bool) and dialect == "sqlite":
         return 1 if value else 0
     return value
 
@@ -33,6 +36,8 @@ def render_inserts(
     catalog: DataCatalog,
     fixtures: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
+    dialect = normalize_dialect(catalog.dialect)
+    marker = dialect_placeholder(dialect)
     tables = catalog.table_index()
     statements: list[dict[str, Any]] = []
     for table in catalog.tables_order:
@@ -44,16 +49,16 @@ def render_inserts(
             if not names:
                 continue
             sql = (
-                f"INSERT INTO {quote_identifier(table)} "
-                f"({', '.join(quote_identifier(name) for name in names)}) "
-                f"VALUES ({', '.join('?' for _ in names)})"
+                f"INSERT INTO {quote_identifier(table, dialect)} "
+                f"({', '.join(quote_identifier(name, dialect) for name in names)}) "
+                f"VALUES ({', '.join(marker for _ in names)})"
             )
             statements.append(
                 {
                     "kind": "insert",
                     "table": table,
                     "sql": sql,
-                    "params": [_sql_value(row[name]) for name in names],
+                    "params": [_sql_value(row[name], dialect) for name in names],
                 }
             )
     if len(statements) > MAX_STATEMENTS:
@@ -66,6 +71,8 @@ def render_teardown(
     fixtures: dict[str, list[dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
+    dialect = normalize_dialect(catalog.dialect)
+    marker = dialect_placeholder(dialect)
     tables = catalog.table_index()
     statements: list[dict[str, Any]] = []
     # 逆拓扑顺序删除，先删子表。
@@ -82,13 +89,18 @@ def render_teardown(
             if any(name not in row or row.get(name) is None for name in pk):
                 warnings.append(f"teardown_pk_missing:{table}")
                 continue
-            where = " AND ".join(f"{quote_identifier(name)} = ?" for name in pk)
+            where = " AND ".join(
+                f"{quote_identifier(name, dialect)} = {marker}" for name in pk
+            )
             statements.append(
                 {
                     "kind": "delete",
                     "table": table,
-                    "sql": f"DELETE FROM {quote_identifier(table)} WHERE {where}",
-                    "params": [_sql_value(row[name]) for name in pk],
+                    "sql": (
+                        f"DELETE FROM {quote_identifier(table, dialect)} "
+                        f"WHERE {where}"
+                    ),
+                    "params": [_sql_value(row[name], dialect) for name in pk],
                 }
             )
     if len(statements) > MAX_STATEMENTS:

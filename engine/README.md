@@ -33,7 +33,8 @@ B. 需求驱动（规则驱动，canonical）
 
 两条入口共用同一套编码、执行与报告；文档驱动不会伪造 git 变更。
 **审核前草案不进入用例库，也不会被编码执行。** 规则层、两级用例、C3.5.1 Mock 语义、
-C5a/C5b 造数、SQLite apply/teardown 与规则驱动的 `agent run` 已落地；旧
+C5a/C5b 造数（SQLite/PostgreSQL/MySQL）、事务化 apply/teardown 与规则驱动的
+`agent run` 已落地；旧
 “语义分析 → 用例草案”链路只保留兼容模块（`prompts/legacy/`），不再是主流程。
 HTTP Mock 运行时核心（C3.5.5）、C3 的 Python 下游 HTTP 调用点自动识别，以及
 `agent run` 的“先起 Mock → 计算注入 → 用注入环境启动 SUT”已实现；
@@ -75,7 +76,7 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
 | `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
-| `astsight/data/` C5 | ✅（SQLite） | DDL/seed → `data_catalog.json`；批准后 → `data_plan.json`；参数化 SQL、FK 拓扑、apply/teardown；其他方言标 `unsupported_dialect` |
+| `astsight/data/` C5 | ✅（SQLite/PostgreSQL/MySQL） | DDL/seed → `data_catalog.json`；批准后 → `data_plan.json`；参数化 SQL、FK 拓扑、事务化 apply/teardown；方言决定占位符与标识符引用，plan 与数据库不一致时拒执行 |
 | `astsight/agent/` | ✅ 首版 | A1 规则适配、C3.5.1 Mock 语义适配、C5a/C5b 造数适配、A4 用例设计、MockPlan、SUT 启动注入、A5 诊断、A6 有界修复与端到端编排 |
 | `examples/order_service` | ✅ | 18 接口 FastAPI 示例 + 可重置种子数据 + 示例草案 |
 | `examples/downstream_service` | ✅ | 上游报价 → 下游价格服务的 HTTP Mock 示例（环境变量注入） |
@@ -104,9 +105,10 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 - **断言强度仍为 L1**：主要断言状态码/字段存在/字段值；尚未实现基于需求表达式的 L2–L4 判定。
 - **自动“矫正”仅两件事**：生成后 `compile` 自检 + 执行前 `pytest --collect-only`；执行后只对
   连接/超时类环境抖动重试（默认 1 次，上限 3），**不修改业务代码，不猜失败原因**。
-- **有状态数据限于 SQLite**：C5a/C5b 生成目录与逐用例计划，v1 只提供 SQLite
-  apply/teardown；MySQL/PostgreSQL 标 `unsupported_dialect`。示例服务仍用 `/_reset`
-  保证可重复，不把示例重置当成通用造数。
+- **造数方言限于 SQLite/PostgreSQL/MySQL**：C5a/C5b 生成目录与逐用例计划，三者共用
+  同一套 fixture 校验，SQL 占位符/引用在计划生成时固化；计划方言与 `--db-url`
+  不一致时标 `data_dialect_mismatch`，不静默改写 SQL。建库、迁移、连接池与跨库事务
+  不在范围内。示例服务仍用 `/_reset` 保证可重复，不把示例重置当成通用造数。
 - **Java/Spring 变更感知输出到 API 级**：CodeGraph 原生识别 Spring 路由与方法行区间，
   AstSight 做「diff 行 ∩ 符号区间 → 反向闭包 ∩ 路由」。方法只是中间证据，不是输出单位。
   Java 路由没有源码侧第二来源，证据等级只到 `inferred`；Spring 路由覆盖缺口会进
@@ -379,8 +381,11 @@ PYTHONPATH=. python -m astsight run --project $PROJECT --mode cases \
   通过后写回 `data_catalog.json`（`states` 可供 A4 的 `preconditions.state_key` 引用）。
 - `plan --catalog PATH --cases PATH [--fixtures PATH]`：只用目录中存在的表/列/状态；
   校验 FK 闭包、类型/枚举、preconditions 覆盖与 SQL 标识符白名单。
-- `apply --db-url sqlite:///... --plan PATH [--keep-data]`：事务内 apply，失败回滚；
-  非 SQLite 标 `unsupported_dialect`。
+- `apply --db-url sqlite:///... --plan PATH [--keep-data]`：事务内 apply，失败回滚。
+  `--db-url` 也接受 `postgresql://`（psycopg）与 `mysql://`（PyMySQL）；
+  计划方言与数据库不一致时标 `dialect_mismatch`。
+- `catalog --ddl PATH --dialect sqlite|postgres|mysql`：显式声明造数方言（默认 sqlite）。
+  `agent run --db-dialect` 可在没有 `--db-url` 时指定方言，提供 `--db-url` 时自动推断。
 
 `cases` 命令参数：
 
@@ -798,7 +803,12 @@ python -m pytest -q
 - `test_mock_semantics.py`：契约 `success` 确定性生成、规则映射分支、无依据分支拒绝、
   未知 dep/rule 拒绝、success stub 覆写的证据降级。
 - `test_data_plan.py` / `test_data_apply_sqlite.py`：FK 拓扑、状态展开、未知表/列拒绝、
-  参数化 SQL、事务回滚、非 SQLite `unsupported_dialect`。
+  参数化 SQL、事务回滚。
+- `test_data_dialects.py`：多方言 URL 解析与脱敏、SQLite/PostgreSQL/MySQL 的标识符
+  引用与占位符、方言不匹配拒绝、MySQL/PostgreSQL DDL 解析。
+- `test_data_apply_live.py`：真实 PostgreSQL/MySQL 联调，默认 SKIP；设置
+  `ASTSIGHT_TEST_POSTGRES_URL` / `ASTSIGHT_TEST_MYSQL_URL` 后运行。测试会创建
+  随机临时表、走 apply/teardown，并在结束时删除，**不要指向生产库**。
 - `test_case_fingerprint_v2.py` / `test_agent_rules_flow.py`：fingerprint v2 口径、
   待审阶段不产生 caseset/data_plan/execution、规则与目录快照。
 - `test_codegraph_embedded.py`：CodeGraph 嵌入、已知路由缺陷的修复、证据等级，
@@ -811,8 +821,8 @@ python -m pytest -q
 
 - A1/A4/A5 已接：`prompts/a1_requirement_analysis.md`、`prompts/a4_case_design.md`、
   `prompts/a5_result_diagnosis.md`；下一步是真实需求文档上的规则抽取质量与覆盖评估。
-- C5 已打通 SQLite：下一步补 MySQL/PostgreSQL 方言、DB 反射/DBML 与更复杂的跨表业务态；
-  在此之前其他方言保持 `unsupported_dialect`。
+- C5 已打通 SQLite/PostgreSQL/MySQL：下一步补 DB 反射/DBML、跨库 schema 限定名与更复杂的
+  跨表业务态；方言只覆盖用例级 fixture，不承担建库/迁移。
 - 断言强度升级：在已审核用例上增加 L2/L3 判定（字段约束、状态迁移）。
 - 文档接入扩展：PDF/Word、跨文档冲突识别。
 - 用例库并发写保护与数据库后端（当前为单进程 JSON + 原子替换）。

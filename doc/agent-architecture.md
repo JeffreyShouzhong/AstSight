@@ -494,7 +494,7 @@ State（全局共享状态）：
 | CodeGraph 客户端 | 基础设施 | 否 | 反向/正向追溯、变更 diff |
 | 接口解析器 | C3 | 否 | OpenAPI/YAML/$ref + Spring MVC 注解解析 |
 | DB 分析器 | C5a | 否 | DDL 解析、外键闭包、拓扑排序、catalog 骨架 |
-| 造数器 | C5b | 否 | catalog 校验、fixtures → 参数化 SQL、SQLite apply/teardown |
+| 造数器 | C5b | 否 | catalog 校验、fixtures → 按方言参数化 SQL、SQLite/PostgreSQL/MySQL apply/teardown |
 | C5 语义适配器 | C5a/C5b | 是 | 字段业务语义、候选业务态/取值；只能引用 catalog 中的表/列/枚举，不输出 SQL |
 | Mock 编排器 | C3.5 | 否 | 语义模板、Mock 会话（session）与出站隔离 |
 | Mock Agent | C3.5.3 | 否 | ByteBuddy agent 加载、Dubbo Filter、心跳自检；只拦截 SUT 出站调用 |

@@ -1,4 +1,4 @@
-"""C5 数据层：DDL/seed → catalog；approved cases → data plan；SQLite 执行。"""
+"""C5 数据层：DDL/seed → catalog；approved cases → data plan；多方言执行。"""
 from .apply import (
     ApplyError,
     ApplyResult,
@@ -17,6 +17,14 @@ from .ddl import (
     parse_ddl,
     split_statements,
 )
+from .dialects import (
+    DbTarget,
+    DialectError,
+    SUPPORTED_DIALECTS,
+    dialect_from_url,
+    normalize_dialect,
+    parse_db_url,
+)
 from .plan import PlanError, build_data_plan, build_data_plan_bundle
 from .render import RenderError, quote_identifier, render_inserts, render_plan, render_teardown
 from .seed import SeedData, SeedError, load_seed
@@ -34,12 +42,15 @@ __all__ = [
     "ApplyResult",
     "CATALOG_SCHEMA_VERSION",
     "DDLError",
+    "DbTarget",
+    "DialectError",
     "ParsedColumn",
     "ParsedDDL",
     "ParsedForeignKey",
     "ParsedTable",
     "PlanError",
     "RenderError",
+    "SUPPORTED_DIALECTS",
     "SeedData",
     "SeedError",
     "SemanticApplyResult",
@@ -51,7 +62,10 @@ __all__ = [
     "build_data_plan",
     "build_data_plan_bundle",
     "check_type",
+    "dialect_from_url",
     "load_seed",
+    "normalize_dialect",
+    "parse_db_url",
     "parse_ddl",
     "parse_sqlite_url",
     "quote_identifier",

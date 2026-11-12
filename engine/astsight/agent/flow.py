@@ -43,7 +43,9 @@ from ..changes.symbol_diff import symbols_for_changes
 from ..data import (
     build_catalog,
     build_data_plan_bundle,
+    dialect_from_url,
     load_seed,
+    normalize_dialect,
     parse_ddl,
     validate_catalog,
 )
@@ -122,6 +124,7 @@ class FlowConfig:
     data_catalog: str | None = None
     data_plan: str | None = None
     database_url: str | None = None
+    data_dialect: str | None = None
     skip_data: bool = False
 
 
@@ -459,12 +462,25 @@ def _project_inputs(project: Path, values: list[str]) -> list[Path]:
     return paths
 
 
+def _configured_data_dialect(config: FlowConfig) -> str | None:
+    """显式 --db-dialect 优先，其次从 --db-url 推断；都没有时返回 None。"""
+    try:
+        if config.data_dialect:
+            return normalize_dialect(config.data_dialect)
+        if config.database_url:
+            return dialect_from_url(config.database_url)
+    except ValueError as exc:
+        raise AgentError("data_dialect_invalid", str(exc)) from exc
+    return None
+
+
 def _build_data_catalog(
     *,
     project: Path,
     context: dict[str, Any],
     config: FlowConfig,
 ) -> DataCatalog | None:
+    configured = _configured_data_dialect(config)
     if config.data_catalog:
         path = _project_path(project, config.data_catalog, ".astsight/data/data_catalog.json")
         if not path.is_file():
@@ -473,14 +489,20 @@ def _build_data_catalog(
         errors = validate_catalog(catalog)
         if errors:
             raise AgentError("data_catalog_invalid", "；".join(errors[:20]))
+        if configured and catalog.dialect != configured:
+            raise AgentError(
+                "data_dialect_mismatch",
+                f"data_catalog 为 {catalog.dialect}，但目标数据库为 {configured}",
+            )
         return catalog
     if not config.data_ddl:
         return None
+    dialect = configured or "sqlite"
     ddl_paths = _project_inputs(project, config.data_ddl)
     text = "\n;\n".join(
         path.read_text(encoding="utf-8-sig") for path in ddl_paths
     )
-    parsed = parse_ddl(text, dialect="sqlite")
+    parsed = parse_ddl(text, dialect=dialect)
     seed_path = (
         _project_path(project, config.data_seed, config.data_seed)
         if config.data_seed
@@ -492,7 +514,7 @@ def _build_data_catalog(
         ddl=parsed,
         seed=seed,
         context_id=str(context.get("context_id") or ""),
-        dialect="sqlite",
+        dialect=dialect,
         sources={
             "ddl": [
                 path.relative_to(project).as_posix() for path in ddl_paths

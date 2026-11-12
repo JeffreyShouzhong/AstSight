@@ -5,6 +5,8 @@ from typing import Any
 
 from contracts import DataCatalog, ForeignKey, TableCatalog
 
+from .dialects import DialectError, normalize_dialect
+
 MAX_FIXTURE_ROWS_PER_TABLE = 1_000
 MAX_FIXTURE_TOTAL_ROWS = 10_000
 
@@ -32,6 +34,10 @@ def validate_catalog(catalog: DataCatalog) -> list[str]:
     errors: list[str] = []
     if catalog.schema_version != 1:
         errors.append(f"catalog_schema_unsupported:{catalog.schema_version}")
+    try:
+        normalize_dialect(catalog.dialect)
+    except DialectError:
+        errors.append(f"catalog_dialect_unsupported:{catalog.dialect}")
     if not catalog.catalog_id:
         errors.append("catalog_id_empty")
     tables = catalog.table_index()

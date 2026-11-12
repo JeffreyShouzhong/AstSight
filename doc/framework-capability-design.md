@@ -1740,9 +1740,12 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
 7. **SQL 渲染**：模型**不输出 SQL**；`data/render.py` 只从通过校验的 fixtures 生成参数化 `INSERT`/`DELETE`，标识符按白名单校验，值只走 `params`
 8. **隔离与回收**：每个用例一个 `data_state` fixture，请求前在事务内 apply，用例结束（含失败/异常）按主键 teardown；`run_scope` 记录到计划里用于多 run 审计。`keep-data` 调试模式保留数据
 
-**执行边界（v1）**：
+**执行边界**：
 
-- 只支持 **SQLite**（stdlib `sqlite3`，`sqlite:///path`）；MySQL/PostgreSQL 显式 `unsupported_dialect`，不假装支持
+- 支持 **SQLite / PostgreSQL / MySQL**：分别使用 stdlib `sqlite3`、`psycopg`、`PyMySQL`；
+  方言决定 SQL 占位符（`?` / `%s`）与标识符引用（双引号 / 反引号），计划方言与
+  `--db-url` 不一致时显式拒绝，不改写 SQL
+- 只覆盖用例级 fixture apply/teardown；建库、迁移、连接池与跨库事务不在范围内
 - 有 `preconditions` 但无 `data_plan` 或未配置 `ASTSIGHT_DB_URL` 时，用例标 **`blocked` / `data_unavailable`**，既不算通过也不是 SUT 缺陷
 - SQL 执行失败整事务回滚；teardown 失败显式 `data_teardown_failed`，不静默吞掉
 

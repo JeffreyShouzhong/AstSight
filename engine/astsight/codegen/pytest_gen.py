@@ -32,7 +32,7 @@ import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
 import pytest
@@ -170,14 +170,54 @@ def _data_plans():
     return _DATA_PLANS
 
 
-def _sqlite_path(db_url):
+def _db_dialect(db_url):
     value = str(db_url or "")
-    if not value.startswith("sqlite:///"):
-        raise RuntimeError(f"unsupported_dialect: {value.split(':', 1)[0]!r}")
-    raw = value[len("sqlite:///"):]
-    if not raw or raw == ":memory:":
-        raise RuntimeError("unsupported_dialect: sqlite file path required")
-    return raw
+    scheme = value.split("://", 1)[0].lower().split("+", 1)[0]
+    if scheme in {"sqlite", "sqlite3"}:
+        return "sqlite"
+    if scheme in {"postgres", "postgresql"}:
+        return "postgres"
+    if scheme in {"mysql", "mariadb"}:
+        return "mysql"
+    raise RuntimeError(f"unsupported_dialect: {scheme!r}")
+
+
+def _connect_db(db_url):
+    dialect = _db_dialect(db_url)
+    if dialect == "sqlite":
+        prefix = "sqlite:///"
+        raw = db_url[len(prefix):] if db_url.startswith(prefix) else db_url.split("://", 1)[1]
+        if not raw or raw == ":memory:":
+            raise RuntimeError("unsupported_dialect: sqlite file path required")
+        if not os.path.isfile(raw):
+            raise RuntimeError(f"sqlite database not found: {raw}")
+        conn = sqlite3.connect(raw)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn, dialect
+    if dialect == "postgres":
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError(
+                "db_driver_missing: PostgreSQL 造数需要 psycopg"
+            ) from exc
+        return psycopg.connect(db_url), dialect
+    try:
+        import pymysql
+    except ImportError as exc:
+        raise RuntimeError("db_driver_missing: MySQL 造数需要 PyMySQL") from exc
+    parts = urlparse(db_url)
+    options = parse_qs(parts.query)
+    conn = pymysql.connect(
+        host=parts.hostname or "127.0.0.1",
+        port=parts.port or 3306,
+        user=unquote(parts.username or ""),
+        password=unquote(parts.password or ""),
+        database=unquote(parts.path.lstrip("/")),
+        charset=(options.get("charset") or ["utf8mb4"])[-1],
+        autocommit=False,
+    )
+    return conn, dialect
 
 
 def _check_data_statement(statement, kind):
@@ -185,7 +225,7 @@ def _check_data_statement(statement, kind):
         raise RuntimeError(f"data_plan_invalid: expected {kind} statement")
     sql = str(statement.get("sql") or "")
     prefix = "INSERT INTO " if kind == "insert" else "DELETE FROM "
-    if not sql.upper().startswith(prefix) or "?" not in sql:
+    if not sql.upper().startswith(prefix) or ("?" not in sql and "%s" not in sql):
         raise RuntimeError(f"data_plan_invalid: non-parameterized {kind}")
     if not isinstance(statement.get("params"), list):
         raise RuntimeError("data_plan_invalid: params must be list")
@@ -227,7 +267,12 @@ def data_state(request):
 
     conn = None
     try:
-        db_path = _sqlite_path(DB_URL)
+        plan_dialect = str(plan.get("dialect") or "sqlite")
+        db_dialect = _db_dialect(DB_URL)
+        if plan_dialect != db_dialect:
+            raise RuntimeError(
+                f"data_dialect_mismatch: plan={plan_dialect}, db={db_dialect}"
+            )
         inserts = list(plan.get("statements") or [])
         teardown = plan.get("teardown")
         if not isinstance(teardown, list):
@@ -236,14 +281,18 @@ def data_state(request):
             _check_data_statement(statement, "insert")
         for statement in teardown:
             _check_data_statement(statement, "delete")
-        if not os.path.isfile(db_path):
-            raise RuntimeError(f"sqlite database not found: {db_path}")
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        with conn:
+        conn, _ = _connect_db(DB_URL)
+        cursor = conn.cursor()
+        try:
             for statement in inserts:
-                conn.execute(statement["sql"], statement["params"])
+                cursor.execute(statement["sql"], statement["params"])
                 record["applied"] += 1
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
     except Exception as exc:
         if conn is not None:
             conn.close()
@@ -259,11 +308,19 @@ def data_state(request):
     finally:
         close_error = None
         try:
-            with conn:
+            cursor = conn.cursor()
+            try:
                 for statement in reversed(teardown):
-                    conn.execute(statement["sql"], statement["params"])
+                    cursor.execute(statement["sql"], statement["params"])
                     record["deleted"] += 1
+                conn.commit()
+            finally:
+                cursor.close()
         except BaseException as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             close_error = exc
         finally:
             conn.close()
