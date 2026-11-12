@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
-> 最后更新：2026-11-11
-> 分支：`feat/rules-driven-a4-c5`
+> 最后更新：2026-11-12
+> 分支：`main`
 > 当前阶段：C6/C7 完成（`caseset.json` v4，38 条已批准用例 38/38 通过，门禁 PASS）
 
 ## 当前状态
@@ -25,6 +25,7 @@
 | 示例服务 V1.1 | ✅ 已实现 | `app.py` / `schema.sql` / `db.py` / `downstreams.py` / `openapi.json`：验证码时效与 5 次作废、短信 503、CITY_LIST 503、协议元数据、幂等请求体比较、并发重查、姓名/身份证规范化 |
 | C6/C7 执行 | ✅ 2026-11-11 | 运行 `20261111-155348-795-cases`：38/38 通过（100%），门禁 PASS；Mock 26 次调用全部 ok，0 unbound |
 | 模型配置文件 | ✅ 新增 | `engine/llm.example.json` 模板；`llm.json` 自动发现（cwd → `~/.astsight/llm.json`）或 `--llm-config` / `ASTSIGHT_LLM_CONFIG`；环境变量覆盖文件 |
+| 用户文档 | ✅ 已整理 | 根 `README.md` 重写为面向使用者的当前版本说明；新增《快速上手指南》；删除 4 份历史调研文档，保留设计/架构/决策文档给维护者 |
 
 ## 本轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -248,6 +249,14 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-12**：根 `README.md` 重写为面向使用者的当前版本说明：以“需求/变更 →
+  规则 → 审核 → 用例 → 执行”的能力与三条使用路线为主线，补充环境要求、安装、
+  `llm.json` 配置、产物位置与当前边界；移除设计基线版本号、命名边界表和按阶段
+  展开的设计论证。删除 4 份历史调研文档（`implementation-feasibility.md`、
+  `api-test-platform-feasibility.md`、`similar-articles.md`、
+  `第三方方案理论依据分析-腾讯云API智能测试平台.md`）；保留
+  `framework-capability-design.md`、`agent-architecture.md`、`CodeGraph-集成设计.md`、
+  `决策记录.md` 作为维护者文档，并在 README 中单列入口。
 - **2026-11-11**：新增面向用户的《AstSight 快速上手指南》
   （`doc/AstSight-快速上手指南.md`）：30 分钟跑 demo、`llm.json`/环境变量配置、
   三条使用路线（`agent run` / 分步 rules→cases→审核→执行 / delta）、产物位置与
