@@ -10,7 +10,7 @@
 |---|---|---|
 | C1 规则抽取 | ✅ v3 | `engine/examples/partner_onboarding/ruleset.json`：67 条 BR + 10 条 CR；0 冲突 / 4 缺口 / 5 待确认 |
 | 路由清单 | ✅ | 5 条，全部 `graph_repaired` / `verified` |
-| C3 接口画像 | ✅ | `.astsight/runs/20261104-224705-186-full/profiles.json`：5 个接口，3 条下游依赖 |
+| C3 接口画像 | ✅ V1.1 | `.astsight/runs/20261111-183042-853-full/profiles.json`：5 个接口（含 `/_reset`、`/_debug/state`），3 条下游依赖，响应码含 503；`--skip-execute --allow-unmapped` 只生成不执行 |
 | 下游模拟 | ✅ | `downstreams.py`：短信网关 / 实名认证 / 核心服务 3 个调用点；Mock 计划 3 路由 / 3 注入 |
 | C5a 数据目录 | ✅ 已补语义 | `.astsight/data/data_catalog.json`：3 表、21 条字段语义、**2 个可执行状态**、6 缺口 / 1 待确认 |
 | C3.5.1 Mock 语义 | ✅ 新增 | `.astsight/mock_semantics.json`：3 deps / 3 `success` 分支 / 4 缺口；失败分支因无规则依据留缺口 |
@@ -108,6 +108,8 @@
   其中 7 条多请求用例）
 - 用户快速上手：`doc/AstSight-快速上手指南.md`（demo → 模型配置 → 三条使用路线 →
   产物位置 → 常见报错）
+- V1.1 接口画像：`.astsight/runs/20261111-183042-853-full/profiles.json` + `routes.json`
+  （5 接口 / 3 下游；`/_reset`、`/_debug/state` 不在 OpenAPI，需 `--allow-unmapped` 生成）
 - 模型配置模板：`engine/llm.example.json`（`schema_version` / `provider` / `model` /
   `base_url` / `auth_style` / `api_key` / `api_key_env` / 调用参数）；`engine/llm.json`
   已 gitignore，配置文件按 `--llm-config` → `ASTSIGHT_LLM_CONFIG` → `./llm.json` →

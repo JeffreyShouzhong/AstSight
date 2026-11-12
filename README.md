@@ -102,9 +102,6 @@ astsight run --mode cases   --project order-svc   # 只执行项目级用例库�
 | **AstSight** | 本项目 | — |
 | `deepx-code`（itmisx） | 开源参考项目 | 借鉴图谱操作抽象 |
 | `@colbymchenry/codegraph` | 底层基础设施 | 零件，不是整机 |
-| TestHub | 旁挂对接的测试资产平台 | 外部系统 |
-| ~~Plumbline / 准绳~~ | v2.13 曾用名 | **已弃用**，统一改用 AstSight |
-| ~~Ruling~~ / ~~DeltaQ~~ / ~~DeltaProof~~ | 更早评估的备选名 | **已弃用**，勿再使用 |
 
 ## 代码
 
@@ -211,5 +208,3 @@ A6 默认关闭。未覆盖范围、未执行用例、待审 proposal、契约/�
 
 **运行环境基线：Linux（服务器 / CI 容器）**。Windows 只是开发机本地调试环境，不承担部署与验收；
 路径分隔符、子进程、信号、端口绑定、文件锁均按 POSIX 语义设计。
-
-开发机可直接用的解释器（已装齐依赖）：`C:\Users\magic\.workbuddy\binaries\python\envs\default\Scripts\python.exe`
