@@ -10,6 +10,13 @@ venv/
 .astsight/
 examples/**/.astsight/
 
+# 本地试运行产物（规则库 / 用例库 / 数据目录）
+ruleset.json
+ruleset.md
+caseset.json
+data_catalog.json
+data_plan.json
+
 # CodeGraph generated index
 .codegraph/
 
