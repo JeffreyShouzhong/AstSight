@@ -36,7 +36,7 @@ B. 需求驱动（规则驱动，canonical）
 C5a/C5b 造数（SQLite/PostgreSQL/MySQL）、事务化 apply/teardown 与规则驱动的
 `agent run` 已落地；旧
 “语义分析 → 用例草案”链路只保留兼容模块（`prompts/legacy/`），不再是主流程。
-HTTP Mock 运行时核心（C3.5.5）、C3 的 Python 下游 HTTP 调用点自动识别，以及
+HTTP Mock 运行时核心（C3.5.5）、C3 的 Python/Java/Go/Node 下游 HTTP 调用点自动识别，以及
 `agent run` 的“先起 Mock → 计算注入 → 用注入环境启动 SUT”已实现；
 `run --mock-plan` 仍只负责起 Mock 并产出注入清单，由调用方决定 SUT 启动方式。
 本 README 的 ✅ 仅代表已交付部分，设计目标与实现状态分开写。
@@ -264,6 +264,16 @@ Python 侧修复的具体行为：
 - **仍不猜的部分**：Django 函数视图（`def feed(request)`）的 method 在函数体里
   按 `request.method` 分支，静态不可知，路由保留空 method 并由健康检查告警；
   完全动态注册、元类生成、运行时拼接的路由不生成。
+
+Java / Go / Node 侧由 `astsight/profile/langroutes.py` 补充（图谱可用时不抢占
+已有路由，按 `(method, path)` 去重）：
+
+- **Java/Kotlin**：Spring `@RestController`/`@Controller` + 类级 `@RequestMapping`
+  + 方法级 `@GetMapping`/`@PostMapping`/`@RequestMapping(method=...)`；
+- **Go**：Gin/Echo/Chi/Fiber/Gorilla mux/`net/http` 的注册调用，支持 `Group` 前缀；
+- **Node**：Express/Fastify/Koa Router/Hono 的 `app.get('/x', handler)`（含
+  `app.use('/prefix', router)`），以及 NestJS 的 `@Controller` + `@Get`。
+- 只接受字面量路径；变量/模板路径跳过。同名 handler 由路由行号消歧，避免挂错方法。
 
 
 
@@ -691,7 +701,7 @@ python examples/demo_agent_flow.py --keep --no-auto-approve       # 停在待审
   5xx 只有在归因为 `mock_error` 时才允许修 Mock，避免把真实代码缺陷“修绿”；
 - 启动期注入只支持环境变量形式的 `url_override` 与显式 `http_proxy`；配置文件、注册中心、
   DNS 改写会显式告警为 unsupported；
-- 下游自动识别目前只覆盖 Python 的 `requests`/`httpx`/`urllib` 调用点；
+- 下游自动识别覆盖 Python 的 `requests`/`httpx`/`urllib`，以及 Java（RestTemplate、WebClient、Java 11 HttpClient、OkHttp、Apache HttpClient）、Go（`net/http`、resty）与 Node（`fetch`、axios、got、`http.request`）；声明式客户端（Feign、生成式 SDK）与动态代理仍不识别；
 - 每轮对模型输出都有条数/长度上限，模型输出按不可信输入处理。
 
 ## 产物与门禁

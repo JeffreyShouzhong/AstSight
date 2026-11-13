@@ -251,6 +251,7 @@ def _profile_routes(changed_apis: list[dict]) -> list[dict]:
             "handler": api.get("route_handler", ""),
             "owner": api.get("route_owner", ""),
             "file": api.get("route_file") or (api.get("change_files") or [""])[0],
+            "line": api.get("route_line", 0) or 0,
             "source": api.get("route_source", ""),
             "confidence": api.get("evidence", "inferred"),
         }

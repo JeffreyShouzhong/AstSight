@@ -1,12 +1,12 @@
 """C3 下游 HTTP 调用点识别（P1，仅明文 HTTP）。
 
-从路由 handler 出发，在项目 **Python 源码** 上做有界 AST 扫描，识别常见的
-出站 HTTP 调用：
+从路由 handler 出发，在项目源码上做有界静态扫描：
 
-- `requests` / `httpx` 的模块函数、`Session`/`Client` 实例与 `.request(...)`；
-- `urllib.request.urlopen(...)`；
-- 能静态解析的 URL 字面量、环境变量/配置键拼接、`urljoin`、f-string 与
-  `str.format` 模板；
+- **Python**：AST 扫描 `requests` / `httpx` / `urllib`，解析字面量、环境变量/
+  配置键拼接、`urljoin`、f-string 与 `str.format` 模板；
+- **Java/Kotlin、Go、Node/TS**：`langscan` 的轻量文本扫描（RestTemplate、
+  WebClient、OkHttp、Apache HttpClient、net/http、resty、fetch、axios、got
+  等），覆盖字面量、拼接、配置键与模板字符串；
 - 无法确定地址或 method 的调用点进入 `unsupported`，**不猜**。
 
 本模块只读源码，不 import、不执行被测项目。扫描有文件数/大小/符号数上限，
@@ -30,6 +30,15 @@ from ..mock.identity import (
     build_dep_id_plan,
     normalize_method,
 )
+from .callsite import HttpCallSite
+from .langscan import (
+    _line_of,
+    _matching_brace,
+    _NOT_CALLEES,
+    language_for,
+    scan_language_file,
+)
+
 
 MAX_FILES = 2_000
 MAX_FILE_BYTES = 1_000_000
@@ -65,36 +74,25 @@ _SKIP_DIRS = {
 }
 _SETTINGS_ROOTS = {"settings", "config", "cfg", "conf", "options", "app_config"}
 _FORMAT_PLACEHOLDER = re.compile(r"\{[^{}]*\}")
-
-
-@dataclass(frozen=True)
-class HttpCallSite:
-    """静态识别出的一个出站 HTTP 调用点。"""
-
-    call_site_id: str
-    handler: str
-    file: str
-    line: int
-    method: str
-    target: str | None = None
-    path: str | None = None
-    config_key: str | None = None
-    service_name: str | None = None
-    client: str = ""
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "call_site_id": self.call_site_id,
-            "handler": self.handler,
-            "file": self.file,
-            "line": self.line,
-            "method": self.method,
-            "target": self.target,
-            "path": self.path,
-            "config_key": self.config_key,
-            "service_name": self.service_name,
-            "client": self.client,
-        }
+_SUPPORTED_LANGUAGES = ("python", "java", "go", "node")
+_LANGUAGE_ALIASES = {
+    "python": "python",
+    "py": "python",
+    "java": "java",
+    "kotlin": "java",
+    "kt": "java",
+    "go": "go",
+    "golang": "go",
+    "node": "node",
+    "nodejs": "node",
+    "javascript": "node",
+    "typescript": "node",
+    "js": "node",
+    "ts": "node",
+    "jsx": "node",
+    "tsx": "node",
+}
+_NAME_SPLIT = re.compile(r"::|#|/|\$|\\")
 
 
 @dataclass
@@ -135,6 +133,18 @@ class _Scope:
     module: _Module
     vars: dict[str, list[ast.expr]] = field(default_factory=dict)
     clients: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _LangSymbol:
+    """Java/Go/Node 源文件中声明的函数/方法。"""
+
+    path: Path
+    rel: str
+    language: str
+    name: str
+    owner: str
+    line: int
 
 
 @dataclass
@@ -734,6 +744,106 @@ def _functions_in_module(module: _Module) -> list[_Function]:
     return result
 
 
+_JAVA_METHOD = re.compile(
+    r"(?m)^[ \t]*(?:(?:public|private|protected|static|final|synchronized|"
+    r"abstract|default|native|strictfp|override|suspend|inline)\s+)*"
+    r"[\w<>\[\],.?@\s]+\s+(\w+)\s*\([^;{}]*\)\s*(?:throws[^{]+)?\{"
+)
+_GO_FUNC = re.compile(
+    r"(?m)^func\s+(?:\(\s*\w+\s+\*?\s*(\w+)(?:\[[^\]]*\])?\s*\)\s*)?(\w+)\s*\("
+)
+_NODE_FUNCTIONS = (
+    re.compile(r"\bfunction\s+(\w+)\s*\("),
+    re.compile(
+        r"\b(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?"
+        r"(?:\([^)]*\)|\w+)\s*=>"
+    ),
+    re.compile(r"(?m)^[ \t]*(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::[^{]+)?\{"),
+)
+
+
+def _language_symbols(
+    text: str, *, rel: str, path: Path, language: str
+) -> list[_LangSymbol]:
+    symbols: list[_LangSymbol] = []
+    if language == "java":
+        classes = list(
+            re.finditer(r"\b(?:class|interface|enum|record|object)\s+(\w+)", text)
+        )
+        for class_match in classes:
+            owner = class_match.group(1)
+            brace = text.find("{", class_match.end())
+            if brace < 0:
+                continue
+            end = _matching_brace(text, brace)
+            body = text[brace + 1 : end]
+            for match in _JAVA_METHOD.finditer(body):
+                name = match.group(1)
+                if name in _NOT_CALLEES or name == owner:
+                    continue
+                symbols.append(
+                    _LangSymbol(
+                        path=path,
+                        rel=rel,
+                        language=language,
+                        name=name,
+                        owner=owner,
+                        line=_line_of(text, brace + 1 + match.start()),
+                    )
+                )
+    elif language == "go":
+        for match in _GO_FUNC.finditer(text):
+            owner = match.group(1) or ""
+            name = match.group(2)
+            if name in _NOT_CALLEES:
+                continue
+            symbols.append(
+                _LangSymbol(
+                    path=path,
+                    rel=rel,
+                    language=language,
+                    name=name,
+                    owner=owner,
+                    line=_line_of(text, match.start()),
+                )
+            )
+    else:
+        for pattern in _NODE_FUNCTIONS:
+            for match in pattern.finditer(text):
+                name = match.group(1)
+                if name in _NOT_CALLEES:
+                    continue
+                symbols.append(
+                    _LangSymbol(
+                        path=path,
+                        rel=rel,
+                        language=language,
+                        name=name,
+                        owner="",
+                        line=_line_of(text, match.start()),
+                    )
+                )
+    return symbols
+
+
+def _candidate_names(name: str) -> list[str]:
+    clean = str(name or "").strip()
+    if not clean:
+        return []
+    parts = [part for part in _NAME_SPLIT.split(clean) if part]
+    last = clean.rsplit(".", 1)[-1]
+    names = [clean, last]
+    if parts:
+        names.append(parts[-1])
+        if len(parts) >= 2:
+            names.append(f"{parts[-2]}.{parts[-1]}")
+    result: list[str] = []
+    for item in names:
+        if item and item not in result:
+            result.append(item)
+    return result
+
+
 class DownstreamScanner:
     """项目级、可复用的 Python 出站 HTTP 调用点扫描器。"""
 
@@ -758,17 +868,23 @@ class DownstreamScanner:
         self._symbol_index: dict[str, list[_Function]] | None = None
         self._all_functions: list[_Function] = []
         self._file_order: list[Path] | None = None
+        self._lang_file_order: list[tuple[Path, str]] | None = None
+        self._lang_index: dict[str, list[_LangSymbol]] | None = None
+        self._lang_texts: dict[Path, str] = {}
+        self._lang_resolve_cache: dict[
+            tuple[str, str, int], list[_LangSymbol]
+        ] = {}
         self._scan_cache: dict[str, DownstreamScan] = {}
         self._call_site_cache: dict[
             int, tuple[list[HttpCallSite], list[str], dict[str, str]]
         ] = {}
         self._language_checked = False
-        self._python_supported = True
+        self._supported_languages: set[str] | None = None
 
     def _check_language(self) -> bool:
-        """图谱声明支持语言且不含 Python 时不扫描，避免制造无意义告警。"""
+        """图谱声明支持语言时，只扫描其声明的语言；全部不支持则跳过。"""
         if self._language_checked:
-            return self._python_supported
+            return bool(self._supported_languages is None or self._supported_languages)
         self._language_checked = True
         if self.codegraph is None:
             return True
@@ -776,18 +892,30 @@ class DownstreamScanner:
             languages = self.codegraph.supported_languages() or []
         except Exception:
             languages = []
-        if languages and not any(
-            str(item).lower() in ("python", "py") for item in languages
-        ):
-            self._python_supported = False
+        if not languages:
+            return True
+        supported = {
+            _LANGUAGE_ALIASES[str(item).lower()]
+            for item in languages
+            if str(item).lower() in _LANGUAGE_ALIASES
+        }
+        if not supported:
+            self._supported_languages = set()
             self.warnings.append(
                 "downstream_language_not_supported:" + ",".join(map(str, languages))
             )
-        return self._python_supported
+            return False
+        self._supported_languages = supported
+        return True
+
+    def _language_allowed(self, language: str) -> bool:
+        if self._supported_languages is not None and self._supported_languages:
+            return language in self._supported_languages
+        return True
 
     # ---- 文件与索引 ----
 
-    def _files(self) -> list[Path]:
+    def _walk_source_files(self) -> list[Path]:
         if self._file_order is not None:
             return self._file_order
         result: list[Path] = []
@@ -799,8 +927,6 @@ class DownstreamScanner:
                 if name not in _SKIP_DIRS and not name.startswith(".")
             )
             for filename in sorted(filenames):
-                if not filename.endswith(".py"):
-                    continue
                 path = Path(dirpath) / filename
                 try:
                     resolved = path.resolve()
@@ -810,7 +936,9 @@ class DownstreamScanner:
                 except OSError:
                     continue
                 if size > MAX_FILE_BYTES:
-                    self.warnings.append(f"source_skipped_large:{path.relative_to(self.root)}")
+                    self.warnings.append(
+                        f"source_skipped_large:{path.relative_to(self.root)}"
+                    )
                     continue
                 if total + size > MAX_TOTAL_BYTES:
                     self.warnings.append("source_scan_truncated_total_bytes")
@@ -824,6 +952,31 @@ class DownstreamScanner:
                     return result
         self._file_order = result
         return result
+
+    def _files(self) -> list[Path]:
+        return [path for path in self._walk_source_files() if path.suffix == ".py"]
+
+    def _language_files(self) -> list[tuple[Path, str]]:
+        if self._lang_file_order is not None:
+            return self._lang_file_order
+        result: list[tuple[Path, str]] = []
+        for path in self._walk_source_files():
+            language = language_for(path)
+            if language and self._language_allowed(language):
+                result.append((path, language))
+        self._lang_file_order = result
+        return result
+
+    def _language_text(self, path: Path) -> str:
+        cached = self._lang_texts.get(path)
+        if cached is not None:
+            return cached
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        self._lang_texts[path] = text
+        return text
 
     def _module(self, path: Path) -> _Module | None:
         if path in self._modules:
@@ -857,6 +1010,127 @@ class DownstreamScanner:
                 index.setdefault(function.qualname, []).append(function)
         self._symbol_index = index
         return index
+
+    def _language_index(self) -> dict[str, list[_LangSymbol]]:
+        if self._lang_index is not None:
+            return self._lang_index
+        index: dict[str, list[_LangSymbol]] = {}
+        for path, language in self._language_files():
+            text = self._language_text(path)
+            if not text.strip():
+                continue
+            rel = path.relative_to(self.root).as_posix()
+            for symbol in _language_symbols(
+                text, rel=rel, path=path, language=language
+            ):
+                keys = [symbol.name]
+                if symbol.owner:
+                    keys.append(f"{symbol.owner}.{symbol.name}")
+                for key in keys:
+                    index.setdefault(key, []).append(symbol)
+        self._lang_index = index
+        return index
+
+    def _resolve_lang(
+        self,
+        name: str,
+        *,
+        file_hint: str = "",
+        line_hint: int = 0,
+    ) -> list[_LangSymbol]:
+        clean = str(name or "").strip()
+        if not clean:
+            # 内联回调（Node 箭头函数等）没有符号名，只能靠路由给出的文件+行定位。
+            if not file_hint:
+                return []
+            fallback = self._lang_file_hint(file_hint)
+            if fallback is None:
+                return []
+            path, language = fallback
+            return [
+                _LangSymbol(
+                    path=path,
+                    rel=path.relative_to(self.root).as_posix(),
+                    language=language,
+                    name="",
+                    owner="",
+                    line=int(line_hint or 0),
+                )
+            ]
+        cache_key = (clean, str(file_hint or ""), int(line_hint or 0))
+        cached = self._lang_resolve_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        index = self._language_index()
+        candidates: list[_LangSymbol] = []
+        for key in _candidate_names(clean):
+            candidates.extend(index.get(key, []))
+        unique: dict[tuple[str, int], _LangSymbol] = {}
+        for symbol in candidates:
+            unique[(symbol.rel, symbol.line)] = symbol
+        candidates = list(unique.values())
+
+        if file_hint:
+            hinted = [
+                symbol
+                for symbol in candidates
+                if self._file_matches(symbol.path, file_hint)
+            ]
+            if hinted:
+                candidates = hinted
+            elif not candidates:
+                # 路由指向的文件里没索引到方法时，直接按行号定位函数块。
+                fallback = self._lang_file_hint(file_hint)
+                if fallback is not None:
+                    path, language = fallback
+                    rel = path.relative_to(self.root).as_posix()
+                    simple = (
+                        _candidate_names(clean)[-1] if _candidate_names(clean) else clean
+                    )
+                    candidates = [
+                        _LangSymbol(
+                            path=path,
+                            rel=rel,
+                            language=language,
+                            name=simple,
+                            owner="",
+                            line=int(line_hint or 0),
+                        )
+                    ]
+
+        same_file = (
+            [symbol for symbol in candidates if self._file_matches(symbol.path, file_hint)]
+            if file_hint
+            else list(candidates)
+        )
+        # 行号只在同一文件内有意义；路由文件与 handler 文件不同时不拿行号消歧。
+        if line_hint and same_file and (not file_hint or same_file):
+            inside = [
+                symbol
+                for symbol in same_file
+                if symbol.line and abs(symbol.line - line_hint) <= 3
+            ]
+            if inside:
+                candidates = inside
+            else:
+                before = [symbol for symbol in same_file if symbol.line <= line_hint]
+                if before:
+                    candidates = [max(before, key=lambda item: item.line)]
+                else:
+                    candidates = [min(same_file, key=lambda item: item.line)]
+
+        if len({(item.rel, item.line) for item in candidates}) > 1:
+            self.warnings.append(f"symbol_ambiguous:{clean}")
+            candidates = []
+        self._lang_resolve_cache[cache_key] = candidates
+        return candidates
+
+    def _lang_file_hint(self, hint: str) -> tuple[Path, str] | None:
+        for path, language in self._language_files():
+            if self._file_matches(path, hint):
+                return path, language
+        return None
 
     def _resolve(
         self,
@@ -972,7 +1246,9 @@ class DownstreamScanner:
             return result
 
         result = DownstreamScan(handler=handler)
-        seeds = [f"{owner}.{handler}", handler] if owner else [handler]
+        seeds = [handler]
+        if owner and handler:
+            seeds.insert(0, f"{owner}.{handler}")
         queue: list[tuple[str, int, str, int]] = [
             (seed, 0, file_hint, line_hint) for seed in seeds
         ]
@@ -988,8 +1264,44 @@ class DownstreamScanner:
                 warnings.append("downstream_queue_truncated")
             name, depth, file_hint, line_hint = queue.pop(0)
             functions = self._resolve(name, file_hint=file_hint, line_hint=line_hint)
-            if not functions and depth == 0:
-                warnings.append(f"handler_source_missing:{name}")
+            if not functions:
+                lang_symbols = self._resolve_lang(
+                    name, file_hint=file_hint, line_hint=line_hint
+                )
+                if not lang_symbols:
+                    if depth == 0:
+                        warnings.append(f"handler_source_missing:{name}")
+                    continue
+                for symbol in lang_symbols:
+                    key = (symbol.rel, symbol.line or 0)
+                    if key in visited:
+                        continue
+                    if len(visited) >= self.max_symbols:
+                        warnings.append("downstream_symbol_limit")
+                        break
+                    visited.add(key)
+                    result.checked = True
+                    lang_scan = scan_language_file(
+                        path=symbol.path,
+                        rel=symbol.rel,
+                        language=symbol.language,
+                        handler=symbol.name,
+                        line_hint=symbol.line or line_hint,
+                        file_text=self._language_text(symbol.path),
+                        max_sites=self.max_call_sites,
+                    )
+                    all_sites.extend(lang_scan.sites)
+                    unsupported_reasons.update(lang_scan.unsupported_reasons)
+                    warnings.extend(lang_scan.warnings)
+                    if depth >= self.max_depth:
+                        continue
+                    for callee in lang_scan.local_callees:
+                        if callee in (handler, f"{owner}.{handler}", symbol.name):
+                            continue
+                        queue.append((callee, depth + 1, symbol.rel, 0))
+                    self._queue_codegraph_callees(
+                        name, depth, queue, warnings
+                    )
                 continue
             for function in functions:
                 key = (function.module.rel, function.node.lineno)
@@ -1011,26 +1323,7 @@ class DownstreamScanner:
                     queue.append(
                         (callee, depth + 1, function.module.rel, 0)
                     )
-                if self.codegraph is not None:
-                    try:
-                        symbols = self.codegraph.callees(name) or []
-                    except Exception as exc:  # 图谱是辅助证据，失败不中断
-                        warnings.append(
-                            f"codegraph_callees_error:{type(exc).__name__}:{str(exc)[:120]}"
-                        )
-                        symbols = []
-                    for symbol in symbols[: self.max_symbols]:
-                        symbol_name = getattr(symbol, "name", "") or str(symbol)
-                        if not symbol_name:
-                            continue
-                        queue.append(
-                            (
-                                symbol_name,
-                                depth + 1,
-                                getattr(symbol, "file", "") or "",
-                                int(getattr(symbol, "line", 0) or 0),
-                            )
-                        )
+                self._queue_codegraph_callees(name, depth, queue, warnings)
 
         # 同一物理调用点可能同时从 handler 和 callee 到达；按 id 去重。
         unique_sites: dict[str, HttpCallSite] = {}
@@ -1046,6 +1339,35 @@ class DownstreamScanner:
         self._finalize(result, warnings, unsupported_reasons)
         self._scan_cache[cache_key] = result
         return result
+
+    def _queue_codegraph_callees(
+        self,
+        name: str,
+        depth: int,
+        queue: list[tuple[str, int, str, int]],
+        warnings: list[str],
+    ) -> None:
+        if self.codegraph is None:
+            return
+        try:
+            symbols = self.codegraph.callees(name) or []
+        except Exception as exc:  # 图谱是辅助证据，失败不中断
+            warnings.append(
+                f"codegraph_callees_error:{type(exc).__name__}:{str(exc)[:120]}"
+            )
+            return
+        for symbol in symbols[: self.max_symbols]:
+            symbol_name = getattr(symbol, "name", "") or str(symbol)
+            if not symbol_name:
+                continue
+            queue.append(
+                (
+                    symbol_name,
+                    depth + 1,
+                    getattr(symbol, "file", "") or "",
+                    int(getattr(symbol, "line", 0) or 0),
+                )
+            )
 
     def _finalize(
         self,

@@ -29,6 +29,7 @@
 | 造数方言 | ✅ PostgreSQL/MySQL | `data/dialects.py`；SQL 占位符/标识符按方言渲染；`psycopg` / `PyMySQL` 驱动按需导入；计划方言与 `--db-url` 不一致时 `dialect_mismatch`；`data catalog --dialect`、`agent run --db-dialect` |
 | 断言深度 | ✅ 2026-11-12 | `header/contains`、`body_schema`（OpenAPI 响应 schema）、只读 `db_row`；`assert_strength` 按内容推导（L1–L4） |
 | A5/A6 诊断修复 | ✅ 2026-11-12 | A5/A6 合并为单次 LLM 调用（`schema_version=2`）；默认最多 3 轮；用例补丁以 `astsight-agent:repair` 自动批准；断言不得删除/降强；Mock 结构失配可修并热更新路由表 |
+| 多语言下游 Mock | ✅ 2026-11-12 | Java/Go/Node 下游 HTTP 调用点扫描（`profile/langscan.py`）与非 Python 路由扫描（`profile/langroutes.py`）；Spring/Gin/Echo/Chi/Fiber/Express/Fastify/Koa/NestJS；路由 `line` 贯通画像，内联回调按行定位 |
 
 ## 本轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -252,6 +253,19 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-12**：Java/Go/Node 项目支持自动下游 Mock：
+  - 新增 `profile/callsite.py` 共享 `HttpCallSite`；`profile/langscan.py` 用有界文本
+    扫描识别 RestTemplate、WebClient、Java 11 HttpClient、OkHttp、Apache HttpClient、
+    Go `net/http`/resty、Node `fetch`/axios/got/`http.request`，支持字面量、拼接、
+    `Sprintf`/`String.format`、模板字符串与配置键（Spring `${...}` 归一化为环境变量名）。
+  - 新增 `profile/langroutes.py`：Spring 注解、Gin/Echo/Chi/Fiber/Gorilla、
+    Express/Fastify/Koa/Hono、NestJS；`inventory_routes` 在图谱/插件/降级三个分支
+    合并并按 `(method, path)` 去重。
+  - 路由 `line` 贯通 `inventory → impact → pipeline/flow → build_profiles`，非 Python
+    handler 按文件+行定位函数块；Node 多行内联回调也纳入扫描，单行回调显式标
+    `inline_handler_unscanned`，不猜。
+  - 新增 `tests/test_downstream_languages.py`（12 条）；全量 **315 passed, 2 skipped**。
+  - 文档同步：README、使用文档、能力设计、决策记录 v4.14。
 - **2026-11-12**：A5/A6 合并为单个诊断修复 Agent：
   - 删除“先诊断、再修复”的两次 LLM 调用；`diagnose_and_repair()` 一次输出归因 +
     可选补丁（`RepairPlan.schema_version=2`），提示词统一为

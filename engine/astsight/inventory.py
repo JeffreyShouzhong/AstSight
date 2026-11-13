@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .profile.langroutes import scan_language_routes
 from .profile.openapi import load_spec, normalize_path, parse_operations
 
 # 路由清单健康度只做“是否可能漏扫”的告警，不参与符号映射或证据等级。
@@ -169,6 +170,11 @@ def route_dicts(routes: list[Any]) -> list[dict]:
                 "confidence": confidence,
                 "framework": getattr(route, "framework", ""),
                 "note": getattr(route, "note", "") or "",
+                "line": (
+                    getattr(route, "line", 0)
+                    or getattr(route, "route_line", 0)
+                    or 0
+                ),
             }
         )
     return out
@@ -226,6 +232,61 @@ def _merge_openapi_routes(
     return routes + added, report
 
 
+def _merge_language_routes(
+    routes: list[dict],
+    project: Path,
+    audit: dict,
+    notes: list[str],
+) -> list[dict]:
+    """把 Java/Go/Node 源码扫描结果并入路由清单。
+
+    已有带 handler 的同 `(method, path)` 路由优先（图谱证据更强）；只有
+    OpenAPI 占位（handler 为空）时用源码路由替换，让下游 Mock 有调用点。
+    """
+    try:
+        extra, warnings = scan_language_routes(project)
+    except Exception as exc:  # 非 Python 路由扫描是补充证据，失败不阻断
+        notes.append(
+            f"language_route_scan_error:{type(exc).__name__}: {str(exc)[:300]}"
+        )
+        return routes
+    if warnings:
+        audit["language_scan_warnings"] = warnings[:50]
+    if not extra:
+        return routes
+
+    key_index: dict[tuple[str, str], int] = {}
+    for index, route in enumerate(routes):
+        method = str(route.get("method") or "").upper()
+        path = normalize_path(route.get("path") or "")
+        if not method or not path:
+            continue
+        key_index.setdefault((method, path), index)
+
+    added = 0
+    replaced = 0
+    merged = list(routes)
+    for route in extra:
+        key = (
+            str(route.get("method") or "").upper(),
+            normalize_path(route.get("path") or ""),
+        )
+        existing_index = key_index.get(key)
+        if existing_index is None:
+            key_index[key] = len(merged)
+            merged.append(route)
+            added += 1
+            continue
+        if not merged[existing_index].get("handler"):
+            route_copy = dict(merged[existing_index])
+            route_copy.update(route)
+            merged[existing_index] = route_copy
+            replaced += 1
+    if added or replaced:
+        audit["language_routes"] = {"added": added, "replaced_openapi": replaced}
+    return merged
+
+
 def inventory_routes(
     project: Path,
     *,
@@ -260,9 +321,10 @@ def inventory_routes(
             report = client.route_report
             audit = report.as_dict() if report else {}
             if routes:
-                merged, supplement = _merge_openapi_routes(
-                    route_dicts(routes), openapi_source
+                scanned = _merge_language_routes(
+                    route_dicts(routes), project, audit, notes
                 )
+                merged, supplement = _merge_openapi_routes(scanned, openapi_source)
                 if supplement:
                     audit["openapi_supplement"] = supplement
                 return merged, audit, client, notes
@@ -282,7 +344,8 @@ def inventory_routes(
 
     if RoutePrefixRepair is None:
         audit = {"frameworks": [], "note": "route_plugin_unavailable"}
-        merged, supplement = _merge_openapi_routes([], openapi_source)
+        scanned = _merge_language_routes([], project, audit, notes)
+        merged, supplement = _merge_openapi_routes(scanned, openapi_source)
         if supplement:
             audit["openapi_supplement"] = supplement
         if notes:
@@ -292,9 +355,8 @@ def inventory_routes(
     declarations = repair.scan()
     audit = repair.last_report.as_dict()
     audit["source"] = "framework_plugin_only"
-    merged, supplement = _merge_openapi_routes(
-        route_dicts(declarations), openapi_source
-    )
+    scanned = _merge_language_routes(route_dicts(declarations), project, audit, notes)
+    merged, supplement = _merge_openapi_routes(scanned, openapi_source)
     if supplement:
         audit["openapi_supplement"] = supplement
     if notes:

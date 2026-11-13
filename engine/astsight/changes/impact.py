@@ -434,6 +434,7 @@ def _merge(
             "route_handler": route.get("handler", ""),
             "route_owner": route.get("handler_owner", ""),
             "route_file": route.get("file", ""),
+            "route_line": route.get("line", 0) or 0,
             "confidence": confidence,
             "evidence": evidence,
             "attribution": attribution,

@@ -149,12 +149,14 @@ def build_profiles(
             )
 
         handler = profile["handler"]
-        if scanner is not None and handler:
+        has_source_location = bool(route.get("file")) and bool(route.get("line"))
+        if scanner is not None and (handler or has_source_location):
             try:
                 scan = scanner.scan(
                     handler,
                     owner=str(route.get("owner") or ""),
                     file_hint=str(route.get("file") or ""),
+                    line_hint=int(route.get("line") or 0),
                 )
             except Exception as exc:  # 源码扫描是辅助证据，单次失败不中断画像
                 profile["downstream_error"] = f"{type(exc).__name__}: {exc}"[:300]

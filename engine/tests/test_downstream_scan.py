@@ -322,14 +322,35 @@ class PayView:
     assert scan.call_sites[0].handler == "PayView.post"
 
 
-def test_non_python_graph_is_not_scanned(tmp_path: Path) -> None:
-    _write(tmp_path, "App.java", "class App {}\n")
+def test_non_python_graph_is_scanned_for_supported_languages(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "App.java",
+        """
+class App {
+    String call() {
+        return client.getForObject("http://pay-service/status", String.class);
+    }
+}
+""",
+    )
     graph = InMemoryCodeGraphClient(languages=["java"])
+    scan = DownstreamScanner(tmp_path, codegraph_client=graph).scan("call")
+
+    assert scan.checked is True
+    assert [dep["dep_id"] for dep in scan.deps] == [
+        "http:host:pay-service GET /status"
+    ]
+
+
+def test_unsupported_language_graph_is_not_scanned(tmp_path: Path) -> None:
+    _write(tmp_path, "lib.rs", "fn handler() {}\n")
+    graph = InMemoryCodeGraphClient(languages=["rust"])
     scan = DownstreamScanner(tmp_path, codegraph_client=graph).scan("handler")
 
     assert scan.checked is False
     assert scan.deps == []
-    assert "downstream_language_not_supported:java" in scan.warnings
+    assert "downstream_language_not_supported:rust" in scan.warnings
 
 
 def test_handler_without_source_is_not_guessed(tmp_path: Path) -> None:
