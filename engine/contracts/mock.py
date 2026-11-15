@@ -69,6 +69,9 @@ class MockInjection(BaseModel):
 
     dep_id: str | None = Field(default=None, description="所属下游；旧数据可为空")
     strategy: MockStrategy | None = Field(default=None)
+    service_name: str | None = Field(
+        default=None, description="服务发现型下游的服务名，保留原始大小写"
+    )
     property: str | None = Field(default=None, description="SUT 中被覆盖的配置键")
     kind: str = Field(description="base_url / endpoint_url / proxy")
     original: str = Field(default="")

@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from astsight.agent.sut import injection_env
 from astsight.cases.draft import case_fingerprint
 from astsight.cases.store import save_case_set
 from astsight.mock import (
@@ -212,6 +213,38 @@ def test_start_mock_plan_serves_route_and_emits_manifest_without_token(
         runtime.stop()
 
     assert runtime.server.started is False
+
+
+def test_injection_document_carries_discovery_service_name(tmp_path: Path) -> None:
+    payload = _plan_payload()
+    payload["port"] = 0
+    payload["injections"] = [
+        {
+            "dep_id": DEP_ID,
+            "strategy": "discovery_override",
+            "service_name": "PayService",
+            "kind": "base_url",
+            "reason": "discovery_requires_static_instances",
+        }
+    ]
+    runtime = start_mock_plan(_write_plan(tmp_path, payload))
+    try:
+        document = runtime.injection_document()
+        assert document["routes"][0]["host"] == "pay-service"
+        assert document["injections"][0]["service_name"] == "PayService"
+        env, _keys, warnings = injection_env(
+            document, base_url="http://127.0.0.1:8080"
+        )
+        instances = json.loads(env["SPRING_APPLICATION_JSON"])["spring"][
+            "cloud"
+        ]["discovery"]["client"]["simple"]["instances"]
+        assert instances == {"PayService": [{"uri": runtime.server.endpoint}]}
+        assert any(
+            item.startswith("injection_discovery_applied:PayService")
+            for item in warnings
+        )
+    finally:
+        runtime.stop()
 
 
 def _make_store(project: Path, *, endpoint: str, mock_bindings: dict[str, str]) -> Path:

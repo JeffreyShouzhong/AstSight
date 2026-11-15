@@ -108,11 +108,70 @@ def _rule_matches_dep(rule: Rule, dep: dict[str, Any], *, only_dep: bool) -> boo
     return False
 
 
-def _default_branch() -> MockBranch:
+def _value_for_type(type_text: str) -> Any:
+    """按 A 的响应类型给 success 分支一个可解析的默认值。"""
+    text = str(type_text or "").strip()
+    if text.endswith("[]"):
+        return []
+    base = re.sub(r"<.*>", "", text).strip().lower()
+    if base in {"string", "char", "character"}:
+        return ""
+    if base in {"boolean", "bool"}:
+        return False
+    if base in {"int", "integer", "long", "short", "byte"}:
+        return 0
+    if base in {"double", "float", "number", "bigdecimal", "biginteger"}:
+        return 0.0
+    if base in {
+        "list", "set", "collection", "iterable", "arraylist", "linkedlist",
+        "hashset", "linkedhashset",
+    }:
+        return []
+    if base in {"map", "hashmap", "linkedhashmap", "jsonobject"}:
+        return {}
+    return {}
+
+
+def _contract_body(raw: dict[str, Any] | None) -> Any:
+    """从 A 的响应类型生成 success body；没有契约时返回 None。
+
+    只做一层字段展开：嵌套对象给 `{}`，列表给 `[]`。不编造业务取值。
+    """
+    if not isinstance(raw, dict):
+        return None
+    contract = raw.get("response_contract")
+    if not isinstance(contract, dict):
+        return None
+    for item in contract.get("types") or []:
+        if not isinstance(item, dict):
+            continue
+        fields = item.get("fields") or []
+        if not fields:
+            continue
+        body = {
+            str(field.get("name")): _value_for_type(field.get("type", ""))
+            for field in fields
+            if isinstance(field, dict) and field.get("name")
+        }
+        container = item.get("container")
+        if container == "list":
+            return [body]
+        if container == "page":
+            return {"content": [body], "totalElements": 1, "totalPages": 1}
+        return body
+    return None
+
+
+def _default_branch(raw: dict[str, Any] | None = None) -> MockBranch:
+    body = _contract_body(raw)
     return MockBranch(
         branch="success",
-        semantics="下游正常返回",
-        stub=MockStub(status=200, body={}),
+        semantics=(
+            "下游正常返回（字段取自 A 的响应类型）"
+            if body is not None
+            else "下游正常返回"
+        ),
+        stub=MockStub(status=200, body=body if body is not None else {}),
         evidence=Evidence.INFERRED,
         source=MockBranchSource(kind="contract", rule_keys=[]),
     )
@@ -168,7 +227,7 @@ def build_mock_semantic(
                         if raw.get("config_keys")
                         else None
                     ),
-                    branches=[_default_branch()],
+                    branches=[_default_branch(raw)],
                 )
                 deps[dep_id] = dep
             existing = {branch.branch for branch in dep.branches}

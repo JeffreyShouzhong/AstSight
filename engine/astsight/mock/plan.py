@@ -358,6 +358,7 @@ def _injection_model(
     return MockInjection(
         dep_id=injection.dep_id,
         strategy=injection.strategy,
+        service_name=injection.service_name,
         property=injection.property,
         kind=injection.kind,
         original=injection.original or "",
@@ -425,6 +426,17 @@ class MockPlanRuntime:
             "sut_id": self.plan.sut_id,
             "namespace": self.plan.namespace,
             "endpoint": self.server.endpoint,
+            # 服务发现型注入需要 route.host（即服务名）才能写静态实例表。
+            "routes": [
+                {
+                    "dep_id": route.dep_id,
+                    "host": route.host,
+                    "method": route.method,
+                    "path_key": route.path_key,
+                    "target": route.target,
+                }
+                for route in self.plan.routes
+            ],
             "injections": [
                 injection.model_dump(mode="json", exclude_none=True)
                 for injection in self.injections

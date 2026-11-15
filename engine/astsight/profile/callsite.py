@@ -23,6 +23,7 @@ class HttpCallSite:
     config_key: str | None = None
     service_name: str | None = None
     client: str = ""
+    response_type: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -36,6 +37,7 @@ class HttpCallSite:
             "config_key": self.config_key,
             "service_name": self.service_name,
             "client": self.client,
+            "response_type": self.response_type,
         }
 
 

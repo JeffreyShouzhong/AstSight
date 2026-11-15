@@ -10,14 +10,16 @@
 - Java/Kotlin：`RestTemplate`、`WebClient`、Java 11 `HttpClient`、OkHttp、
   Apache HttpClient；URL 支持字面量、`+` 拼接、`URI.create`、`@Value("${...}")`
   字段、`System.getenv` / `System.getProperty` / `Environment.getProperty`。
+  调用方把 `@FeignClient` 接口清单传进来时，也识别接口字段上的方法调用
+  （路径取 `@FeignClient(path)` + 方法映射，目标取 `url` 或服务名）。
 - Go：`http.Get/Post/NewRequest(WithContext)`、`http.Client` / resty 实例方法；
   URL 支持字面量、`+` 拼接、`fmt.Sprintf`、`os.Getenv` / `viper.GetString`。
 - Node/TS：全局 `fetch`、`axios`（含 `axios.create` 实例）、`got`、
   `http.request` / `https.request`；URL 支持字面量、模板字符串、`+` 拼接、
   `process.env`。
 
-显式不做：声明式客户端（Java Feign、Go 代码生成 client、TS SDK）、动态代理、
-注册中心、HTTPS 目标。落在这些形态上的调用不会产生路由，由画像层的
+显式不做：Go 代码生成 client、TS SDK、动态代理、注册中心的实际地址解析、
+HTTPS 目标。落在这些形态上的调用不会产生路由，由画像层的
 `downstream_unmapped` / `downstream_unsupported` 显式暴露。
 """
 from __future__ import annotations
@@ -572,6 +574,8 @@ class _Hit:
     method: str
     url_expr: str | None
     client: str
+    response_type: str | None = None
+    service_name: str | None = None
 
 
 def _literal_method(value: str | None) -> str:
@@ -775,6 +779,36 @@ _REST_ACTIONS = {
     "optionsForAllow": "OPTIONS",
 }
 
+_REST_RESPONSE_ARG = {
+    "getForObject": 1,
+    "getForEntity": 1,
+    "postForObject": 2,
+    "postForEntity": 2,
+    "patchForObject": 2,
+    "exchange": 3,
+}
+
+
+def _clean_response_type(expr: str | None) -> str | None:
+    """把 `.class` / ParameterizedTypeReference 收敛成类型文本；变量名不算类型。"""
+    text = str(expr or "").strip()
+    if not text:
+        return None
+    text = re.sub(r"\s+", "", text)
+    if text.endswith(".class"):
+        text = text[: -len(".class")]
+    match = re.match(
+        r"new(?:[\w.$]*)ParameterizedTypeReference<(.+)>\(\)(?:\{\})?$", text
+    )
+    if match:
+        text = match.group(1)
+    if not re.fullmatch(r"[\w.$]+(?:<[\w.$<>,]+>)?(?:\[\])*", text):
+        return None
+    last = re.split(r"[<.]", text)[-1].rstrip("[]>")
+    if not last or last[:1].islower():
+        return None
+    return text
+
 
 def _java_hits(block: str) -> list[_Hit]:
     hits: list[_Hit] = []
@@ -790,12 +824,19 @@ def _java_hits(block: str) -> list[_Hit]:
         method = _REST_ACTIONS.get(action, "")
         if action in ("exchange", "execute"):
             method = _literal_method(args[1]) if len(args) > 1 else ""
+        response_index = _REST_RESPONSE_ARG.get(action)
+        response_type = (
+            _clean_response_type(args[response_index])
+            if response_index is not None and len(args) > response_index
+            else None
+        )
         hits.append(
             _Hit(
                 index=match.start(),
                 method=method,
                 url_expr=args[0] if args else None,
                 client="resttemplate",
+                response_type=response_type,
             )
         )
 
@@ -819,8 +860,24 @@ def _java_hits(block: str) -> list[_Hit]:
             method = normalize_method(value)
         args, _ = _call_args(block, match.end() - 1)
         if args:
+            tail = block[match.end() : match.end() + 600]
+            body_match = re.search(
+                r"\.(?:bodyToMono|bodyToFlux|bodyToValue)\s*\(", tail
+            )
+            response_type = None
+            if body_match:
+                body_args, _ = _call_args(tail, body_match.end() - 1)
+                response_type = (
+                    _clean_response_type(body_args[0]) if body_args else None
+                )
             hits.append(
-                _Hit(index=match.start(), method=method, url_expr=args[0], client="webclient")
+                _Hit(
+                    index=match.start(),
+                    method=method,
+                    url_expr=args[0],
+                    client="webclient",
+                    response_type=response_type,
+                )
             )
 
     # Java 11 HttpClient
@@ -881,6 +938,82 @@ def _java_hits(block: str) -> list[_Hit]:
                 client="apache-httpclient",
             )
         )
+    return hits
+
+
+def _feign_bindings(text: str, interfaces: list) -> dict[str, object]:
+    """按字段/构造参数的声明类型，把变量名绑到 Feign 接口。"""
+    bindings: dict[str, object] = {}
+    for interface in interfaces:
+        name = str(getattr(interface, "name", "") or "")
+        if not name:
+            continue
+        for match in re.finditer(
+            rf"\b{re.escape(name)}\s+([A-Za-z_$][\w$]*)\s*(?=[;=,)])", text
+        ):
+            bindings.setdefault(match.group(1), interface)
+    return bindings
+
+
+def _route_path(prefix: str, path: str) -> str:
+    left = str(prefix or "").strip()
+    right = str(path or "").strip()
+    if left and not left.startswith("/"):
+        left = "/" + left
+    if right and not right.startswith("/"):
+        right = "/" + right
+    if left:
+        return left.rstrip("/") + right
+    return right
+
+
+def _feign_base(interface) -> str:
+    url = str(getattr(interface, "url", "") or "").strip()
+    if url:
+        return url
+    service = str(getattr(interface, "service", "") or "").strip()
+    return f"http://{service}" if service else ""
+
+
+def _feign_hits(text: str, block: str, interfaces: list) -> list[_Hit]:
+    """识别已声明 Feign 接口上的方法调用。
+
+    路径由 `@FeignClient` 的 path 与方法映射拼接；目标地址取接口的 url，
+    否则按服务名合成 `http://<service>`（与 `svc:` 身份约定一致）。
+    """
+    if not interfaces:
+        return []
+    hits: list[_Hit] = []
+    bindings = _feign_bindings(text, interfaces)
+    for field_name, interface in bindings.items():
+        base = _feign_base(interface)
+        if not base:
+            continue
+        service = str(getattr(interface, "service", "") or "").strip() or None
+        for method in getattr(interface, "methods", []) or []:
+            verb = normalize_method(getattr(method, "http_method", ""))
+            name = str(getattr(method, "name", "") or "")
+            if not verb or not name:
+                continue
+            path = _route_path(
+                getattr(interface, "base_path", ""), getattr(method, "path", "")
+            )
+            url = base.rstrip("/") + path
+            for match in re.finditer(
+                rf"\b{re.escape(field_name)}\s*\.\s*{re.escape(name)}\s*\(", block
+            ):
+                hits.append(
+                    _Hit(
+                        index=match.start(),
+                        method=verb,
+                        url_expr=f"'{url}'",
+                        client="feign",
+                        response_type=(
+                            str(getattr(method, "response_type", "") or "") or None
+                        ),
+                        service_name=service,
+                    )
+                )
     return hits
 
 
@@ -1130,6 +1263,7 @@ def scan_language_file(
     line_hint: int = 0,
     file_text: str | None = None,
     max_sites: int = 200,
+    feign_interfaces: list | None = None,
 ) -> LangScan:
     """扫描一个 handler 对应的 Java/Go/Node 源码块。只读文本，不执行。"""
     result = LangScan()
@@ -1170,6 +1304,8 @@ def scan_language_file(
 
     if language == "java":
         hits = _java_hits(block)
+        if feign_interfaces:
+            hits.extend(_feign_hits(text, block, feign_interfaces))
         result.local_callees = _block_callees(
             block, language, _function_names(text, language)
         )
@@ -1208,7 +1344,9 @@ def scan_language_file(
                 target=target,
                 path=path_value,
                 config_key=evidence.config_key,
+                service_name=hit.service_name,
                 client=hit.client,
+                response_type=hit.response_type,
             )
         )
     return result

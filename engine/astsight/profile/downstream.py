@@ -31,6 +31,7 @@ from ..mock.identity import (
     normalize_method,
 )
 from .callsite import HttpCallSite
+from .javatypes import ContractIndex, FeignInterface, scan_feign_interfaces
 from .langscan import (
     _line_of,
     _matching_brace,
@@ -880,6 +881,37 @@ class DownstreamScanner:
         ] = {}
         self._language_checked = False
         self._supported_languages: set[str] | None = None
+        self._contract_index: ContractIndex | None = None
+        self._feign_interfaces: list[FeignInterface] | None = None
+
+    def _contract_index_or_none(self) -> ContractIndex | None:
+        try:
+            if self._contract_index is None:
+                self._contract_index = ContractIndex(self.root)
+            return self._contract_index
+        except Exception as exc:  # 契约解析是增强证据，失败不影响画像
+            self.warnings.append(f"contract_index_error:{type(exc).__name__}")
+            return None
+
+    def _feign_catalog(self) -> list[FeignInterface]:
+        """项目内外 Feign 接口清单；只扫描一次，失败按空处理。"""
+        if self._feign_interfaces is not None:
+            return self._feign_interfaces
+        index = self._contract_index_or_none()
+        if index is None:
+            self._feign_interfaces = []
+            return self._feign_interfaces
+        try:
+            self._feign_interfaces = scan_feign_interfaces(self.root, index=index)
+        except Exception as exc:
+            self.warnings.append(f"feign_scan_error:{type(exc).__name__}")
+            self._feign_interfaces = []
+        for item in index.warnings[:10]:
+            warning = f"contract:{item}"
+            if warning not in self.warnings:
+                self.warnings.append(warning)
+        index.warnings.clear()
+        return self._feign_interfaces
 
     def _check_language(self) -> bool:
         """图谱声明支持语言时，只扫描其声明的语言；全部不支持则跳过。"""
@@ -1289,6 +1321,11 @@ class DownstreamScanner:
                         line_hint=symbol.line or line_hint,
                         file_text=self._language_text(symbol.path),
                         max_sites=self.max_call_sites,
+                        feign_interfaces=(
+                            self._feign_catalog()
+                            if symbol.language == "java"
+                            else None
+                        ),
                     )
                     all_sites.extend(lang_scan.sites)
                     unsupported_reasons.update(lang_scan.unsupported_reasons)
@@ -1369,6 +1406,55 @@ class DownstreamScanner:
                 )
             )
 
+    def _resolve_contract(
+        self,
+        response_types: list[str],
+        details: list[HttpCallSite | None],
+    ) -> dict[str, Any] | None:
+        """按 A 的响应类型解析下游契约；源码优先，依赖 jar 兜底。"""
+        context_file = next(
+            (site.file for site in details if site is not None and site.file), None
+        )
+        index = self._contract_index_or_none()
+        if index is None:
+            return None
+
+        resolved: list[dict[str, Any]] = []
+        unresolved: list[str] = []
+        seen: set[str] = set()
+        for expr in response_types:
+            try:
+                contract = index.resolve(expr, context_file=context_file)
+            except Exception as exc:
+                self.warnings.append(
+                    f"contract_resolve_error:{expr}:{type(exc).__name__}"
+                )
+                contract = None
+            if contract is None:
+                unresolved.append(expr)
+                continue
+            key = f"{contract.fqn}|{contract.container or ''}"
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved.append(contract.as_dict())
+        if index.warnings:
+            for item in index.warnings[:10]:
+                if item not in self.warnings:
+                    self.warnings.append(f"contract:{item}")
+            index.warnings.clear()
+        return {
+            "status": (
+                "resolved"
+                if resolved and not unresolved
+                else "partial"
+                if resolved
+                else "missing"
+            ),
+            "types": resolved,
+            "unresolved": unresolved,
+        }
+
     def _finalize(
         self,
         result: DownstreamScan,
@@ -1393,27 +1479,51 @@ class DownstreamScanner:
         result.deps = []
         for dep in plan.deps:
             details = [sites_by_id.get(item) for item in dep.call_sites]
-            result.deps.append(
+            response_types = sorted(
                 {
-                    "dep_id": dep.dep_id,
-                    "dep_type": "http",
-                    "evidence": dep.evidence,
-                    "method": dep.method,
-                    "path_key": dep.path_key,
-                    "target": dep.target,
-                    "targets": list(dep.targets),
-                    "route_host": dep.route_host,
-                    "call_sites": list(dep.call_sites),
-                    "inferred": dep.inferred,
-                    "config_keys": sorted(
-                        {
-                            site.config_key
-                            for site in details
-                            if site is not None and site.config_key
-                        }
-                    ),
+                    site.response_type
+                    for site in details
+                    if site is not None and site.response_type
                 }
             )
+            record = {
+                "dep_id": dep.dep_id,
+                "dep_type": "http",
+                "evidence": dep.evidence,
+                "method": dep.method,
+                "path_key": dep.path_key,
+                "target": dep.target,
+                "targets": list(dep.targets),
+                "route_host": dep.route_host,
+                "call_sites": list(dep.call_sites),
+                "inferred": dep.inferred,
+                "config_keys": sorted(
+                    {
+                        site.config_key
+                        for site in details
+                        if site is not None and site.config_key
+                    }
+                ),
+            }
+            if dep.evidence == "svc":
+                # dep_id 里的服务名被归一化为小写；服务发现按注册名精确匹配，
+                # 所以这里保留调用点上的原始大小写（如 Feign 的 `name = "ItemApi"`）。
+                names = sorted(
+                    {
+                        str(site.service_name)
+                        for site in details
+                        if site is not None and getattr(site, "service_name", None)
+                    }
+                )
+                record["service_name"] = (
+                    names[0] if names else dep.downstream_key.split(":", 1)[1]
+                )
+            if response_types:
+                record["response_types"] = response_types
+                record["response_contract"] = self._resolve_contract(
+                    response_types, details
+                )
+            result.deps.append(record)
 
         reasons = unsupported_reasons or {}
         result.unsupported = []

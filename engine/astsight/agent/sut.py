@@ -1,10 +1,12 @@
 """被测系统（SUT）启动/就绪/停止，以及从 Mock 注入清单生成环境变量。
 
-只支持 SUT 启动期注入：环境变量形式的 URL override / 明文 HTTP 代理。
-配置文件、注册中心、DNS 改写不在本模块能力内，遇到就显式告警，不假装成功。
+支持 SUT 启动期注入：环境变量形式的 URL override、明文 HTTP 代理，以及
+Spring Cloud 静态服务列表（`discovery_override`，写入 `SPRING_APPLICATION_JSON`）。
+配置文件、DNS 改写不在本模块能力内，遇到就显式告警，不假装成功。
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -48,6 +50,12 @@ def injection_env(
     env: dict[str, str] = dict(extra_env or {})
     keys: list[str] = sorted(env)
     warnings: list[str] = []
+    discovery: dict[str, list[dict[str, str]]] = {}
+    dep_hosts = {
+        str(route.get("dep_id") or ""): str(route.get("host") or "")
+        for route in document.get("routes") or []
+        if isinstance(route, dict) and route.get("dep_id")
+    }
     for injection in document.get("injections") or []:
         strategy = str(injection.get("strategy") or "")
         injected = str(injection.get("injected") or "")
@@ -86,6 +94,19 @@ def injection_env(
             env["NO_PROXY"] = bypass
             env["no_proxy"] = bypass
             keys.extend(["NO_PROXY", "no_proxy"])
+        elif strategy == "discovery_override":
+            dep_id = str(injection.get("dep_id") or "")
+            # 优先用注入里保留原始大小写的服务名；路由表里的 host 已被归一化。
+            service = str(injection.get("service_name") or "") or dep_hosts.get(
+                dep_id, ""
+            )
+            if not injected:
+                warnings.append(f"injection_missing_url:{dep_id}")
+                continue
+            if not service:
+                warnings.append(f"discovery_not_supported:{dep_id}")
+                continue
+            discovery[service] = [{"uri": injected}]
         elif strategy == "unsupported":
             warnings.append(
                 f"injection_unsupported:{injection.get('dep_id')}:"
@@ -93,7 +114,52 @@ def injection_env(
             )
         else:
             warnings.append(f"injection_strategy_unknown:{strategy}")
+    if discovery:
+        env, keys, warnings = _merge_discovery_env(env, keys, warnings, discovery)
     return env, sorted(set(keys)), warnings
+
+
+def _merge_discovery_env(
+    env: dict[str, str],
+    keys: list[str],
+    warnings: list[str],
+    discovery: dict[str, list[dict[str, str]]],
+) -> tuple[dict[str, str], list[str], list[str]]:
+    """把静态服务实例合并进 SPRING_APPLICATION_JSON，不覆盖用户已有配置。"""
+    raw = env.get("SPRING_APPLICATION_JSON")
+    if raw is None:
+        raw = os.environ.get("SPRING_APPLICATION_JSON")
+    document: dict[str, Any] = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            warnings.append("discovery_not_supported:spring_application_json_invalid")
+            return env, keys, warnings
+        document = parsed
+    node = document
+    for key in ("spring", "cloud", "discovery", "client", "simple"):
+        child = node.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            node[key] = child
+        node = child
+    existing = node.get("instances")
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(discovery)
+    node["instances"] = merged
+    env["SPRING_APPLICATION_JSON"] = json.dumps(
+        document, ensure_ascii=False, separators=(",", ":")
+    )
+    keys.append("SPRING_APPLICATION_JSON")
+    for service in sorted(discovery):
+        warnings.append(
+            f"injection_discovery_applied:{service}:"
+            "requires_spring_cloud_static_instances"
+        )
+    return env, keys, warnings
 
 
 def start_sut(

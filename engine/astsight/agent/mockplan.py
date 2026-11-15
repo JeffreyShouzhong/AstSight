@@ -37,6 +37,19 @@ def _injection_for(dep: dict[str, Any]) -> MockPlanInjection:
             path_mode="append",
             reason="original_unknown",
         )
+    if dep.get("evidence") == "svc" and dep.get("service_name"):
+        # 服务发现型下游（如 Feign + @FeignClient(name=...)）没有配置键可改，
+        # 只能把服务名指到 Mock 主机；环境不支持时由 injection_env 显式告警。
+        return MockPlanInjection(
+            dep_id=dep_id,
+            strategy=MockStrategy.DISCOVERY_OVERRIDE,
+            service_name=str(dep["service_name"]),
+            kind="base_url",
+            property=None,
+            original=None,
+            path_mode="append",
+            reason="discovery_requires_static_instances",
+        )
     if dep.get("target"):
         return MockPlanInjection(
             dep_id=dep_id,
@@ -150,6 +163,11 @@ def build_mock_plan(
             warnings.append(f"mock_injection_unsupported:{dep_id}")
         elif injection.strategy is MockStrategy.HTTP_PROXY:
             warnings.append(f"mock_injection_proxy:{dep_id}")
+        elif injection.strategy is MockStrategy.DISCOVERY_OVERRIDE:
+            warnings.append(
+                f"mock_injection_discovery:{dep_id}:"
+                "requires_spring_cloud_static_instances"
+            )
 
     plan = MockPlan(
         schema_version=1,

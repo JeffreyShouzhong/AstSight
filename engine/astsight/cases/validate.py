@@ -1399,11 +1399,61 @@ def _check_preconditions(
             )
 
 
+def _dep_contracts(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """按 dep_id 收集 A 侧响应契约；类型不唯一时不参与校验。"""
+    contracts: dict[str, dict[str, Any]] = {}
+    for profile in context.get("profiles") or []:
+        for dep in profile.get("downstream_deps") or []:
+            if not isinstance(dep, dict):
+                continue
+            dep_id = str(dep.get("dep_id") or "")
+            contract = dep.get("response_contract")
+            if not dep_id or not isinstance(contract, dict):
+                continue
+            types = contract.get("types") or []
+            if len(types) != 1 or not isinstance(types[0], dict):
+                continue
+            fields = {
+                str(field.get("name"))
+                for field in types[0].get("fields") or []
+                if isinstance(field, dict) and field.get("name")
+            }
+            if fields:
+                contracts.setdefault(
+                    dep_id,
+                    {"type": str(types[0].get("name") or ""), "fields": fields},
+                )
+    return contracts
+
+
+def _stub_object(body: Any) -> dict[str, Any] | None:
+    if isinstance(body, dict):
+        content = body.get("content")
+        if isinstance(content, list):
+            return content[0] if content and isinstance(content[0], dict) else None
+        return body
+    if isinstance(body, list):
+        return body[0] if body and isinstance(body[0], dict) else None
+    return None
+
+
+def _missing_contract_fields(
+    body: Any, contract: dict[str, Any] | None
+) -> list[str]:
+    if not contract:
+        return []
+    stub = _stub_object(body)
+    if stub is None:
+        return []
+    return sorted(name for name in contract["fields"] if name not in stub)
+
+
 def _check_mock_semantics(
     draft_case: DraftCase,
     *,
     profile_deps: set[str],
     mock_semantic: MockSemantic | None,
+    contracts: dict[str, dict[str, Any]],
     case_key: str,
     endpoint: str,
     path: str,
@@ -1442,6 +1492,28 @@ def _check_mock_semantics(
                     "error",
                     "mock.branch_unknown",
                     f"{dep_id!r} 不存在语义分支 {branch!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if branch != "success":
+            continue
+        spec = next(
+            (item for item in deps[dep_id].branches if item.branch == branch), None
+        )
+        missing = _missing_contract_fields(
+            spec.stub.body if spec is not None else None, contracts.get(dep_id)
+        )
+        if missing:
+            contract = contracts[dep_id]
+            label = contract.get("type") or "响应类型"
+            result.warnings.append(
+                _issue(
+                    "warning",
+                    "mock.body_contract_drift",
+                    f"{dep_id!r} 的 success 分支缺少 {label} 的字段: "
+                    f"{', '.join(missing)}；下游契约或 Mock 语义可能已过期",
                     case_key=case_key,
                     endpoint=endpoint,
                     path=path,
@@ -1616,6 +1688,7 @@ def validate_draft(
         requirements=context_requirements(context),
     )
     documents = context_documents(context)
+    contracts = _dep_contracts(context)
     context_id = str(context.get("context_id") or "")
     if draft.context_id and draft.context_id != context_id:
         result.errors.append(
@@ -1927,6 +2000,7 @@ def validate_draft(
             canonical_draft,
             profile_deps=profile_deps,
             mock_semantic=mock_semantic,
+            contracts=contracts,
             case_key=key,
             endpoint=canonical_endpoint,
             path=pseudo_path,

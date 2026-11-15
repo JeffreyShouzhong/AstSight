@@ -40,6 +40,10 @@ class MockPlanInjection(BaseModel):
 
     dep_id: str
     strategy: MockStrategy
+    service_name: str | None = Field(
+        default=None,
+        description="服务发现型下游的服务名，保留原始大小写（路由表会归一化 host）",
+    )
     kind: str = Field(default="base_url", description="base_url / endpoint_url / proxy")
     property: str | None = Field(default=None, description="SUT 中实际覆盖的配置键")
     original: str | None = Field(default=None, description="被覆盖前的值")

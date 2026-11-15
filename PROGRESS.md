@@ -1,6 +1,6 @@
 # AstSight 项目进度
 
-> 最后更新：2026-11-12
+> 最后更新：2026-11-13
 > 分支：`feat/postgres-mysql-data`
 > 当前阶段：C6/C7 完成（`caseset.json` v4，38 条已批准用例 38/38 通过，门禁 PASS）
 
@@ -30,8 +30,82 @@
 | 断言深度 | ✅ 2026-11-12 | `header/contains`、`body_schema`（OpenAPI 响应 schema）、只读 `db_row`；`assert_strength` 按内容推导（L1–L4） |
 | A5/A6 诊断修复 | ✅ 2026-11-12 | A5/A6 合并为单次 LLM 调用（`schema_version=2`）；默认最多 3 轮；用例补丁以 `astsight-agent:repair` 自动批准；断言不得删除/降强；Mock 结构失配可修并热更新路由表 |
 | 多语言下游 Mock | ✅ 2026-11-12 | Java/Go/Node 下游 HTTP 调用点扫描（`profile/langscan.py`）与非 Python 路由扫描（`profile/langroutes.py`）；Spring/Gin/Echo/Chi/Fiber/Express/Fastify/Koa/NestJS；路由 `line` 贯通画像，内联回调按行定位 |
+| Java 下游契约 | ✅ 2026-11-13 | `langscan` 抽取 RestTemplate/WebClient 响应类型并识别 Feign 字段调用；`javadeps`/`javaclass`/`javatypes` 读 pom/gradle、本地 jar、class 与泛型签名；画像 dep 增加 `response_types` / `response_contract`，Mock `success` body 按响应类型生成，用例绑定校验会对照契约告警字段漂移；服务发现型下游改用 `discovery_override`（Spring Cloud 静态实例），已在真实 `spring-cloud-samples/feign-eureka` 工程跑通端到端 |
 
-## 本轮完成（示例服务 V1.1 与 C6/C7 执行）
+## 本轮完成（Java 下游契约提取，2026-11-13）
+
+1. **响应类型抽取**（`profile/langscan.py`、`profile/callsite.py`）：RestTemplate 的
+   `getForObject/getForEntity/postForObject/postForEntity/patchForObject/exchange`
+   按参数位取 `.class` 或 `ParameterizedTypeReference<T>`；WebClient 在 `.uri(...)`
+   之后 600 字符内找 `bodyToMono/bodyToFlux/bodyToValue` 的首参。变量名不当类型
+   （如 `clazz` 直接丢弃），结果写入 `HttpCallSite.response_type`。
+2. **依赖发现**（`profile/javadeps.py`）：解析 `pom.xml`（`<properties>`、parent
+   版本、GAV 去重）与 `build.gradle(.kts)`（implementation/api/compileOnly/
+   runtimeOnly/compile/kapt）；按 Maven 本地仓库、Gradle 缓存、项目 `libs` 定位
+   jar；契约类 jar（api/client/sdk/dto/model/...）优先扫描。
+3. **class 与类型解析**（`profile/javaclass.py`、`profile/javatypes.py`）：纯 Python
+   解析常量池、字段、方法、类/方法注解与 `Signature` 属性；泛型签名按 JVMS
+   4.7.9.1 递归处理嵌套泛型、上下界、数组与类型变量。`ContractIndex` 先查源码
+   class/record/enum，再查依赖 jar；`List/Set` 归一为 `list`，`Page/Slice` 为
+   `page`，`Optional/ResponseEntity/Mono` 等包装类型拆掉。另有
+   `scan_feign_interfaces` 从源码与 jar 读取 `@FeignClient` 和映射注解。
+4. **接入画像与 Mock**（`profile/downstream.py`、`mock/semantic.py`）：每个下游
+   dep 增加 `response_types` 与 `response_contract`（`resolved`/`partial`/
+   `missing` + 字段清单 + 未解析类型）；`success` 分支 body 按 A 的响应类型生成
+   一层字段值，列表包成数组、分页包成 `content/totalElements/totalPages`。契约
+   解析失败只记 warning，不阻断画像。
+5. **Feign 调用点**（`langscan.py`、`downstream.py`）：画像扫描 Java 文件时把
+   `scan_feign_interfaces` 的接口清单传进 `langscan`；按字段/构造参数的声明类型
+   绑定变量，识别 `client.method(...)`，路径取 `@FeignClient(path)` + 方法映射，
+   目标取 `url`，否则按服务名合成 `http://<service>`（与 `svc:` 身份约定一致）。
+   服务类 jar 只按 `*Client/*Api/*Feign/*Remote/*Sdk` 类名读取，最多 4000 个 class，
+   超限写 `feign_scan_truncated`。Feign 接口的返回类型同时进入 `response_types`。
+6. **用例绑定契约校验**（`cases/validate.py`）：`validate_draft` 从画像收集每个
+   dep 唯一的 `response_contract`；用例绑定 `success` 分支时，把分支 stub body
+   （含列表/分页包装）与契约字段比对，缺字段记 warning
+   `mock.body_contract_drift`，提示契约或 Mock 语义可能过期。类型不唯一时不校验，
+   避免多响应类型造成误报；该检查只告警，不阻断导入。
+7. **`discovery_override` 运行时**（`agent/mockplan.py`、`agent/sut.py`、
+   `mock/plan.py`）：有 `service_name` 的 `svc:` 下游改选
+   `discovery_override`（不再落到 `http_proxy`）；`injection_env` 把服务名指向
+   Mock 地址，写入 `SPRING_APPLICATION_JSON` 的
+   `spring.cloud.discovery.client.simple.instances.<service>[0].uri`，已有 JSON
+   会深合并、不覆盖；路由仍按 method+path 兜底匹配。`injection_document()` 补上
+   最小 `routes` 清单，并在注入里新增 `service_name`——`dep_id` 里的服务名被
+   归一化为小写，而服务发现按注册名精确匹配，必须保留原始大小写（如
+   `@FeignClient("HelloServer")`）。环境不支持时显式告警
+   `discovery_not_supported` / `injection_discovery_applied:...:
+   requires_spring_cloud_static_instances`，不假装成功。
+8. **真实 Spring Cloud 工程联调**：用 GitHub 上的
+   `spring-cloud-samples/feign-eureka`（Spring Boot 3.4.0 / Spring Cloud
+   2024.0.0，JDK 26）做端到端验证，只读取其构建产物，不改源码：
+   - Maven 构建 `client` 模块后，`DownstreamScanner` 识别出 Feign 调用点
+     `http:svc:helloserver GET /`，`service_name` 保留 `HelloServer`，
+     `response_types=["String"]`；`cases prepare` 能扫描出该路由并挂上下游。
+   - 按真实扫描结果执行 `build_mock_plan → start_mock_plan → injection_document
+     → start_sut`，SUT 启动环境包含 `SPRING_APPLICATION_JSON`；请求 SUT `/`
+     返回 Mock 的 `pipeline-mocked`，`mock_calls.jsonl` 记录
+     `route_match=method_path`、`branch=success`。
+   - 反证：把服务名改成小写 `helloserver` 后 SUT 返回 500、Mock 无调用，确认
+     Spring Cloud 的服务名匹配区分大小写，`service_name` 不能复用归一化后的
+     `dep_id` 片段。
+   - 联调中顺带修复：`@RequestMapping(..., method = GET)`（静态导入
+     `RequestMethod.GET`）之前解析不出方法，Feign 接口与 Spring 路由两处都补上；
+     方法级 `@RequestMapping` 不写 `method` 时按 Spring 语义展开为全部方法。
+9. **验证**：新增 `tests/test_java_contracts.py`（24 条）、
+   `tests/test_case_mock_contract.py`（4 条）与注入策略/路由测试，覆盖调用点
+   响应类型、泛型签名、class 解析（含注解）、pom/gradle、本地仓库定位、源码/jar
+   契约、jar 内 Feign、Feign 字段调用、画像挂载、Mock 语义、绑定漂移、静态
+   实例注入与服务名大小写；真实 `logback-classic-1.5.38.jar` 解析 177 个 class
+   全部成功。全量 **355 passed, 2 skipped**。
+10. **已知限制**：静态实例覆盖要求 SUT 使用 Spring Cloud LoadBalancer 并启用
+    `SimpleDiscoveryClient`；其他发现机制（Nacos/Eureka 独占、Ribbon）或非
+    Spring 应用仍无法覆盖，会在启动告警中体现。样例里 Eureka 客户端同时在
+    classpath 上，未启动 Eureka 服务端时仍能走通静态实例，但这不是所有注册中心
+    的通用保证。若两个服务共享同一 method+path，路由会报
+    `mock_route_ambiguous`，不会静默选错分支。
+
+## 上一轮完成（示例服务 V1.1 与 C6/C7 执行）
 
 1. **示例服务升级到设计 V1.1**：
    - `app.py`：验证码按手机号签发，5 分钟有效、累计 5 次失败作废、重发重置；
@@ -59,7 +133,7 @@
 4. **残留 warning（不阻塞）**：4 个旧待审 proposal、OpenAPI 快照变化（新增 503
    响应）、27 条 BR 未覆盖。
 
-## 上一轮完成（按 v3 规则重建 A4）
+## 前一轮完成（按 v3 规则重建 A4）
 
 1. **上下文重建**：用 V1.1 `requirements.md` + `design.md`、`openapi.json`、数据目录和
    新 Mock 语义生成 `.astsight/casegen/9bc8d1cc…`（2 docs / 3 endpoints / 0 warning）。
@@ -80,7 +154,7 @@
 6. **导入结果**：提案 `prop-9c638f7d5dba6e19`，16 new / 16 update / 6 unchanged，
    0 error / 0 warning / 0 unaccounted；32 条待审项全部 decision=`pending`，未批准。
 
-## 前一轮完成（多请求用例模型）
+## 更早一轮完成（多请求用例模型）
 
 1. **契约扩展**：`TestCase` / `DraftCase` 新增 `steps[]`（`CaseStep`），每步有独立
    endpoint、path_params、query、headers、body、asserts；顶层请求/断言必须为空，
@@ -253,6 +327,35 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-13**：Java 下游契约从 A 侧提取：
+  - `langscan` 抽取 RestTemplate（按参数位）与 WebClient（`bodyToMono` 等）的响应
+    类型，写入 `HttpCallSite.response_type`；变量名不当作类型。
+  - 新增 `profile/javadeps.py`（pom/gradle 依赖 + 本地仓库/Gradle 缓存/`libs`
+    jar 定位）、`profile/javaclass.py`（常量池/字段/注解/`Signature` 解析，泛型
+    签名按 JVMS 递归渲染）、`profile/javatypes.py`（源码优先、jar 兜底的
+    `ContractIndex`，容器归一，Feign 接口扫描）。
+  - `downstream.py` 为每个 dep 附 `response_types` / `response_contract`
+    （`resolved|partial|missing`）；`mock/semantic.py` 用契约生成 `success`
+    分支 body（列表/分页按容器包装）。
+  - 修正 `javatypes` 中 `_method_return_type` 重名覆盖与 Feign 方法解析被参数
+    注解括号截断的问题。
+  - `langscan` 接入 Feign 字段调用：按声明类型绑定变量，路径由
+    `@FeignClient(path)` + 方法映射拼接，目标取 `url` 或服务名；`downstream`
+    传入项目/依赖中的接口清单，并按 `svc:` 身份生成 dep。
+  - `cases/validate.py` 绑定校验新增 `mock.body_contract_drift`：`success` 分支
+    stub 与 A 侧响应契约字段不一致时告警，不阻断导入。
+  - `agent/mockplan.py` 对有服务名的 `svc:` 下游改选 `discovery_override`；
+    `agent/sut.py` 把服务名写入 `SPRING_APPLICATION_JSON` 的 Spring Cloud 静态
+    实例列表（深合并、不覆盖已有配置），环境不满足时显式告警。
+  - `injection_document()` 补 `routes`，注入增加 `service_name`：`dep_id` 里的
+    服务名已归一化小写，服务发现必须用原始注册名，小写会导致 500。
+  - `@RequestMapping(..., method = GET)` 的静态导入写法在 Feign 接口与 Spring
+    路由扫描中都补上；方法级裸 `@RequestMapping` 展开为全部方法。
+  - 用 `spring-cloud-samples/feign-eureka`（Boot 3.4 / Cloud 2024，JDK 26）
+    跑通真实端到端：扫描 → 计划 → 注入 → SUT → Mock 调用证据。
+  - 新增 `tests/test_java_contracts.py`（24 条）、
+    `tests/test_case_mock_contract.py`（4 条）与注入策略/路由测试；全量
+    **355 passed, 2 skipped**。
 - **2026-11-12**：Java/Go/Node 项目支持自动下游 Mock：
   - 新增 `profile/callsite.py` 共享 `HttpCallSite`；`profile/langscan.py` 用有界文本
     扫描识别 RestTemplate、WebClient、Java 11 HttpClient、OkHttp、Apache HttpClient、

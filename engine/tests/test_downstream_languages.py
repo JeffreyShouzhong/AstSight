@@ -166,6 +166,55 @@ def test_spring_routes(tmp_path: Path) -> None:
     assert routes[0]["source"] == "framework_plugin"
 
 
+def test_spring_routes_support_static_request_method_import(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "src/HelloController.java",
+        """
+import static org.springframework.web.bind.annotation.RequestMethod.GET;
+
+@RestController
+public class HelloController {
+    @RequestMapping(value = "/", method = GET)
+    public String hello() {
+        return "";
+    }
+}
+""",
+    )
+    routes, warnings = scan_language_routes(tmp_path)
+    assert not warnings
+    assert {
+        (route["method"], route["path"], route["handler"]) for route in routes
+    } == {("GET", "/", "hello")}
+
+
+def test_spring_routes_default_mapping_covers_all_methods(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "src/HelloController.java",
+        """
+@RestController
+public class HelloController {
+    @RequestMapping("/")
+    public String hello() {
+        return "";
+    }
+}
+""",
+    )
+    routes, _ = scan_language_routes(tmp_path)
+    methods = {route["method"] for route in routes}
+    assert {"GET", "POST", "PUT", "DELETE"} <= methods
+    assert {(route["path"], route["handler"]) for route in routes} == {
+        ("/", "hello")
+    }
+
+
 def test_gin_routes_with_group(tmp_path: Path) -> None:
     _write(
         tmp_path,

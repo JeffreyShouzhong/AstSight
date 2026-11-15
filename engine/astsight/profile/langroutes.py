@@ -55,7 +55,7 @@ _SPRING_MAPPING = {
     "PatchMapping": ["PATCH"],
     "DeleteMapping": ["DELETE"],
 }
-_SPRING_METHOD = re.compile(r"RequestMethod\.([A-Z]+)")
+_SPRING_METHOD = re.compile(r"method\s*=\s*(\{[^}]*\}|[^,)]*)")
 _NEST_MAPPING = {
     "Get": "GET",
     "Post": "POST",
@@ -326,9 +326,14 @@ def _spring_methods(annotation: str) -> list[str]:
     name = name_match.group(1)
     if name in _SPRING_MAPPING:
         return list(_SPRING_MAPPING[name])
-    methods = _SPRING_METHOD.findall(annotation)
-    if methods:
+    chunk = _SPRING_METHOD.search(annotation)
+    if chunk:
+        # `RequestMethod.GET` 与静态导入后的 `GET` 都要认。
+        methods = re.findall(r"\b([A-Z]+)\b", chunk.group(1))
         return [method for method in methods if method in _HTTP_METHODS]
+    if name == "RequestMapping":
+        # 方法级 `@RequestMapping` 不写 method 时 Spring 映射所有方法。
+        return sorted(_HTTP_METHODS)
     return []
 
 

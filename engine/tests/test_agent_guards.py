@@ -1,6 +1,7 @@
 """Agent 层确定性护栏：证据校验、绑定校验、Mock 计划、诊断与修复边界。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,7 @@ import pytest
 
 from astsight.agent.casegen import generate_case_draft, validate_case_bindings
 from astsight.agent.errors import AgentError
-from astsight.agent.mockplan import build_mock_plan
+from astsight.agent.mockplan import _injection_for, build_mock_plan
 from astsight.agent.models import (
     BehaviorDownstream,
     DownstreamBranchSpec,
@@ -180,6 +181,143 @@ def test_injection_env_url_override_and_unsupported() -> None:
     assert any(item.startswith("injection_unsupported:dep-2") for item in warnings)
 
 
+def test_injection_for_prefers_config_override_over_discovery() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "dep-1",
+            "evidence": "svc",
+            "service_name": "item-api",
+            "config_keys": ["ITEM_BASE_URL"],
+            "target": "http://item-api/items",
+        }
+    )
+    assert injection.strategy.value == "url_override"
+    assert injection.property == "ITEM_BASE_URL"
+
+
+def test_injection_for_service_dependency_uses_discovery() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "dep-1",
+            "evidence": "svc",
+            "service_name": "item-api",
+            "target": "http://item-api/items",
+        }
+    )
+    assert injection.strategy.value == "discovery_override"
+    assert injection.service_name == "item-api"
+    assert injection.reason == "discovery_requires_static_instances"
+
+
+def test_injection_env_discovery_keeps_service_name_case() -> None:
+    document = {
+        "routes": [{"dep_id": "dep-1", "host": "helloserver"}],
+        "injections": [
+            {
+                "dep_id": "dep-1",
+                "strategy": "discovery_override",
+                "service_name": "HelloServer",
+                "injected": "http://127.0.0.1:9000",
+            }
+        ],
+    }
+    env, _keys, _warnings = injection_env(
+        document, base_url="http://127.0.0.1:8080"
+    )
+    instances = json.loads(env["SPRING_APPLICATION_JSON"])["spring"]["cloud"][
+        "discovery"
+    ]["client"]["simple"]["instances"]
+    assert instances == {"HelloServer": [{"uri": "http://127.0.0.1:9000"}]}
+
+
+def test_injection_env_writes_spring_static_instances() -> None:
+    document = {
+        "routes": [{"dep_id": "dep-1", "host": "item-api"}],
+        "injections": [
+            {
+                "dep_id": "dep-1",
+                "strategy": "discovery_override",
+                "injected": "http://127.0.0.1:9000",
+            }
+        ],
+    }
+    env, keys, warnings = injection_env(
+        document, base_url="http://127.0.0.1:8080"
+    )
+    assert "SPRING_APPLICATION_JSON" in keys
+    instances = json.loads(env["SPRING_APPLICATION_JSON"])["spring"]["cloud"][
+        "discovery"
+    ]["client"]["simple"]["instances"]
+    assert instances["item-api"] == [{"uri": "http://127.0.0.1:9000"}]
+    assert any(
+        item.startswith("injection_discovery_applied:item-api")
+        for item in warnings
+    )
+
+
+def test_injection_env_merges_existing_spring_json() -> None:
+    document = {
+        "routes": [{"dep_id": "dep-1", "host": "item-api"}],
+        "injections": [
+            {
+                "dep_id": "dep-1",
+                "strategy": "discovery_override",
+                "injected": "http://127.0.0.1:9000",
+            }
+        ],
+    }
+    env, _keys, _warnings = injection_env(
+        document,
+        base_url="http://127.0.0.1:8080",
+        extra_env={
+            "SPRING_APPLICATION_JSON": json.dumps(
+                {"logging": {"level": {"root": "DEBUG"}}}
+            )
+        },
+    )
+    merged = json.loads(env["SPRING_APPLICATION_JSON"])
+    assert merged["logging"]["level"]["root"] == "DEBUG"
+    assert "instances" in merged["spring"]["cloud"]["discovery"]["client"]["simple"]
+
+
+def test_injection_env_discovery_without_service_host_warns() -> None:
+    document = {
+        "routes": [{"dep_id": "dep-1"}],
+        "injections": [
+            {
+                "dep_id": "dep-1",
+                "strategy": "discovery_override",
+                "injected": "http://127.0.0.1:9000",
+            }
+        ],
+    }
+    env, _keys, warnings = injection_env(
+        document, base_url="http://127.0.0.1:8080"
+    )
+    assert "SPRING_APPLICATION_JSON" not in env
+    assert "discovery_not_supported:dep-1" in warnings
+
+
+def test_injection_env_discovery_keeps_invalid_spring_json() -> None:
+    document = {
+        "routes": [{"dep_id": "dep-1", "host": "item-api"}],
+        "injections": [
+            {
+                "dep_id": "dep-1",
+                "strategy": "discovery_override",
+                "injected": "http://127.0.0.1:9000",
+            }
+        ],
+    }
+    env, _keys, warnings = injection_env(
+        document,
+        base_url="http://127.0.0.1:8080",
+        extra_env={"SPRING_APPLICATION_JSON": "not-json"},
+    )
+    assert env["SPRING_APPLICATION_JSON"] == "not-json"
+    assert "discovery_not_supported:spring_application_json_invalid" in warnings
+
+
 def test_semantic_validation_rejects_fake_quote_and_dep() -> None:
     context = _context()
     analysis = _analysis(context)
@@ -244,6 +382,33 @@ def test_mock_plan_uses_only_bound_branches() -> None:
     assert plan.injections[0].strategy.value == "url_override"
     assert plan.injections[0].property == "PRICING_BASE_URL"
     assert not any("unsupported" in item for item in warnings)
+
+
+def test_mock_plan_uses_discovery_for_service_dependency() -> None:
+    context = _context()
+    for profile in context["profiles"]:
+        for dep in profile.get("downstream_deps") or []:
+            dep.pop("config_keys", None)
+            dep["evidence"] = "svc"
+            dep["service_name"] = "pricing-service"
+            dep["route_host"] = "pricing-service"
+    analysis = _analysis(context)
+    dep_id = _dep_id(context)
+    cases = [
+        SimpleNamespace(
+            endpoint="POST /api/v1/quotes",
+            case_key="quote_success",
+            mock_bindings={dep_id: "success"},
+        )
+    ]
+    plan, warnings = build_mock_plan(
+        context, analysis, SimpleNamespace(cases=cases), sut_id="quote"
+    )
+    assert plan.injections[0].strategy.value == "discovery_override"
+    assert plan.routes[0].strategy.value == "discovery_override"
+    assert any(
+        item.startswith("mock_injection_discovery:") for item in warnings
+    )
 
 
 def _case(case_id: str = "TC-0001", category: str = "positive") -> TestCase:
