@@ -1,4 +1,4 @@
-"""HTTP Mock 路由表：`/_dep/<route_key>`、Host 组、唯一 method+path 兜底。"""
+"""HTTP Mock 路由表：`/_dep/<route_key>`、Host 组、字面量优先、唯一 method+path 兜底。"""
 from __future__ import annotations
 
 import re
@@ -58,6 +58,19 @@ def _compile_path(path_key: str) -> re.Pattern[str]:
         literal = "{}".join(re.escape(part) for part in segment.split("{}"))
         chunks.append(literal.replace("{}", "[^/]+"))
     return re.compile("^/" + "/".join(chunks) + "$")
+
+
+def _prefer_exact(matches: list[RouteEntry]) -> list[RouteEntry]:
+    """候选里恰好有一个字面量路径时优先它，剩下的模板仍按歧义处理。
+
+    同一 host+method 下同时规划了 `/orders/7`（字面量）和 `/orders/{}`（模板）时，
+    请求 `/orders/7` 两个都匹配；字面量更具体，确定性优先。多个字面量或多个
+    模板仍然无法区分，保持 `mock_route_ambiguous`（失败关闭，不透传）。
+    """
+    if len(matches) < 2:
+        return matches
+    exact = [entry for entry in matches if "{}" not in entry.route.path_key]
+    return exact if len(exact) == 1 else matches
 
 
 def _host_candidates(host_header: str | None) -> list[str]:
@@ -189,6 +202,7 @@ class RouteTable:
                 if entry.route.host in candidates and entry.route.method == method:
                     if entry.matches_path(path_key):
                         host_matches.append(entry)
+        host_matches = _prefer_exact(host_matches)
         if len(host_matches) == 1:
             return RouteResolution(
                 entry=host_matches[0], route_match=MockRouteMatch.HOST_PATH
@@ -204,6 +218,7 @@ class RouteTable:
             for entry in self._entries
             if entry.route.method == method and entry.matches_path(path_key)
         ]
+        global_matches = _prefer_exact(global_matches)
         if len(global_matches) == 1:
             return RouteResolution(
                 entry=global_matches[0], route_match=MockRouteMatch.METHOD_PATH

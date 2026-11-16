@@ -12,7 +12,8 @@ import java.util.regex.Pattern;
 
 /**
  * 一个只读路由快照。匹配规则与 Python 端 {@code astsight.mock.routes.RouteTable}
- * 保持同一优先级：host+method+path > 唯一 method+path > 歧义/未命中。
+ * 保持同一优先级：host+method+path > 唯一 method+path > 歧义/未命中；同类候选里
+ * 字面量路径优先于 `{}` 模板（模板之间、字面量之间仍按歧义处理）。
  */
 final class RouteTableSnapshot {
 
@@ -101,6 +102,10 @@ final class RouteTableSnapshot {
         boolean matchesPath(String path) {
             return pathPattern.matcher(path).matches();
         }
+
+        boolean exactPath() {
+            return !pathKey.contains("{}");
+        }
     }
 
     private final String endpoint;
@@ -158,6 +163,7 @@ final class RouteTableSnapshot {
                 }
             }
         }
+        hostMatches = preferExact(hostMatches);
         if (hostMatches.size() == 1) {
             return Match.matched(hostMatches.get(0));
         }
@@ -171,6 +177,7 @@ final class RouteTableSnapshot {
                 methodPathMatches.add(route);
             }
         }
+        methodPathMatches = preferExact(methodPathMatches);
         if (methodPathMatches.size() == 1) {
             return Match.matched(methodPathMatches.get(0));
         }
@@ -178,6 +185,23 @@ final class RouteTableSnapshot {
             return Match.of(Kind.AMBIGUOUS);
         }
         return isPlannedHost(candidates) ? Match.of(Kind.UNKNOWN) : Match.of(Kind.PASSTHROUGH);
+    }
+
+    /**
+     * 候选里恰好有一个字面量路径时优先它；多个字面量或多个模板仍视为歧义。
+     * 与 Python 端 {@code RouteTable.resolve} 的 `_prefer_exact` 保持一致。
+     */
+    private static List<Route> preferExact(List<Route> matches) {
+        if (matches.size() < 2) {
+            return matches;
+        }
+        List<Route> exact = new ArrayList<Route>();
+        for (Route route : matches) {
+            if (route.exactPath()) {
+                exact.add(route);
+            }
+        }
+        return exact.size() == 1 ? exact : matches;
     }
 
     private boolean isPlannedHost(List<String> candidates) {
