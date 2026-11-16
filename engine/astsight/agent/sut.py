@@ -18,17 +18,11 @@ from typing import Any, Sequence
 
 import httpx
 
+from .jar import resolve_agent_jar
+
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _URL_KEYS = {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
-_AGENT_JAR_ENV = "ASTSIGHT_JAVA_AGENT_JAR"
 _AGENT_TOKEN_ENV = "ASTSIGHT_AGENT_TOKEN"
-_AGENT_JAR_DEFAULT = (
-    Path(__file__).resolve().parents[3]
-    / "java"
-    / "astsight-agent"
-    / "target"
-    / "astsight-agent.jar"
-)
 
 
 @dataclass
@@ -154,14 +148,6 @@ def injection_env(
     return env, sorted(set(keys)), warnings
 
 
-def _agent_jar() -> Path | None:
-    configured = os.environ.get(_AGENT_JAR_ENV, "").strip()
-    if configured:
-        path = Path(configured)
-        return path if path.is_file() else None
-    return _AGENT_JAR_DEFAULT if _AGENT_JAR_DEFAULT.is_file() else None
-
-
 def _merge_agent_env(
     env: dict[str, str],
     keys: list[str],
@@ -177,11 +163,12 @@ def _merge_agent_env(
     token 只走环境变量（agent 的 `token_env` 选项），不写进 javaagent 参数，
     避免出现在进程命令行和 JVM 的 `Picked up JAVA_TOOL_OPTIONS` 日志中。
     """
-    jar = _agent_jar()
+    jar, reason = resolve_agent_jar()
     if jar is None:
         for dep_id in dep_ids:
             warnings.append(
-                f"injection_agent_unavailable:{dep_id}:agent_jar_missing"
+                f"injection_agent_unavailable:{dep_id}:"
+                f"{reason or 'agent_jar_missing'}"
             )
         return env, keys, warnings
     if not endpoint:
@@ -195,17 +182,11 @@ def _merge_agent_env(
                 f"injection_agent_unavailable:{dep_id}:token_missing"
             )
         return env, keys, warnings
-    if any(char.isspace() for char in str(jar)):
-        for dep_id in dep_ids:
-            warnings.append(
-                f"injection_agent_unavailable:{dep_id}:agent_jar_path_has_space"
-            )
-        return env, keys, warnings
 
     options = [f"admin={endpoint}", f"token_env={_AGENT_TOKEN_ENV}"]
     if sut_id:
         options.append(f"sut_id={sut_id}")
-    javaagent = f"-javaagent:{jar}=" + ",".join(options)
+    javaagent = f"-javaagent:{jar.path}=" + ",".join(options)
     existing = (
         env.get("JAVA_TOOL_OPTIONS")
         or os.environ.get("JAVA_TOOL_OPTIONS")

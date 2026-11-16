@@ -7,6 +7,7 @@ from .casegen import generate_case_draft, validate_case_bindings
 from .data_prep import DataPlanDraft, generate_data_plans, generate_data_semantics
 from .errors import AgentError
 from .flow import FlowConfig, FlowResult, run_flow
+from .jar import AGENT_VERSION, AgentJar, resolve_agent_jar
 from .mockplan import build_mock_plan, sync_mock_semantic
 from .repair import RepairOutcome, diagnose_and_repair
 from .rule_analysis import generate_rule_draft, import_rule_draft_for_flow
@@ -14,7 +15,9 @@ from .semantic import SemanticValidation, analyze_semantics, validate_semantics
 from .sut import SutProcess, injection_env, start_sut
 
 __all__ = [
+    "AGENT_VERSION",
     "AgentError",
+    "AgentJar",
     "CaseDesignResult",
     "DataPlanDraft",
     "FlowConfig",
@@ -32,6 +35,7 @@ __all__ = [
     "generate_rule_draft",
     "import_rule_draft_for_flow",
     "injection_env",
+    "resolve_agent_jar",
     "run_flow",
     "start_sut",
     "sync_mock_semantic",

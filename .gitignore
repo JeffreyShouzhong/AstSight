@@ -24,6 +24,9 @@ data_plan.json
 java/**/target/
 java/samples/build/
 
+# Python 发行包（tools/build_agent_wheel.py）
+dist/
+
 # Editor / OS
 .DS_Store
 Thumbs.db

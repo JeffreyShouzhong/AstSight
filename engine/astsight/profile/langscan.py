@@ -918,6 +918,8 @@ def _java_hits(block: str) -> list[_Hit]:
             if found:
                 method = normalize_method(found.groups()[-1])
                 break
+        # OkHttp `Request.Builder` 默认 GET；没有显式方法时按默认值记录。
+        method = method or "GET"
         paren = match.end() + url.end() - 1
         args, _ = _call_args(block, paren)
         if args:

@@ -140,7 +140,16 @@ def test_direct_apache_httpclient_requests_are_rewritten(tmp_path: Path) -> None
         )
         compile_cp = os.pathsep.join(str(path) for path in jars)
         subprocess.run(
-            [str(javac), "-cp", compile_cp, "-d", str(classes), str(sample)],
+            [
+                str(javac),
+                "-encoding",
+                "UTF-8",
+                "-cp",
+                compile_cp,
+                "-d",
+                str(classes),
+                str(sample),
+            ],
             check=True,
             capture_output=True,
             timeout=120,

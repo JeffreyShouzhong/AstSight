@@ -126,7 +126,16 @@ def test_https_request_is_rewritten_and_evidenced(tmp_path: Path) -> None:
         classes.mkdir()
         compile_cp = os.pathsep.join([str(okhttp), str(okio)])
         subprocess.run(
-            [str(javac), "-cp", compile_cp, "-d", str(classes), str(sample)],
+            [
+                str(javac),
+                "-encoding",
+                "UTF-8",
+                "-cp",
+                compile_cp,
+                "-d",
+                str(classes),
+                str(sample),
+            ],
             check=True,
             capture_output=True,
             timeout=120,

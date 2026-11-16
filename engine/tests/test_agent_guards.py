@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -437,11 +438,21 @@ def _agent_document() -> dict:
     }
 
 
+def _fake_agent_jar(path: Path, version: str = "0.1.0.dev0") -> Path:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "META-INF/MANIFEST.MF",
+            "Manifest-Version: 1.0\r\n"
+            f"Implementation-Version: {version}\r\n"
+            "Premain-Class: io.astsight.agent.core.AstSightAgent\r\n\r\n",
+        )
+    return path
+
+
 def test_injection_env_agent_rewrite_uses_token_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    jar = tmp_path / "astsight-agent.jar"
-    jar.write_bytes(b"")
+    jar = _fake_agent_jar(tmp_path / "astsight-agent.jar")
     monkeypatch.setenv("ASTSIGHT_JAVA_AGENT_JAR", str(jar))
     monkeypatch.delenv("JAVA_TOOL_OPTIONS", raising=False)
     monkeypatch.delenv("ASTSIGHT_AGENT_TOKEN", raising=False)
@@ -469,8 +480,7 @@ def test_injection_env_agent_rewrite_uses_token_env(
 def test_injection_env_agent_rewrite_merges_java_tool_options(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    jar = tmp_path / "astsight-agent.jar"
-    jar.write_bytes(b"")
+    jar = _fake_agent_jar(tmp_path / "astsight-agent.jar")
     monkeypatch.setenv("ASTSIGHT_JAVA_AGENT_JAR", str(jar))
     monkeypatch.delenv("ASTSIGHT_AGENT_TOKEN", raising=False)
 
@@ -487,8 +497,7 @@ def test_injection_env_agent_rewrite_merges_java_tool_options(
 def test_injection_env_agent_rewrite_without_token_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    jar = tmp_path / "astsight-agent.jar"
-    jar.write_bytes(b"")
+    jar = _fake_agent_jar(tmp_path / "astsight-agent.jar")
     monkeypatch.setenv("ASTSIGHT_JAVA_AGENT_JAR", str(jar))
     monkeypatch.delenv("ASTSIGHT_AGENT_TOKEN", raising=False)
 

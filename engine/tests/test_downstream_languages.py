@@ -88,6 +88,69 @@ func quoteHandler(w http.ResponseWriter, r *http.Request) {
 """
 
 
+def test_java_okhttp_https_defaults_to_get(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/main/java/com/example/orders/OrderController.java",
+        """
+public class OrderController {
+    public String call() throws Exception {
+        Request request = new Request.Builder()
+                .url("https://api.example.com/orders/7")
+                .build();
+        return client.newCall(request).execute().body().string();
+    }
+}
+""",
+    )
+    scan = DownstreamScanner(tmp_path).scan(
+        "OrderController.call",
+        file_hint="src/main/java/com/example/orders/OrderController.java",
+    )
+    assert [dep["dep_id"] for dep in scan.deps] == [
+        "http:host:api.example.com GET /orders/7"
+    ]
+    assert scan.deps[0]["target"] == "https://api.example.com/orders/7"
+    assert scan.deps[0]["clients"] == ["okhttp"]
+    assert scan.unsupported == []
+
+
+def test_java_webclient_https_stays_unsupported(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/main/java/com/example/pay/PricingClient.java",
+        """
+public class PricingClient {
+    public Mono<String> quote() {
+        return webClient.get().uri("https://pricing.internal/quote").retrieve().bodyToMono(String.class);
+    }
+}
+""",
+    )
+    scan = DownstreamScanner(tmp_path).scan("PricingClient.quote")
+    assert scan.deps == []
+    assert [(item["reason"], item["target"]) for item in scan.unsupported] == [
+        ("tls_not_supported", "https://pricing.internal/quote")
+    ]
+
+
+def test_python_https_stays_unsupported(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "app.py",
+        """
+import requests
+
+
+def charge():
+    return requests.get("https://pricing.internal/quote")
+""",
+    )
+    scan = DownstreamScanner(tmp_path).scan("charge", file_hint="app.py")
+    assert scan.deps == []
+    assert [item["reason"] for item in scan.unsupported] == ["tls_not_supported"]
+
+
 def test_go_net_http_target(tmp_path: Path) -> None:
     _write(tmp_path, "main.go", GO_SOURCE)
     scan = DownstreamScanner(tmp_path).scan("quoteHandler", file_hint="main.go")

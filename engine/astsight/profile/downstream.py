@@ -41,6 +41,12 @@ from .langscan import (
 )
 
 
+# Java agent 能改写 HTTPS 的客户端；只有这些调用点的 HTTPS 目标会保留到计划层，
+# 由 mockplan 决定 agent_rewrite 还是 unsupported。
+AGENT_REWRITE_CLIENTS = frozenset(
+    {"okhttp", "feign", "resttemplate", "apache-httpclient"}
+)
+
 MAX_FILES = 2_000
 MAX_FILE_BYTES = 1_000_000
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
@@ -1462,6 +1468,13 @@ class DownstreamScanner:
         unsupported_reasons: dict[str, str] | None = None,
     ) -> None:
         sites_by_id = {site.call_site_id: site for site in result.call_sites}
+        # HTTPS 目标只有 Java agent 可改写的客户端能保留到计划层；
+        # 其余语言/客户端的 HTTPS 调用仍按 tls_not_supported 排除。
+        agent_https = {
+            site.call_site_id
+            for site in result.call_sites
+            if str(site.client) in AGENT_REWRITE_CLIENTS
+        }
         plan = build_dep_id_plan(
             [
                 CallSite(
@@ -1473,7 +1486,8 @@ class DownstreamScanner:
                     config_key=site.config_key,
                 )
                 for site in result.call_sites
-            ]
+            ],
+            https_call_sites=agent_https,
         )
 
         result.deps = []

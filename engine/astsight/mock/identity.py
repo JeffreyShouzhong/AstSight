@@ -247,14 +247,22 @@ def _group_key(
     return ("call", method, path_key, site.call_site_id)
 
 
-def build_dep_id_plan(call_sites: list[CallSite]) -> DepIdPlan:
+def build_dep_id_plan(
+    call_sites: list[CallSite],
+    *,
+    allow_https: bool = False,
+    https_call_sites: set[str] | None = None,
+) -> DepIdPlan:
     """按 C3.5.5 构建唯一 `dep_id` 清单。
 
-    无法静态确定目标地址的调用点会成组并标 `inferred`；HTTPS 进入
-    `unsupported`（`tls_not_supported`），不参与 Mock。
+    无法静态确定目标地址的调用点会成组并标 `inferred`；HTTPS 默认进入
+    `unsupported`（`tls_not_supported`），不参与 Mock。`allow_https` 整体放行，
+    `https_call_sites` 只放行指定调用点（Java agent 可改写的客户端），是否真的
+    支持仍由计划层的注入策略决定。
     """
     plan = DepIdPlan()
     groups: dict[tuple, list[tuple[CallSite, NormalizedTarget | None, str]]] = {}
+    https_allowed = set(https_call_sites or ())
 
     for site in call_sites:
         method = normalize_method(site.method)
@@ -266,7 +274,10 @@ def build_dep_id_plan(call_sites: list[CallSite]) -> DepIdPlan:
         target: NormalizedTarget | None = None
         if site.target:
             try:
-                target = normalize_target_url(site.target)
+                target = normalize_target_url(
+                    site.target,
+                    allow_https=allow_https or site.call_site_id in https_allowed,
+                )
             except TlsNotSupportedError as exc:
                 plan.unsupported.append(
                     UnsupportedCallSite(site.call_site_id, "tls_not_supported", exc.detail)

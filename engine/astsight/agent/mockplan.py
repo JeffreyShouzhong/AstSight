@@ -10,6 +10,7 @@ from typing import Any
 from contracts import MockPlan, MockPlanInjection, MockPlanRoute, MockSemantic, MockStrategy
 
 from ..mock import MockPlanError, validate_mock_plan
+from ..profile.downstream import AGENT_REWRITE_CLIENTS
 from .errors import AgentError
 from .models import SemanticAnalysis
 
@@ -32,12 +33,7 @@ _JAVA_CLIENTS = {
     "httpclient",
     "apache-httpclient",
 }
-_JAVA_SUPPORTED_CLIENTS = {
-    "okhttp",
-    "feign",
-    "resttemplate",
-    "apache-httpclient",
-}
+_JAVA_SUPPORTED_CLIENTS = set(AGENT_REWRITE_CLIENTS)
 
 
 def _is_java_dep(dep: dict[str, Any]) -> bool:
