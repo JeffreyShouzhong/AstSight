@@ -45,7 +45,7 @@
 | `agent run` 全链路 e2e | ✅ 2026-11-16 | `test_java_agent_flow_e2e.py`：Spring Boot fat jar 经 `run_flow` 完成画像 → 计划 → `JAVA_TOOL_OPTIONS` 注入 → 执行 → 报告；证据 `adapter=okhttp`/`mode=agent_rewrite`/`original_host`，零透传，token 不进命令行；修复 Java HTTPS dep 在画像阶段被丢弃的问题 |
 | Mock 路由精确优先 | ✅ 2026-11-16 | 同 host+method 下字面量路径（`/orders/7`）优先于 `{}` 模板（`/orders/{}`）；Python `RouteTable` 与 Java `RouteTableSnapshot` 同规则；多字面量/多模板仍 `mock_route_ambiguous` 失败关闭；全链路 e2e 同时覆盖 OkHttp 字面量与 RestTemplate 模板 |
 | HTTP/2 prior-knowledge 负例 | ✅ 2026-11-16 | OkHttp `H2_PRIOR_KNOWLEDGE` 改写后无法与 HTTP/1.1 Mock 完成交换：SUT 显式失败（非 0）、真实下游 0 连接、心跳 `http_rewrites>=1`/`http_passthrough=0`；`test_java_agent_h2_prior_knowledge_e2e.py` |
-| Dubbo Filter 首版 | ✅ 2026-11-16 | `java/astsight-agent-dubbo`：消费端 Filter 由 `@Activate(group="consumer")` 进链；Filter 字节在 `ExtensionLoader` 首次加载时用 `ClassLoader#defineClass` 注入应用类加载器，不增强 Dubbo 内部类；取桩走 `POST /_admin/dubbo/invoke`（按 `dep_id` 命中会话绑定），返回体按接口返回类型经 Jackson 构造；计划内取桩失败抛 `RpcException`、真实调用 0 次，计划外 dep 放行且无证据；心跳新增 `dubbo` 块；实测仅 Dubbo 2.7.22 + JDK 26 |
+| Dubbo Filter 首版 | ✅ 2026-11-16 | `java/astsight-agent-dubbo`：消费端 Filter 由 `@Activate(group="consumer")` 进链；Filter 字节在 `ExtensionLoader` 首次加载时用 `ClassLoader#defineClass` 注入应用类加载器，不增强 Dubbo 内部类；取桩走 `POST /_admin/dubbo/invoke`（按 `dep_id` 命中会话绑定），返回体按接口返回类型经 Jackson 构造；同步/异步/声明 future/oneway/泛化都已处理；计划内取桩失败抛 `RpcException`、真实调用 0 次，计划外 dep 放行且无证据；心跳新增 `dubbo` 块；实测仅 Dubbo 2.7.22 + JDK 26 |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
 
 ## 本轮完成（Dubbo 消费端 Filter 首版，2026-11-16）
@@ -72,32 +72,39 @@
    `dep_id` 形如 `dubbo:接口#方法?group=&version=`（空参数省略）。返回体按接口
    方法的 `getGenericReturnType()` 用 Jackson 转换，转换失败即
    `mock_response_invalid`；泛化调用按 `Map`/`Object` 处理。
-5. **放行边界**：路由快照已加载且该 dep 不在计划内 → 调用下一个 Invoker（真实
+5. **调用形态**：同步、老式异步（`async=true` attachment）、声明
+   `CompletableFuture<T>`、oneway（`return=false`）与泛化
+   `$invoke`/`$invokeAsync` 都已处理。Filter 在 `AbstractInvoker` 之前短路，
+   所以 bridge 自己补设 `RpcContext` future；声明 future 时补设
+   `InvokeMode.FUTURE` 并按 `T` 构造桩体；oneway 返回空结果，但仍消费桩、
+   写证据。
+6. **放行边界**：路由快照已加载且该 dep 不在计划内 → 调用下一个 Invoker（真实
    调用，不产生 Mock 证据）；计划内任何取桩错误、admin 不可达 → `RpcException`，
    真实调用 0 次；agent 未激活 → `agent_not_active`，同样失败关闭。
-6. **证据与心跳**：证据写 `mock_calls.jsonl`，`adapter=dubbo-filter`、
+7. **证据与心跳**：证据写 `mock_calls.jsonl`，`adapter=dubbo-filter`、
    `mode=agent_filter`、`method` 为 RPC 方法名、
    `original_path=dubbo:接口#方法`。心跳新增 `dubbo` 块：
    `installed / version / filter_instantiated / filter_hits / passthrough /
    errors / serialization_verified`（固定 `false`）。
-7. **测试**：
+8. **测试**：
    - `engine/tests/test_mock_dubbo.py`：7 条（成功体 + 证据 + `dubbo_deps`、
      空体为 null、未绑定、分支缺失、会话缺失、计划外 404、`raw_base64` 非法）。
-   - `engine/tests/integration/test_java_agent_dubbo_e2e.py`：3 条，默认跳过，
+   - `engine/tests/integration/test_java_agent_dubbo_e2e.py`：4 条，默认跳过，
      `ASTSIGHT_JAVA_AGENT_E2E=1` 启用；不启注册中心/provider，用 Dubbo SPI 取
      Filter + 计数假 Invoker，分别验证取桩成功（`result=O-1,10`、`REAL_CALL`
      不出现）、未绑定（`error=astSight:mock_unexpected_dep`、`real=0`）、计划外
-     放行（`REAL_CALL`、`real=1`、无证据）。
+     放行（`REAL_CALL`、`real=1`、无证据），以及异步/声明 future/oneway/
+     泛化四种形态（各自命中桩、真实调用 0 次）。
    - Java 单测：`RouteTableSnapshotTest#dubboDepsAreParsedForPlannedChecks`、
      `DubboBridgeTest` 2 条（`dep_id` 参数顺序与空参数省略）。
-   - 回归：全量 Python **404 passed, 28 skipped**；启用 agent e2e 的集成套件
-     **6 passed, 20 skipped**；全链路 flow e2e 1 passed。
-8. **构建**：`mvn -pl astsight-agent -am -DskipTests clean package` 后
+   - 回归：全量 Python **404 passed, 29 skipped**；Dubbo e2e 4 条通过；
+     Java 单测（core + dubbo 模块）通过。
+9. **构建**：`mvn -pl astsight-agent -am -DskipTests clean package` 后
    `python tools/build_agent_wheel.py --skip-build` 刷新 sidecar/wheel。注意
    只跑 `mvn package` 时 shaded dist jar 可能仍是旧的，联调前先 clean。
-9. **明确未做**：classpath + `dubbo.consumer.filter` 形态、本地心跳文件、异步/
-   oneway 专门用例、真实的泛化调用、JDK 8/11/17/21 与 Dubbo 3.x 组合。这些
-   在画像阶段按 `unsupported` 处理，不做运行期试探。
+10. **明确未做**：classpath + `dubbo.consumer.filter` 形态、本地心跳文件、
+    JDK 8/11/17/21 与 Dubbo 3.x 组合。这些在画像阶段按 `unsupported` 处理，
+    不做运行期试探。
 
 ## 本轮完成（HTTP/2 prior-knowledge 负例，2026-11-16）
 
@@ -493,9 +500,9 @@
    （2026-11-16，负例 e2e）；第三方 SDK 端点发现明确不做（理由见决策记录
    §17）；Dubbo 消费端 Filter 首版 ✅ 已完成（2026-11-16，`-javaagent` +
    会话取桩 + 失败关闭 + 零真实调用）。
-5. **Dubbo 后续（未排期）**：JDK 8/11/17/21 与 Dubbo 3.x 实测、异步/oneway/
-   泛化调用用例、classpath + `dubbo.consumer.filter` 形态与本地心跳文件。
-   未实测组合一律按 `unsupported` 处理。
+5. **Dubbo 后续（未排期）**：JDK 8/11/17/21 与 Dubbo 3.x 实测、classpath +
+   `dubbo.consumer.filter` 形态与本地心跳文件。未实测组合一律按
+   `unsupported` 处理。
 
 已完成的历史步骤（Java HTTP Mock P0/P1/P1.5）见下方各轮完成记录。
 
@@ -600,7 +607,10 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
   - Mock 新增 `POST /_admin/dubbo/invoke` 与 `dubbo_deps` 路由表字段、证据
     `adapter=dubbo-filter`；`MockAgent.dubbo` 心跳块；`RouteTableSnapshot` 增加
     `dubbo_deps` 与 `isDubboPlanned`；
-  - 新增 `test_mock_dubbo.py`（7 条）、`test_java_agent_dubbo_e2e.py`（3 条，默认
+  - 调用形态补齐：老式异步、声明 `CompletableFuture<T>`、oneway、泛化
+    `$invoke`/`$invokeAsync`；bridge 补设 `RpcContext` future 与
+    `InvokeMode.FUTURE`；
+  - 新增 `test_mock_dubbo.py`（7 条）、`test_java_agent_dubbo_e2e.py`（4 条，默认
     跳过）与 `java/samples/DubboFilterSample.java`；
   - 文档同步：决策记录 v4.21、能力设计 v4.21、PROGRESS、README。
 - **2026-11-16**：Java HTTP agent 补直连 Apache HttpClient adapter：

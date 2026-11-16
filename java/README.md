@@ -159,7 +159,8 @@ async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 
   OkHttp `Protocol.H2_PRIOR_KNOWLEDGE` 直连 Mock，断言改写发生、SUT 显式失败、
   真实下游 0 连接（零透传）。
 - `engine/tests/integration/test_java_agent_dubbo_e2e.py`：Dubbo 消费端 Filter，
-  验证取桩返回 DTO、未绑定失败关闭、计划外放行（详见下一节）。
+  验证取桩返回 DTO、未绑定失败关闭、计划外放行，以及异步/声明 future/
+  oneway/泛化四种形态（详见下一节）。
 
 以上 HTTP 相关用例均已实测通过；版本矩阵在 JDK 8/11/17/21/26 上共 80 个
 JDK×客户端组合全部通过，Spring Boot 样例在 JDK 17/21/26 通过。Dubbo e2e
@@ -197,10 +198,11 @@ Filter 只引用 Dubbo 类型和系统类加载器里的 `DubboBridge`；bridge 
 errors / serialization_verified`，其中 `serialization_verified` 固定为
 `false`（首版不校验序列化保真）。
 
-**首版范围**：只支持 `-javaagent` 形态、同步调用、typed DTO；实测组合只有
-Dubbo 2.7.22 + JDK 26。classpath + `dubbo.consumer.filter` 形态、本地心跳
-文件、异步/oneway、真实泛化调用、JDK 8/11/17/21 与 Dubbo 3.x 均未实现或未
-验证，画像期按 `unsupported` 处理。
+**首版范围**：只支持 `-javaagent` 形态。同步、老式异步、声明
+`CompletableFuture<T>`、oneway 与泛化 `$invoke`/`$invokeAsync` 都已处理；
+实测组合只有 Dubbo 2.7.22 + JDK 26。classpath + `dubbo.consumer.filter`
+形态、本地心跳文件、JDK 8/11/17/21 与 Dubbo 3.x 均未实现或未验证，画像期
+按 `unsupported` 处理。
 
 端到端测试默认跳过，启用方式：
 
@@ -228,6 +230,6 @@ Dubbo SPI 取出 Filter，对计数假 Invoker 调用，分别验证取桩成功
 - HTTP/2 prior-knowledge（h2c）不支持：Mock 只讲 HTTP/1.1，改写后的 h2c
   请求会显式失败；负例 e2e 验证此时真实下游 0 连接，不会悄悄回落。
 - 签名、pinning、连接池复用、重定向与异步链路的副作用尚未验证。
-- Dubbo Filter 首版只覆盖 `-javaagent` 形态、同步调用与 typed DTO，实测组合
-  仅 Dubbo 2.7.22 + JDK 26；`serialization_verified` 固定为 `false`，不宣称
-  序列化保真。classpath 形态、异步/oneway、泛化调用与 Dubbo 3.x 未验证。
+- Dubbo Filter 首版只覆盖 `-javaagent` 形态，实测组合仅 Dubbo 2.7.22 +
+  JDK 26；`serialization_verified` 固定为 `false`，不宣称序列化保真。
+  classpath 形态与 Dubbo 3.x 未验证。

@@ -1371,9 +1371,15 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 > - 放行边界：路由快照已加载且 dep 不在计划内才调用下一个 Invoker；计划内
 >   取桩失败抛 `RpcException`，真实调用 0 次；agent 未安装则失败关闭
 >   （`agent_not_active`），不静默透传。
-> - classpath 形态、本地心跳文件、异步/oneway 专门用例、泛化调用实测、JDK
->   8/11/17/21 与 Dubbo 3.x 兼容矩阵：**未实现或未验证**，按 `unsupported`
->   处理。当前唯一实测格子：Dubbo 2.7.22 + JDK 26（本机）。
+> - 调用形态：同步、老式异步（`async=true` attachment）、声明
+>   `CompletableFuture<T>`、oneway（`return=false`）与泛化
+>   `$invoke`/`$invokeAsync` 均已处理。Filter 在 `AbstractInvoker` 之前执行，
+>   短路后由 bridge 补设 `RpcContext` future 与 `InvokeMode.FUTURE`；
+>   `CompletableFuture<T>` 的桩体按 `T` 构造，oneway 返回空结果但仍消费桩、
+>   留证据。
+> - classpath 形态、本地心跳文件、JDK 8/11/17/21 与 Dubbo 3.x 兼容矩阵：
+>   **未实现或未验证**，按 `unsupported` 处理。当前唯一实测格子：Dubbo
+>   2.7.22 + JDK 26（本机）。
 
 **失败子码**：
 
@@ -1407,7 +1413,7 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 | DTO 形态 | typed DTO / 泛化调用（`GenericService`）/ 重载方法 |
 
 - **判定口径**：“在 2.7+ 范围内”≠“已验证”：只有矩阵内且实测通过的组合才允许绑定；矩阵外组合在 A4.5/C4 阶段就标 `unsupported`，不生成 Mock 绑定，也不在运行期试探。新增组合先补实测再写进矩阵。
-- **v4.21 已实测**：Dubbo 2.7.22 + JDK 26 + 同步调用 + typed DTO（`verified`）。其余格子尚未实测，不得当作已支持。
+- **v4.21 已实测**：Dubbo 2.7.22 + JDK 26 + 同步/老式异步/声明 future/oneway/泛化调用 + typed DTO（`verified`）。其余格子尚未实测，不得当作已支持。
 
 **`agent_not_active` 探测：本地心跳文件（定稿）**
 
@@ -1644,7 +1650,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
   退出）且真实下游 0 连接，不允许悄悄回落或把该失败当用例通过；负例 e2e
   `test_java_agent_h2_prior_knowledge_e2e.py` 固定这一行为。
 - **匹配边界（v4.19）**：同一 host + method 下字面量路径优先于 `{}` 模板（`/orders/7` 命中字面量路由，`/orders/8` 才落到 `/orders/{}`）；两个字面量或两个模板同时命中时仍是 `mock_route_ambiguous` → `/_agent/unmatched` 502，零透传，要求画像消歧；不做更细的模板特异性排序。
-- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo 消费端 Filter 首版已接入同一 core（`-javaagent` + 会话取桩 + 零真实调用 e2e，2026-11-16；版本矩阵与 classpath 形态待补）；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；Dubbo 剩余项（JDK/Dubbo 版本矩阵、异步/oneway/泛化、classpath 形态）见 `doc/决策记录.md` §3「首版实现」与 §17「后续工作」。
+- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo 消费端 Filter 首版已接入同一 core（`-javaagent` + 会话取桩 + 同步/异步/future/oneway/泛化 + 零真实调用 e2e，2026-11-16；版本矩阵与 classpath 形态待补）；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；Dubbo 剩余项（JDK/Dubbo 版本矩阵、classpath 形态）见 `doc/决策记录.md` §3「首版实现」与 §17「后续工作」。
 
 **桩响应模型**：
 

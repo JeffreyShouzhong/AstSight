@@ -612,6 +612,10 @@ jar 在系统类加载器，Filter 必须在应用类加载器里才认得 Dubbo
 - 心跳：`MockAgent.dubbo` 块上报 `installed / version / filter_instantiated /
   filter_hits / passthrough / errors / serialization_verified`；
   `serialization_verified` 固定 `false`。
+- 调用形态：同步、老式异步（`async=true`）、声明 `CompletableFuture<T>`、
+  oneway（`return=false`）与泛化 `$invoke`/`$invokeAsync`。Filter 短路在
+  `AbstractInvoker` 之前，bridge 会补设 `RpcContext` future 与
+  `InvokeMode.FUTURE`；oneway 返回空结果但仍记证据。
 
 ```bash
 # 先构建 agent 与 Dubbo classpath（package 阶段生成 dubbo-classpath.txt）
@@ -624,10 +628,10 @@ ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
 PYTHONPATH=. python -m pytest tests/test_mock_dubbo.py -q
 ```
 
-首版范围：只支持 `-javaagent` 形态、同步调用与 typed DTO；实测组合只有
-Dubbo 2.7.22 + JDK 26。classpath + `dubbo.consumer.filter` 形态、本地心跳
-文件、异步/oneway、真实泛化调用、JDK 8/11/17/21 与 Dubbo 3.x 未实现或未
-验证，计划期按 `unsupported` 处理。
+首版范围：只支持 `-javaagent` 形态；同步/异步/声明 future/oneway/泛化与
+typed DTO 均已覆盖。实测组合只有 Dubbo 2.7.22 + JDK 26。classpath +
+`dubbo.consumer.filter` 形态、本地心跳文件、JDK 8/11/17/21 与 Dubbo 3.x
+未实现或未验证，计划期按 `unsupported` 处理。
 
 ### 下游调用点识别与计划草案（P1）
 

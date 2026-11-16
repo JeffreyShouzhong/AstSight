@@ -231,6 +231,69 @@ def test_dubbo_stub_returns_dto_without_real_call(
         server.stop()
 
 
+def test_dubbo_async_future_oneway_and_generic(
+    sample_classes: tuple[Path, str], tmp_path: Path
+) -> None:
+    classes, classpath = sample_classes
+    sut_id = "sut-dubbo-modes"
+    create = DEP_ID
+    create_async = "dubbo:OrderService#createAsync?group=order&version=1.0.0"
+    ping = "dubbo:OrderService#ping?group=order&version=1.0.0"
+    server = MockHttpServer(
+        sut_id=sut_id,
+        token=TOKEN,
+        history_path=tmp_path / "mock_calls.jsonl",
+    )
+    for dep in (create, create_async, ping):
+        server.add_dubbo_dep(
+            dep,
+            branches={"success": MockStub(body={"orderId": "O-1", "amount": 10})},
+        )
+    server.start()
+    try:
+        response = httpx.post(
+            f"{server.endpoint}/_admin/sessions",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={
+                "session_id": "session-modes",
+                "namespace": sut_id,
+                "case_id": "case-modes",
+                "ttl_ms": 60_000,
+                "bindings": [
+                    {"dep_id": create, "branch": "success"},
+                    {"dep_id": create_async, "branch": "success"},
+                    {"dep_id": ping, "branch": "success"},
+                ],
+            },
+            timeout=5,
+        )
+        assert response.status_code == 200, response.text
+
+        expected = {
+            "async": "async=O-1,10",
+            "future": "future=O-1,10",
+            "oneway": "oneway=empty",
+            "generic": "generic=O-1",
+            "genericAsync": "generic=O-1",
+        }
+        for mode, needle in expected.items():
+            completed = _run_sample(
+                classes, classpath, mode, endpoint=server.endpoint, sut_id=sut_id
+            )
+            assert completed.returncode == 0, mode + "\n" + completed.stdout + completed.stderr
+            assert needle in completed.stdout, mode + "\n" + completed.stdout
+            assert "REAL_CALL" not in completed.stdout, mode + "\n" + completed.stdout
+            assert "real=0" in completed.stdout, mode + "\n" + completed.stdout
+
+        records = server.evidence.records
+        assert len(records) == len(expected), [record.model_dump() for record in records]
+        assert {record.dep_id for record in records} == {create, create_async, ping}
+        assert all(record.result.value == "ok" for record in records)
+        assert all(record.adapter == "dubbo-filter" for record in records)
+    finally:
+        server.stop()
+
+
 def test_dubbo_unbound_dep_fails_closed(
     sample_classes: tuple[Path, str], tmp_path: Path
 ) -> None:

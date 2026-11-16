@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -79,8 +80,17 @@ public final class DubboBridge {
             current.dubboPassthrough();
             return null;
         }
-        Object value = toValue(reply.body, info, filterClass.getClassLoader());
-        return resultObject(filterClass.getClassLoader(), invocation, value);
+        ClassLoader loader = filterClass.getClassLoader();
+        Object value = toValue(reply.body, info, loader);
+        // oneway 没有返回值；桩仍被消费并留证据。
+        if (info.oneway) {
+            value = null;
+        }
+        Object result = resultObject(loader, invocation, value, info.oneway);
+        if (info.async || info.future) {
+            applyAsyncContext(loader, invocation, value, info.future);
+        }
+        return result;
     }
 
     // --------------------------------------------------------------- 调用描述
@@ -91,8 +101,12 @@ public final class DubboBridge {
         String method;
         Class<?>[] parameterTypes;
         Object[] arguments;
+        /** 已展开 CompletableFuture 的返回类型；泛化调用为 Object。 */
         Type returnType;
         boolean generic;
+        boolean async;
+        boolean future;
+        boolean oneway;
     }
 
     static String depId(String service, String method, String group, String version) {
@@ -142,6 +156,7 @@ public final class DubboBridge {
             info.service = iface.getName();
             info.method = methodName;
             info.generic = "org.apache.dubbo.rpc.service.GenericService".equals(info.service)
+                    || "com.alibaba.dubbo.rpc.service.GenericService".equals(info.service)
                     || "$invoke".equals(methodName)
                     || "$invokeAsync".equals(methodName);
             if (info.generic) {
@@ -161,6 +176,8 @@ public final class DubboBridge {
                     info.method = (String) methodArg;
                 }
                 info.returnType = Object.class;
+                // $invokeAsync 声明即返回 CompletableFuture，不依赖 attachment。
+                info.future = "$invokeAsync".equals(methodName);
             } else {
                 Method target = findMethod(iface, methodName, info.parameterTypes);
                 if (target == null) {
@@ -168,8 +185,14 @@ public final class DubboBridge {
                             + " params=" + java.util.Arrays.toString(info.parameterTypes));
                     return null;
                 }
-                info.returnType = target.getGenericReturnType();
+                Type declared = target.getGenericReturnType();
+                Type inner = unwrapFuture(declared);
+                info.future = inner != declared;
+                info.returnType = inner;
             }
+            ClassLoader loader = invocation.getClass().getClassLoader();
+            detectInvokeMode(info, invocation, url, loader);
+            info.oneway = isOneway(invocation, url, info.method, loader);
             info.depId = depId(info.service, info.method, group, version);
             return info;
         } catch (Throwable failure) {
@@ -200,8 +223,81 @@ public final class DubboBridge {
         return null;
     }
 
-    private static boolean isTrue(Object value) {
-        return value != null && "true".equalsIgnoreCase(String.valueOf(value));
+    /** 声明返回 CompletableFuture&lt;T&gt; 时，桩体按 T 构造，值交给 future。 */
+    private static Type unwrapFuture(Type declared) {
+        if (declared instanceof ParameterizedType) {
+            ParameterizedType parameterized = (ParameterizedType) declared;
+            if (parameterized.getRawType() == CompletableFuture.class) {
+                Type[] arguments = parameterized.getActualTypeArguments();
+                return arguments.length == 1 ? arguments[0] : Object.class;
+            }
+        } else if (declared == CompletableFuture.class) {
+            return Object.class;
+        }
+        return declared;
+    }
+
+    /**
+     * 调用模式。Filter 在 {@code AbstractInvoker} 之前执行，所以不能只读
+     * {@code RpcInvocation#getInvokeMode}（那时通常还是 null）；优先用
+     * Dubbo 自己的 {@code RpcUtils#getInvokeMode(URL, Invocation)}，
+     * 它同时看 attachment 和声明返回类型。
+     */
+    private static void detectInvokeMode(
+            CallInfo info, Object invocation, Object url, ClassLoader loader) {
+        String mode = enumName(rpcUtils(loader, url, invocation, "getInvokeMode"));
+        if ("FUTURE".equals(mode)) {
+            info.future = true;
+        } else if ("ASYNC".equals(mode)) {
+            info.async = true;
+        } else if (mode == null) {
+            // RpcUtils 不可用时的最低回退：只看 attachment。
+            String async = attachmentString(invocation, info.method + ".async");
+            if (async == null) {
+                async = attachmentString(invocation, "async");
+            }
+            if (async != null) {
+                info.async = Boolean.parseBoolean(async);
+            }
+        }
+    }
+
+    private static boolean isOneway(
+            Object invocation, Object url, String method, ClassLoader loader) {
+        Object flag = rpcUtils(loader, url, invocation, "isOneway");
+        if (flag instanceof Boolean) {
+            return (Boolean) flag;
+        }
+        String value = attachmentString(invocation, method + ".return");
+        if (value == null) {
+            value = attachmentString(invocation, "return");
+        }
+        return value != null && !Boolean.parseBoolean(value);
+    }
+
+    private static Object rpcUtils(
+            ClassLoader loader, Object url, Object invocation, String name) {
+        try {
+            Class<?> utils = Class.forName(
+                    "org.apache.dubbo.rpc.support.RpcUtils", false, loader);
+            Class<?> urlType = Class.forName(
+                    "org.apache.dubbo.common.URL", false, loader);
+            Class<?> invocationType = Class.forName(
+                    "org.apache.dubbo.rpc.Invocation", false, loader);
+            Method method = utils.getMethod(name, urlType, invocationType);
+            return method.invoke(null, url, invocation);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String attachmentString(Object invocation, String key) {
+        Object value = attachment(invocation, key);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private static String enumName(Object value) {
+        return value instanceof Enum ? ((Enum<?>) value).name() : null;
     }
 
     // ------------------------------------------------------------- admin 取桩
@@ -314,12 +410,21 @@ public final class DubboBridge {
     }
 
     private static Object resultObject(
-            ClassLoader loader, Object invocation, Object value) {
+            ClassLoader loader, Object invocation, Object value, boolean oneway) {
         try {
             Class<?> invocationType = Class.forName(
                     "org.apache.dubbo.rpc.Invocation", false, loader);
             Class<?> resultType = Class.forName(
                     "org.apache.dubbo.rpc.AsyncRpcResult", false, loader);
+            if (oneway) {
+                try {
+                    Method empty = resultType.getMethod(
+                            "newDefaultAsyncResult", invocationType);
+                    return empty.invoke(null, invocation);
+                } catch (NoSuchMethodException ignored) {
+                    // 旧版本没有单参工厂，退回带 null 值的工厂。
+                }
+            }
             try {
                 Method factory = resultType.getMethod(
                         "newDefaultAsyncResult", Object.class, invocationType);
@@ -333,6 +438,42 @@ public final class DubboBridge {
         } catch (Throwable failure) {
             throw new IllegalStateException("mock_response_invalid");
         }
+    }
+
+    /**
+     * 异步/声明 future 的调用：正常链路里由 {@code AbstractInvoker} 设置
+     * {@code RpcContext} 的 future 和 invokeMode；Filter 短路后这一步不会发生，
+     * 由这里补上，否则调用方拿不到结果或直接拿到 null。
+     */
+    private static void applyAsyncContext(
+            ClassLoader loader, Object invocation, Object value, boolean futureMode) {
+        try {
+            CompletableFuture<Object> future = new CompletableFuture<Object>();
+            future.complete(value);
+            Class<?> contextType = Class.forName(
+                    "org.apache.dubbo.rpc.RpcContext", false, loader);
+            Object context = contextType.getMethod("getContext").invoke(null);
+            contextType.getMethod("setFuture", CompletableFuture.class)
+                    .invoke(context, future);
+            if (futureMode) {
+                Class<?> modeType = Class.forName(
+                        "org.apache.dubbo.rpc.InvokeMode", false, loader);
+                setInvokeMode(invocation, modeType, "FUTURE");
+            }
+        } catch (Throwable failure) {
+            if (runtime != null) {
+                runtime.dubboError("async context failed " + failure);
+            }
+            throw new IllegalStateException("mock_response_invalid");
+        }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void setInvokeMode(Object invocation, Class<?> modeType, String name)
+            throws Exception {
+        Object mode = Enum.valueOf((Class) modeType, name);
+        invocation.getClass().getMethod("setInvokeMode", modeType)
+                .invoke(invocation, mode);
     }
 
     private static String version(ClassLoader loader) {
