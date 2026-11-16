@@ -60,10 +60,11 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 共享 base URL（`mock_config_ambiguous`）、同 JVM bean mock、动态 URL、请求匹配/序列/流式不支持。
 v4.15 的 `agent_rewrite` 是配置注入的兜底：agent 只改写 URL 到 `/_dep/<route_key>`，
 不构造响应、不持有会话；计划内下游零透传，计划外主机放行但上报。已打通
-OkHttp / Feign / RestTemplate + HTTPS + 心跳 + 证据，`agent run` 会通过
-`JAVA_TOOL_OPTIONS` 自动加载 agent；WebClient、第三方 SDK、直接使用
-Apache HC / JDK HttpClient / HttpURLConnection / async-http-client 的调用
-不提供 adapter，计划期标 `unsupported`，不做“假装支持”的降级。
+OkHttp / Feign / RestTemplate / 直连 Apache HttpClient 4.3+/5.x + HTTPS +
+心跳 + 证据，`agent run` 会通过 `JAVA_TOOL_OPTIONS` 自动加载 agent；WebClient、
+使用自有传输或 shaded HTTP 客户端的第三方 SDK、JDK HttpClient、
+HttpURLConnection、async-http-client、Apache HC 4.0–4.2/HC5 async 不提供
+adapter，计划期标 `unsupported`，不做“假装支持”的降级。
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
@@ -81,7 +82,7 @@ Apache HC / JDK HttpClient / HttpURLConnection / async-http-client 的调用
 | `astsight/execute/` C7 | ✅ | JUnit XML、确定性归因、只对环境抖动做有界重试 |
 | `astsight/report/` C7.4 | ✅ | JSON + Markdown；用例库版本、待审、需求覆盖、drift 单列 |
 | `astsight/mock/` C3.5.5 | ◐ 核心+执行链路+语义+计划+启动注入 | `dep_id` 唯一性/`route_key`、Host/路径路由、会话分支、drain、晚到调用归因、会话历史、`mock_not_used`、`mock_calls.jsonl`、内嵌 uvicorn；`mock semantics` 生成契约 `success` + 规则分支（可选 `--draft`/`--llm` 候选）；`run --mock-plan` 管理生命周期、写 `run_manifest.json`/`mock_injection.json`；`mock plan` 从 C3 调用点生成计划草案；`agent run` 用注入清单启动 SUT |
-| `java/`（agent） | ✅ OkHttp/Feign/RestTemplate | `astsight-agent-core` + `astsight-agent-http`：premain、admin 路由表拉取、心跳、ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute` 的 URL 改写、`/_agent/unmatched` 零透传、HTTPS 改写为明文；计划内改写失败失败关闭；普通 JVM 与 Spring Boot 3.5.6 fat jar 均已联调通过；WebClient/第三方 SDK/裸 HC/JDK HttpClient 明确不支持 |
+| `java/`（agent） | ✅ OkHttp/Feign/RestTemplate/直连 HC4+HC5 | `astsight-agent-core` + `astsight-agent-http`：premain、admin 路由表拉取、心跳、ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、HC4/HC5 `InternalHttpClient#doExecute` 的 URL 改写、`/_agent/unmatched` 零透传、HTTPS 改写为明文；计划内改写失败失败关闭；普通 JVM（OkHttp、HC4+HC5）与 Spring Boot 3.5.6 fat jar 均已联调通过；WebClient/自有传输 SDK/JDK HttpClient 明确不支持 |
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
 | `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
@@ -497,7 +498,7 @@ token、namespace 和 `mock_calls.jsonl` 路径传给 pytest；运行结束（�
 - `run --mock-plan` 不启动 SUT，也不改写 SUT 配置，只负责“起 Mock + 产出注入事实”；
   需要一条命令完成注入与启动时使用 `agent run`（`astsight/agent/sut.py`）。
 
-### Java HTTP agent（OkHttp / Feign / RestTemplate）
+### Java HTTP agent（OkHttp / Feign / RestTemplate / Apache HttpClient）
 
 agent 从 `GET /_admin/agent/routes` 拉取只读路由表，在出站 HTTP 客户端调用前把
 URL 改写为 `http://<mock>/_dep/<route_key><原路径>?<原 query>`；响应、分支、
@@ -512,9 +513,12 @@ host 放行并在心跳 `passthrough_hosts` 中计数。agent 不持有会话，
   OkHttp / Apache HC 传输都走同一入口；
 - Spring `RestTemplate`：织入 `doExecute`（Spring 5 四参、Spring 6.2 五参），
   与底层 JDK / Apache / OkHttp RequestFactory 无关；
-- 不支持：WebClient/Reactor、第三方 SDK、直接使用 Apache HC 4/5、JDK 11
-  HttpClient、`HttpURLConnection`、async-http-client。计划期即标
-  `unsupported`，不会静默放行。
+- Apache HttpClient 4.3+ / 5.x classic：织入 `InternalHttpClient#doExecute`，
+  覆盖直连 `CloseableHttpClient.execute(...)`；HC5 按描述符适配 5.0–5.4 的
+  参数差异。内置使用未 shaded HC 的 SDK 会顺带被改写；
+- 不支持：WebClient/Reactor、使用自有传输或 shaded HTTP 客户端的第三方
+  SDK、JDK 11 HttpClient、`HttpURLConnection`、async-http-client、Apache HC
+  4.0–4.2/HC5 async。计划期即标 `unsupported`，不会静默放行。
 
 ```bash
 cd java
@@ -534,7 +538,7 @@ token 只走环境变量，不进入进程命令行；jar 路径可用
 `ASTSIGHT_JAVA_AGENT_JAR` 覆盖，默认取仓库构建产物。jar 缺失、token 缺失或
 路径含空格时显式告警 `injection_agent_unavailable:*`，不假装注入成功。
 
-HTTPS 在改写后走明文，不建 TLS、不装 CA。三个 adapter 都用裸 ASM + 反射 bridge
+HTTPS 在改写后走明文，不建 TLS、不装 CA。所有 adapter 都用裸 ASM + 反射 bridge
 实现，避免 Spring Boot fat jar 的 `LaunchedURLClassLoader` 下 ByteBuddy 解析
 `okhttp3.Request` / `feign.Request` 失败。计划内请求若改写失败（bridge 异常、
 签名不兼容等），adapter 抛出 `AgentRewriteException` 让本次调用失败，绝不返回
@@ -548,6 +552,10 @@ HTTPS 在改写后走明文，不建 TLS、不装 CA。三个 adapter 都用裸 
 # 普通 JVM + OkHttp
 ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
   PYTHONPATH=. python -m pytest tests/integration/test_java_agent_okhttp_e2e.py -q
+
+# 普通 JVM + 直连 Apache HttpClient 4/5（同一 JVM 两个 adapter）
+ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_apache_httpclient_e2e.py -q
 
 # Spring Boot 3.5.6 fat jar；先构建样例：
 #   cd java/samples/spring-boot-okhttp && mvn -q -DskipTests package

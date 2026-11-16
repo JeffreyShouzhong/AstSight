@@ -189,7 +189,13 @@ def test_spring_boot_fat_jar_rewrites_https_request(
             time.sleep(0.2)
         assert heartbeat is not None
         adapters = {item["id"] for item in heartbeat["http_adapters"]}
-        assert adapters == {"okhttp", "feign", "resttemplate"}
+        assert adapters == {
+            "okhttp",
+            "feign",
+            "resttemplate",
+            "httpclient4",
+            "httpclient5",
+        }
         assert heartbeat["http_hooked"] >= 3
         assert heartbeat["http_rewrites"] >= 3
         assert heartbeat["http_errors"] == 0

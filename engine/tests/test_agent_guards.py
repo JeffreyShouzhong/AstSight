@@ -254,6 +254,36 @@ def test_injection_for_java_webclient_is_unsupported() -> None:
     assert injection.reason == "client_unsupported"
 
 
+def test_injection_for_java_apache_httpclient_uses_agent_rewrite() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "http:host:api.example.com GET /orders/{}",
+            "dep_type": "http",
+            "evidence": "host",
+            "target": "https://api.example.com/orders/{}",
+            "clients": ["apache-httpclient"],
+            "languages": ["java"],
+        }
+    )
+    assert injection.strategy.value == "agent_rewrite"
+    assert injection.reason == "https_requires_agent_rewrite"
+
+
+def test_injection_for_java_jdk_httpclient_is_unsupported() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "http:host:api.example.com GET /orders/{}",
+            "dep_type": "http",
+            "evidence": "host",
+            "target": "http://api.example.com/orders/{}",
+            "clients": ["httpclient"],
+            "languages": ["java"],
+        }
+    )
+    assert injection.strategy.value == "unsupported"
+    assert injection.reason == "client_unsupported"
+
+
 def test_injection_for_java_unknown_client_is_unsupported() -> None:
     injection = _injection_for(
         {

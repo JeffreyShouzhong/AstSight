@@ -169,7 +169,8 @@ def test_https_request_is_rewritten_and_evidenced(tmp_path: Path) -> None:
                     break
             time.sleep(0.2)
         assert heartbeat is not None
-        assert heartbeat["http_adapters"][0]["id"] == "okhttp"
+        adapter_ids = {item["id"] for item in heartbeat["http_adapters"]}
+        assert "okhttp" in adapter_ids
         assert heartbeat["http_hooked"] >= 1
         assert heartbeat["http_rewrites"] >= 1
         assert heartbeat["http_errors"] == 0

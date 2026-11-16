@@ -685,7 +685,7 @@ agent：ByteBuddy Agent 加载 → filter jar 追加进 classloader
 SUT 启动（AstSight 拉起）
    │  JAVA_TOOL_OPTIONS=-javaagent:astsight-agent.jar=admin=...,token_env=ASTSIGHT_AGENT_TOKEN,sut_id=...
    ▼
-agent：字节码织入（三个 adapter 都用 ASM + 反射 bridge）→ 注册 HTTP adapters（OkHttp/Feign/RestTemplate）
+agent：字节码织入（所有 adapter 都用 ASM + 反射 bridge）→ 注册 HTTP adapters（OkHttp/Feign/RestTemplate/Apache HC4/HC5）
    │  通过 GET /_admin/agent/routes 拉取 route table
    ▼
 启动自检：心跳 pid/jvm_start_time/身份匹配；画像声明的客户端栈均有激活 adapter
@@ -703,8 +703,10 @@ agent：字节码织入（三个 adapter 都用 ASM + 反射 bridge）→ 注册
 - 只改写 URL，不 mock 客户端 bean、不构造响应、不绕过编解码/重试/降级链；
 - HTTPS 仅在 agent 激活时可用：连接建立前改写为明文 Mock 地址，不建 TLS、不装 CA；
 - 计划内请求改写失败必须抛错失败关闭，不能返回原始请求透传到真实下游；
-- WebClient、第三方 SDK、裸 Apache HC/JDK HttpClient/`HttpURLConnection`、
-  async-http-client 不建 adapter，计划期标 `unsupported`；
+- WebClient、自有传输或 shaded HTTP 客户端的第三方 SDK、JDK HttpClient/
+  `HttpURLConnection`、async-http-client、HC 4.0–4.2/HC5 async 不建 adapter，
+  计划期标 `unsupported`；内置未 shaded OkHttp/Apache HC 的 SDK 由对应 adapter
+  顺带覆盖；
 - agent 不持有用例会话，会话仍由执行链路通过 `/_admin/sessions` 建立。
 
 **失败子码与处理**：

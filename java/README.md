@@ -8,7 +8,7 @@ Java agent 在出站 HTTP 客户端调用前改写 URL，把请求定向到引�
 | 模块 | 作用 |
 |---|---|
 | `astsight-agent-core` | `premain`、admin 路由表拉取、路由匹配、心跳、适配器注册表、失败关闭判定 |
-| `astsight-agent-http` | OkHttp / Feign / RestTemplate 适配器（ASM 织入 + 反射 bridge） |
+| `astsight-agent-http` | OkHttp / Feign / RestTemplate / Apache HttpClient 4/5 适配器（ASM 织入 + 反射 bridge） |
 | `astsight-agent` | 最终 shaded jar，入口 `io.astsight.agent.core.AstSightAgent` |
 
 字节码目标为 JDK 8；构建使用 JDK 8+（当前在 JDK 26 上验证，实测运行矩阵
@@ -16,7 +16,7 @@ Java agent 在出站 HTTP 客户端调用前改写 URL，把请求定向到引�
 Jackson 打进 shaded jar；OkHttp、Feign、Spring 均为 `provided`，不随 agent
 分发。
 
-三个 adapter 都使用裸 ASM 而非 ByteBuddy Advice：Spring Boot fat jar 由
+所有 adapter 都使用裸 ASM 而非 ByteBuddy Advice：Spring Boot fat jar 由
 `LaunchedURLClassLoader` 加载应用依赖时，ByteBuddy 解析方法签名会尝试从
 agent 类加载器加载 `okhttp3.Request` 等类型并抛 `NoClassDefFoundError`。
 ASM 只按名称与 JVM 描述符匹配方法，注入代码只引用 JDK 类型和对应 bridge；
@@ -89,23 +89,35 @@ Mock，不建立 TLS、不安装测试 CA、不做 MITM。
 | OkHttp 3/4/5 | `OkHttpClient#newCall(Request)` | 直接使用 OkHttp 的调用 |
 | Feign（阻塞） | `SynchronousMethodHandler#targetRequest` | 默认 / OkHttp / Apache HC 传输；Feign 10–13 的 `Request.create` 重载动态适配 |
 | Spring RestTemplate | `RestTemplate#doExecute` | Spring 5 四参与 Spring 6.2 五参；与 RequestFactory 无关 |
+| Apache HttpClient 4.3+ | `InternalHttpClient#doExecute` | 直连 `CloseableHttpClient.execute(...)`；含内部使用 HC4 的 SDK |
+| Apache HttpClient 5 classic | `InternalHttpClient#doExecute` | 直连 `CloseableHttpClient.execute(...)`；5.0–5.4 参数差异按描述符适配 |
 
-明确的非目标：WebClient/Reactor、第三方 SDK（内部自己建连接）、直接使用
-Apache HttpClient 4/5、JDK 11 `HttpClient`、`HttpURLConnection`、
-async-http-client。它们无法在 HTTP 边界统一改写，计划期标 `unsupported`，
-不会“看起来支持、实际透传”。Dubbo 仍按原方案走 Filter + ByteBuddy。
+内置使用上述客户端的第三方 SDK（例如 HC4/HC5 之上的对象存储、检索 SDK）
+会顺带被对应 adapter 改写到 Mock；但计划期能否识别该依赖仍取决于画像能否
+从源码或配置拿到 URL，未进入路由表的 host 一律放行（心跳单独计数）。
+
+明确的非目标：WebClient/Reactor、使用自有传输或 shaded/relocated HTTP
+客户端的第三方 SDK、JDK 11 `HttpClient`、`HttpURLConnection`、
+async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 HTTP
+边界统一改写，计划期标 `unsupported`，不会“看起来支持、实际透传”。Dubbo
+仍按原方案走 Filter + ByteBuddy。
 
 可选端到端测试（默认跳过）：
 
 - `engine/tests/integration/test_java_agent_okhttp_e2e.py`：普通 JVM + OkHttp。
+- `engine/tests/integration/test_java_agent_apache_httpclient_e2e.py`：同一 JVM
+  内依次用 HC4 与 HC5 直连 HTTPS，验证两个 adapter 共存、证据与心跳。
 - `engine/tests/integration/test_java_agent_spring_boot_e2e.py`：Spring Boot
   3.5.6 fat jar（`LaunchedURLClassLoader`），同一进程验证 OkHttp / Feign /
   RestTemplate 三条 HTTPS 出站、证据与心跳。
 
-两者均已实测通过。
+三者均已实测通过。
 
 ## 已知边界
 
 - OkHttp 3/4/5 的 `newCall(Request)` 二进制签名相同；尚未逐一跑版本矩阵。
+- Apache HttpClient 仅覆盖 4.3+ 与 5.x classic 的 `InternalHttpClient`；
+  4.0–4.2 的 `AbstractHttpClient`、HC5 async 与自定义 `CloseableHttpClient`
+  子类不在范围内（计划期不会因此标 supported）。
 - 改写发生在 HTTP 边界，不绕过 SUT 的编解码、重试、降级链。
 - 签名、pinning、连接池复用、重定向与异步链路的副作用尚未验证。

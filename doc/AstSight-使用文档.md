@@ -1168,10 +1168,13 @@ PYTHONPATH=. python -m astsight agent run \
 - 分析阶段 SUT 尚未启动，因此不能从 `--base-url` 拉取契约；
 - 启动期注入支持环境变量形式的 `url_override`、Spring Cloud 静态实例的
   `discovery_override` 和显式 `http_proxy`；Java SUT 的 `agent_rewrite` 会通过
-  `JAVA_TOOL_OPTIONS` 自动加载 agent，支持 OkHttp、Feign（阻塞）和
-  RestTemplate，HTTPS 目标改写为明文 Mock 地址；
-- WebClient、第三方 SDK、直接 Apache HC / JDK HttpClient / `HttpURLConnection` /
-  async-http-client 不建设 adapter，计划期标 `unsupported`，不静默透传；
+  `JAVA_TOOL_OPTIONS` 自动加载 agent，支持 OkHttp、Feign（阻塞）、RestTemplate
+  和直连 Apache HttpClient 4.3+/5.x classic，HTTPS 目标改写为明文 Mock 地址；
+  内置使用未 shaded OkHttp / Apache HC 的 SDK 会顺带被改写，但计划期能否识别
+  该依赖仍取决于画像能否解析出 URL；
+- WebClient、自有传输或 shaded HTTP 客户端的第三方 SDK、JDK HttpClient /
+  `HttpURLConnection` / async-http-client / HC 4.0–4.2 / HC5 async 不建设
+  adapter，计划期标 `unsupported`，不静默透传；
 - 下游自动识别覆盖 Python 的 `requests`/`httpx`/`urllib`，以及 Java（含 Feign
   接口）、Go/Node 的常见 HTTP 客户端；生成式 SDK、动态代理和注册中心发现的
   服务地址仍不识别，会明确落在 `downstream_unsupported`；

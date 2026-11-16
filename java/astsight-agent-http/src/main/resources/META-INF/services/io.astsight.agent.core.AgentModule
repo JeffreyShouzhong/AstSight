@@ -1,3 +1,5 @@
 io.astsight.agent.http.OkHttpModule
 io.astsight.agent.http.FeignModule
 io.astsight.agent.http.RestTemplateModule
+io.astsight.agent.http.HttpClient4Module
+io.astsight.agent.http.HttpClient5Module

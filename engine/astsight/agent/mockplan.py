@@ -32,7 +32,12 @@ _JAVA_CLIENTS = {
     "httpclient",
     "apache-httpclient",
 }
-_JAVA_SUPPORTED_CLIENTS = {"okhttp", "feign", "resttemplate"}
+_JAVA_SUPPORTED_CLIENTS = {
+    "okhttp",
+    "feign",
+    "resttemplate",
+    "apache-httpclient",
+}
 
 
 def _is_java_dep(dep: dict[str, Any]) -> bool:
@@ -43,10 +48,11 @@ def _is_java_dep(dep: dict[str, Any]) -> bool:
 
 
 def _java_injection(dep: dict[str, Any], dep_id: str) -> MockPlanInjection:
-    """Java 只支持 OkHttp/Feign/RestTemplate；其余客户端在计划期阻断。
+    """Java 只支持 OkHttp/Feign/RestTemplate/直连 Apache HttpClient。
 
-    WebClient/第三方 SDK 不建设 adapter；若它们的地址来自可覆盖配置，
-    仍允许 `url_override`（这是纯配置注入，不依赖 agent）。
+    WebClient/JDK HttpClient 不为它们建设专用 adapter；使用自有传输或
+    shaded HTTP 客户端的第三方 SDK 也不建。若地址来自可覆盖配置，仍允许
+    `url_override`（纯配置注入，不依赖 agent）。
     """
     config_keys = [str(key) for key in dep.get("config_keys") or [] if str(key)]
     target = str(dep.get("target") or "")

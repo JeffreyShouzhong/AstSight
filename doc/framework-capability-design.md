@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（v4.16，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛）
+# AstSight — 能力设计规格说明书（v4.17，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -1598,17 +1598,19 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | 已实现 | OkHttp 3/4/5 | `OkHttpClient#newCall(Request)` | 入口 ASM 注入，替换 `Request` 参数（`newBuilder().url(...)`），经反射桥操作 |
 | 已实现 | Feign（阻塞） | `SynchronousMethodHandler#targetRequest(RequestTemplate)` | `ARETURN` 前反射重建 `feign.Request`；默认 / OkHttp / Apache HC 传输都经过该入口 |
 | 已实现 | Spring `RestTemplate` | `RestTemplate#doExecute(URI, HttpMethod, ...)` | 替换 URI 参数，并用动态代理包 `RequestCallback` 写证据头；覆盖所有 `RequestFactory` |
-| 不建设 | 直接 Apache HC 4/5、JDK 11 `HttpClient`、`HttpURLConnection`、async-http-client、WebClient/Reactor、第三方 SDK | — | 计划期标 `unsupported`（`client_unsupported` / `client_unknown`），依赖用例 `blocked`，不做“看起来支持、实际透传”的降级 |
+| 已实现 | Apache HttpClient 4.3+ | `InternalHttpClient#doExecute(HttpHost, HttpRequest, HttpContext)` | 入口 ASM 注入，同时替换 `target` 与请求 URI；`target` 必须改为 Mock 端点（`doExecute` 会把它直接交给 `RoutePlanner`），含内部使用未 shaded HC4 的 SDK |
+| 已实现 | Apache HttpClient 5 classic | `InternalHttpClient#doExecute(HttpHost, ClassicHttpRequest, HttpContext)` | 同上，按描述符适配 5.0–5.4 参数差异；Mock target 用 `HttpHost.create(URI)` 构造；HC5 async 不覆盖 |
+| 不建设 | JDK 11 `HttpClient`、`HttpURLConnection`、async-http-client、WebClient/Reactor、自有传输或 shaded/relocated HTTP 客户端的第三方 SDK、HC 4.0–4.2、HC5 async | — | 计划期标 `unsupported`（`client_unsupported` / `client_unknown`），依赖用例 `blocked`，不做“看起来支持、实际透传”的降级 |
 
-  三个 adapter 可同时激活，用“目标已是 Mock 地址或带 `/_dep/` 前缀”做幂等判断。每个 adapter 声明版本范围与目标类，按类可加载性与 `MANIFEST.MF` 版本判断是否激活；adapter 独立类加载器，核心只传 JDK 类型。
+  所有 adapter 可同时激活，用“目标已是 Mock 地址或带 `/_dep/` 前缀”做幂等判断。每个 adapter 声明版本范围与目标类，按类可加载性与 `MANIFEST.MF` 版本判断是否激活；adapter 独立类加载器，核心只传 JDK 类型。
 
-  P0 实测约束（三个 adapter 通用）：Spring Boot fat jar 由 `LaunchedURLClassLoader` 加载应用依赖，ByteBuddy 的 Advice/AgentBuilder 在解析方法签名时会从 agent 类加载器加载 `okhttp3.Request` / `feign.Request` 并抛 `NoClassDefFoundError`。因此 adapter 统一使用裸 ASM `ClassFileTransformer`：只按方法名和 JVM 描述符匹配，注入代码只引用 JDK 类型和 adapter 自己的 bridge 类；bridge 全程用反射读写应用侧对象（OkHttp 的 `Request.Builder`、Feign 的 `Request.create` 重载、RestTemplate 的 `RequestCallback` 代理）。
+  P0 实测约束（所有 adapter 通用）：Spring Boot fat jar 由 `LaunchedURLClassLoader` 加载应用依赖，ByteBuddy 的 Advice/AgentBuilder 在解析方法签名时会从 agent 类加载器加载 `okhttp3.Request` / `feign.Request` 并抛 `NoClassDefFoundError`。因此 adapter 统一使用裸 ASM `ClassFileTransformer`：只按方法名和 JVM 描述符匹配，注入代码只引用 JDK 类型和 adapter 自己的 bridge 类；bridge 全程用反射读写应用侧对象（OkHttp 的 `Request.Builder`、Feign 的 `Request.create` 重载、RestTemplate 的 `RequestCallback` 代理、HC 的 `setURI`/`setUri` 与 `HttpHost` 构造）。HC4/HC5 共用同一个 bridge，按类名前缀 `org.apache.hc.` 区分版本。
 
 - **失败关闭（adapter 级）**：`AgentRuntime.isPlanned` 区分“计划内未命中/歧义/未知”与计划外 host；计划内请求若 `rewrite` 返回未改写或 bridge 抛异常，adapter 必须抛 `AgentRewriteException` 让本次调用失败，绝不返回原始请求透传到真实下游。计划外主机原样放行并计数。
 - **HTTPS**：仅该 dep 选 `agent_rewrite` 时允许 `https://` 目标；改写后为 `http://`，不建立 TLS。客户端拒绝 scheme 变化、URL 不可改或改写后仍需 TLS 的，标 `agent_rewrite_unsupported`。
 - **证据**：仍只写 `mock_calls.jsonl`；`MockCall` 增加 `adapter`、`mode="agent_rewrite"`、`original_host`。未命中由 Mock 服务的 `/_agent/unmatched` 统一记录，不新增第二份 agent 日志。
-- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定；ByteBuddy 预留给 Dubbo）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（后续 Filter 接入，共用 core）。字节码目标 JDK 8，实测矩阵 JDK 8/11/17/21；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar 与 sha256 manifest），引擎按精确版本校验，运行期不下载；缺 jar 报 `agent_unavailable`。
-- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；Dubbo Filter 后续接入同一 core；WebClient / 裸 HC / JDK HttpClient / 第三方 SDK 明确不建设 adapter。
+- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定；ByteBuddy 预留给 Dubbo）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate / Apache HC 4/5，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（后续 Filter 接入，共用 core）。字节码目标 JDK 8，实测矩阵 JDK 8/11/17/21；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar 与 sha256 manifest），引擎按精确版本校验，运行期不下载；缺 jar 报 `agent_unavailable`。
+- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；Dubbo Filter 后续接入同一 core；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。后续顺序（版本矩阵 → wheel 分发 → `agent run` 全链路 e2e）见 `doc/决策记录.md` §17「后续工作」。
 
 **桩响应模型**：
 
@@ -2737,7 +2739,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M2.11 | **多 SUT 并发隔离（5.5）**：`--sut-id` 与 `namespace=sut_id`、端口 `bind(:0)` 原子分配 + `run_manifest`、心跳身份字段、每实例 token、DB `run_scope` 前缀、用例库 `flock`、报告 `instance` 块 | 同环境并发 ≥2 个 SUT 时无端口/命名空间冲突；心跳与 manifest 身份一致；DB 清理只影响本 run；并发 approve 不会丢更新 |
 | M2.12 | **gRPC 下游 Mock（C3.5.4）**：gripmock 随包二进制（平台专用 wheel，`linux/amd64` + `linux/arm64`）、每命名空间进程、stub API、history 取证、target 改写、已知缺陷规避、失败子码 | 安装 `astsight[grpc-mock]` 即用，不要求用户单独下载；版本/sha256 校验通过；矩阵外显式 `mock_binary_missing`；绑定桩命中 ≥1 次 |
 | M2.13 | **HTTP 下游 Mock（C3.5.5，仅明文）**：内嵌 FastAPI/uvicorn、每 `sut_id` 实例、`bind(:0)` + manifest、`dep_id` 唯一性算法、`route_key`、v1 承诺的下游专属 `url_override` 与显式 `http_proxy`（`discovery_override`/透明代理条件支持）、会话分支、`mock_calls.jsonl` 证据、HTTPS `tls_not_supported` | 两个服务同路径不撞 `dep_id`；同端点多调用点只生成一个 dep；未知/歧义路由阻断；共享 base URL 报 `mock_config_ambiguous`；绑定 route 命中 ≥1；HTTPS 显式 `unsupported` 且用例 `blocked` |
-| M2.14 | **HTTP agent 改写（C3.5.5 v4.15）**：`agent_rewrite` 策略、`astsight-agent` 共用外壳、OkHttp/HC4/Feign/RestTemplate 等 adapter、URL 改写与零透传、HTTPS 条件放开、心跳与能力矩阵、独立 wheel 分发 | P0 真实 Spring Boot 样例跑通；配置能覆盖的 dep 仍走配置；计划内未命中不透传；HTTPS 仅在 agent 时可用；adapter 缺失/改写失败显式出报；未实测栈不写入矩阵 |
+| M2.14 | **HTTP agent 改写（C3.5.5 v4.15，v4.17 扩 HC）**：`agent_rewrite` 策略、`astsight-agent` 共用外壳、OkHttp/Feign/RestTemplate/Apache HC4/HC5 等 adapter、URL 改写与零透传、HTTPS 条件放开、心跳与能力矩阵、独立 wheel 分发 | P0 真实 Spring Boot 样例跑通；配置能覆盖的 dep 仍走配置；计划内未命中不透传；HTTPS 仅在 agent 时可用；adapter 缺失/改写失败显式出报；未实测栈不写入矩阵 |
 | M3 | C5 数据准备（外键闭包 + SQL 造数） | 订单场景 3 表闭包造数成功 |
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full`/`replay` + C2 召回率基准 | 20 个真实分支人工标注；replay 可重放 |
