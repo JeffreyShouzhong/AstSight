@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（v4.17，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter）
+# AstSight — 能力设计规格说明书（v4.20，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -1548,7 +1548,8 @@ http:{downstream_key} {METHOD} {path_key}
 3. 路径前缀 `/_agent/unmatched` → 按 `X-AstSight-Reason`（`unknown|ambiguous`）记录未命中并返回 502，供 agent 上报计划内未命中，不参与正常路由；
 4. `Host` 头（小写，含可选端口）→ 命中 host 组，再在该组内按唯一 `(METHOD, path_key)` 命中 dep（`discovery_override` 与 `http_proxy`）；
 5. 全表唯一 `(METHOD, path_key)` 匹配 → 命中（仅当路由表内恰好一条）；
-6. 无命中 → `mock_route_unknown`；多条命中 → `mock_route_ambiguous`；**任何情况都不透传真实下游**。
+6. 候选里恰好一条字面量（`path_key` 不含 `{}`）时优先它（字面量优先，v4.19）；
+7. 无命中 → `mock_route_unknown`；仍有多条命中 → `mock_route_ambiguous`；**任何情况都不透传真实下游**。
 
 Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调用记录；该响应对 SUT 只是普通下游错误，**不得被当作有效语义分支**，框架侧直接把用例标 `blocked`。
 
@@ -1589,7 +1590,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 
 - **加载形态**：`-javaagent:astsight-agent.jar=admin=<mock admin endpoint>,token=<token>,sut_id=<id>`；`agent run` 通过 `JAVA_TOOL_OPTIONS` 自动加载，并使用 `token_env=ASTSIGHT_AGENT_TOKEN` 从环境变量取 token，避免 token 出现在命令行与 JVM 启动日志中。agent 版本、adapter 激活清单写入心跳，启动自检见 C3.5.3。
 - **路由表获取**：agent 通过 `GET /_admin/agent/routes`（Bearer token）读取 route table（dep_id / route_key / method / path_key / host / target）与 Mock 端点；不读计划文件、不写会话。
-- **运行时匹配**：归一化实际 URL 的 host 与 path，按 `host + METHOD + path_key` 命中；host 不唯一或缺失时，仅当全表 `(METHOD, path_key)` 唯一才命中；仍无法唯一确定且 host/服务名属于计划内下游时，改写为保留路径 `/_agent/unmatched`（reason=`unknown|ambiguous`），由 Mock 返回 502 并留证；计划外主机放行。已是 Mock 端点或路径以 `/_dep/`、`/_agent/` 开头的请求跳过，防循环与二次改写。
+- **运行时匹配**：归一化实际 URL 的 host 与 path，按 `host + METHOD + path_key` 命中；同类候选里恰好一条字面量路径（`path_key` 不含 `{}`）时优先它（v4.19，Python `RouteTable` 与 Java `RouteTableSnapshot` 同规则）；host 不唯一或缺失时回落到全表 `(METHOD, path_key)`，同样先按字面量优先、再要求唯一；仍无法唯一确定且 host/服务名属于计划内下游时，改写为保留路径 `/_agent/unmatched`（reason=`unknown|ambiguous`），由 Mock 返回 502 并留证；计划外主机放行。已是 Mock 端点或路径以 `/_dep/`、`/_agent/` 开头的请求跳过，防循环与二次改写。
 - **零透传**：计划内下游未命中必须阻断，不放行真实调用；计划外主机的真实调用必须在报告中列出，不得静默。
 - **adapter 矩阵**（范围收敛为“主流阻塞客户端”，不追求全量 HTTP 出站）：
 
@@ -1599,7 +1600,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | 已实现 | Feign（阻塞） | `SynchronousMethodHandler#targetRequest(RequestTemplate)` | `ARETURN` 前反射重建 `feign.Request`；默认 / OkHttp / Apache HC 传输都经过该入口 |
 | 已实现 | Spring `RestTemplate` | `RestTemplate#doExecute(URI, HttpMethod, ...)` | 替换 URI 参数，并用动态代理包 `RequestCallback` 写证据头；覆盖所有 `RequestFactory` |
 | 已实现 | Apache HttpClient 4.3+ | `InternalHttpClient#doExecute(HttpHost, HttpRequest, HttpContext)` | 入口 ASM 注入，同时替换 `target` 与请求 URI；`target` 必须改为 Mock 端点（`doExecute` 会把它直接交给 `RoutePlanner`），含内部使用未 shaded HC4 的 SDK |
-| 已实现 | Apache HttpClient 5 classic | `InternalHttpClient#doExecute(HttpHost, ClassicHttpRequest, HttpContext)` | 同上，按描述符适配 5.0–5.4 参数差异；Mock target 用 `HttpHost.create(URI)` 构造；HC5 async 不覆盖 |
+| 已实现 | Apache HttpClient 5 classic | `InternalHttpClient#doExecute(HttpHost, ClassicHttpRequest, HttpContext)` | 同上，按描述符适配 5.0–5.6 参数差异；Mock target 用 `HttpHost.create(URI)` 构造；HC5 async 不覆盖 |
 | 不建设 | JDK 11 `HttpClient`、`HttpURLConnection`、async-http-client、WebClient/Reactor、自有传输或 shaded/relocated HTTP 客户端的第三方 SDK、HC 4.0–4.2、HC5 async | — | 计划期标 `unsupported`（`client_unsupported` / `client_unknown`），依赖用例 `blocked`，不做“看起来支持、实际透传”的降级 |
 
   所有 adapter 可同时激活，用“目标已是 Mock 地址或带 `/_dep/` 前缀”做幂等判断。每个 adapter 声明版本范围与目标类，按类可加载性与 `MANIFEST.MF` 版本判断是否激活；adapter 独立类加载器，核心只传 JDK 类型。
@@ -1609,8 +1610,15 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 - **失败关闭（adapter 级）**：`AgentRuntime.isPlanned` 区分“计划内未命中/歧义/未知”与计划外 host；计划内请求若 `rewrite` 返回未改写或 bridge 抛异常，adapter 必须抛 `AgentRewriteException` 让本次调用失败，绝不返回原始请求透传到真实下游。计划外主机原样放行并计数。
 - **HTTPS**：仅该 dep 选 `agent_rewrite` 时允许 `https://` 目标；改写后为 `http://`，不建立 TLS。客户端拒绝 scheme 变化、URL 不可改或改写后仍需 TLS 的，标 `agent_rewrite_unsupported`。
 - **证据**：仍只写 `mock_calls.jsonl`；`MockCall` 增加 `adapter`、`mode="agent_rewrite"`、`original_host`。未命中由 Mock 服务的 `/_agent/unmatched` 统一记录，不新增第二份 agent 日志。
-- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定；ByteBuddy 预留给 Dubbo）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate / Apache HC 4/5，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（后续 Filter 接入，共用 core）。字节码目标 JDK 8，实测矩阵 JDK 8/11/17/21；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar 与 sha256 manifest），引擎按精确版本校验，运行期不下载；缺 jar 报 `agent_unavailable`。
-- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；Dubbo Filter 后续接入同一 core；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。后续顺序（版本矩阵 → wheel 分发 → `agent run` 全链路 e2e）见 `doc/决策记录.md` §17「后续工作」。
+- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定；ByteBuddy 预留给 Dubbo）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate / Apache HC 4/5，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（后续 Filter 接入，共用 core）。字节码目标 JDK 8，实测 JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar、`manifest.json`（版本/协议号/sha256/大小）与 RECORD），由 `tools/build_agent_wheel.py` 可复现构建，运行期不下载；引擎按 环境变量 → wheel → 仓库 顺序解析并精确校验，缺 jar/校验和/版本不符报 `injection_agent_unavailable:<dep>:<reason>`。
+- **画像前提（v4.18）**：Java 的 OkHttp / Feign / RestTemplate / Apache HC 调用点在 HTTPS 下仍要保留为 dep（`build_dep_id_plan(https_call_sites=...)`），否则计划层看不到而 `agent_rewrite` 不可达；其余语言与 WebClient / JDK HttpClient 继续 `tls_not_supported`。OkHttp `Request.Builder` 未写方法时按 GET 记录。
+- **HTTP/2 prior-knowledge（v4.20）**：Mock 与 agent 只处理 HTTP/1.1，h2c 不建设。
+  agent 的 URL 改写与客户端协议无关，h2c 请求同样改写为 `/_dep/<route_key>`；
+  Mock 无法解析 HTTP/2 preface，SUT 得到 IOException。失败必须显式（SUT 非 0
+  退出）且真实下游 0 连接，不允许悄悄回落或把该失败当用例通过；负例 e2e
+  `test_java_agent_h2_prior_knowledge_e2e.py` 固定这一行为。
+- **匹配边界（v4.19）**：同一 host + method 下字面量路径优先于 `{}` 模板（`/orders/7` 命中字面量路由，`/orders/8` 才落到 `/orders/{}`）；两个字面量或两个模板同时命中时仍是 `mock_route_ambiguous` → `/_agent/unmatched` 502，零透传，要求画像消歧；不做更细的模板特异性排序。
+- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo Filter 后续接入同一 core；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；剩余项（Dubbo P3）见 `doc/决策记录.md` §17「后续工作」。
 
 **桩响应模型**：
 

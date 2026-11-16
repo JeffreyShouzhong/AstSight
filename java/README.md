@@ -30,6 +30,19 @@ mvn -q -DskipTests package
 # java/astsight-agent/target/astsight-agent.jar
 ```
 
+打包成随引擎分发的 wheel（会先执行 `mvn package`）：
+
+```bash
+python tools/build_agent_wheel.py
+# dist/astsight_java_agent-0.1.0.dev0-py3-none-any.whl
+```
+
+wheel 内含 `astsight_java_agent/manifest.json`：`version`（PEP 440）、
+`jar_version`（Maven 版本）、`protocol`、`sha256`、`size`。构建同时写 sidecar
+`target/astsight-agent.jar.manifest.json`，源码树里的 jar 也能被校验。引擎侧
+版本常量在 `engine/astsight/agent/jar.py`，测试断言它与 `java/pom.xml` 的版本
+归一结果一致。
+
 ## 启动
 
 ```bash
@@ -56,6 +69,8 @@ agent 从 `GET /_admin/agent/routes` 拿到 Mock endpoint 与
 `route_key/dep_id/method/path_key/host`，再按 Host + method + 路径匹配：
 
 - 命中：改写为 `http://<mock>/_dep/<route_key><原路径>?<原 query>`。
+- 同一 host + method 下字面量路径优先于 `{}` 模板（`/orders/7` 先于
+  `/orders/{}`）；多个字面量或多个模板仍按歧义处理。
 - 计划内 host 未命中：改写为 `/_agent/unmatched`，Mock 返回 502 并记录
   `mock_route_unknown` / `mock_route_ambiguous`，不放行真实下游。
 - 计划外 host：放行，心跳 `passthrough_hosts` 计数，报告必须列出。
@@ -65,6 +80,24 @@ agent 从 `GET /_admin/agent/routes` 拿到 Mock endpoint 与
 
 HTTPS 只在 `agent_rewrite` 策略下支持：agent 把 scheme 改写为 `http` 后访问
 Mock，不建立 TLS、不安装测试 CA、不做 MITM。
+
+## 分发与解析
+
+引擎按顺序解析 agent jar，只有校验通过才会注入：
+
+1. `ASTSIGHT_JAVA_AGENT_JAR`：显式覆盖，只认该路径，缺失不回退；
+2. 已安装的 `astsight-java-agent` wheel：必须带 `manifest.json`，校验
+   sha256、大小、版本与协议号；
+3. 仓库默认 `java/astsight-agent/target/astsight-agent.jar`：有 sidecar 就校验，
+   没有则按未校验的开发构建接受，但版本仍须匹配。
+
+失败不静默降级，而是告警
+`injection_agent_unavailable:<dep>:<reason>`，reason 包括
+`agent_jar_missing`、`agent_jar_path_has_space`、`agent_jar_unreadable`、
+`agent_jar_version_mismatch`、`agent_jar_manifest_missing`、
+`agent_jar_manifest_invalid`、`agent_jar_checksum_mismatch`、
+`agent_jar_size_mismatch`、`agent_jar_protocol_mismatch`、`token_missing`、
+`endpoint_missing`。
 
 ## 证据
 
@@ -95,6 +128,8 @@ Mock，不建立 TLS、不安装测试 CA、不做 MITM。
 内置使用上述客户端的第三方 SDK（例如 HC4/HC5 之上的对象存储、检索 SDK）
 会顺带被对应 adapter 改写到 Mock；但计划期能否识别该依赖仍取决于画像能否
 从源码或配置拿到 URL，未进入路由表的 host 一律放行（心跳单独计数）。
+不做 SDK 专用端点发现：区域/签名/加密配置里拼出来的地址扫不可靠，能识别就
+纳入，识别不到就留空并在报告中列出。
 
 明确的非目标：WebClient/Reactor、使用自有传输或 shaded/relocated HTTP
 客户端的第三方 SDK、JDK 11 `HttpClient`、`HttpURLConnection`、
@@ -110,14 +145,26 @@ async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 
 - `engine/tests/integration/test_java_agent_spring_boot_e2e.py`：Spring Boot
   3.5.6 fat jar（`LaunchedURLClassLoader`），同一进程验证 OkHttp / Feign /
   RestTemplate 三条 HTTPS 出站、证据与心跳。
+- `engine/tests/integration/test_java_agent_matrix_e2e.py`：版本矩阵，按
+  `ASTSIGHT_JAVA_AGENT_MATRIX_JDKS` 指定的 JDK 列表逐个编译/运行样例，覆盖
+  OkHttp 3.14.9 / 4.12.0 / 5.5.1、Feign 10.12 / 11.10 / 12.5 / 13.5、
+  HC4 4.3.6 / 4.4.1 / 4.5.14、HC5 5.0 / 5.1 / 5.2.3 / 5.3.1 / 5.4.1 / 5.6.5。
+- `engine/tests/integration/test_java_agent_h2_prior_knowledge_e2e.py`：h2c 负例。
+  OkHttp `Protocol.H2_PRIOR_KNOWLEDGE` 直连 Mock，断言改写发生、SUT 显式失败、
+  真实下游 0 连接（零透传）。
 
-三者均已实测通过。
+以上均已实测通过；版本矩阵在 JDK 8/11/17/21/26 上共 80 个 JDK×客户端组合
+全部通过，Spring Boot 样例在 JDK 17/21/26 通过。
 
 ## 已知边界
 
-- OkHttp 3/4/5 的 `newCall(Request)` 二进制签名相同；尚未逐一跑版本矩阵。
-- Apache HttpClient 仅覆盖 4.3+ 与 5.x classic 的 `InternalHttpClient`；
-  4.0–4.2 的 `AbstractHttpClient`、HC5 async 与自定义 `CloseableHttpClient`
-  子类不在范围内（计划期不会因此标 supported）。
+- OkHttp 3.14.9 / 4.12.0 / 5.5.1 已实测；`newCall(Request)` 二进制签名相同，
+  5.x 需使用 `okhttp-jvm` 坐标与 Kotlin 运行时。
+- Apache HttpClient 实测 HC4 4.3.6 / 4.4.1 / 4.5.14 与 HC5 5.0–5.6.5；仅覆盖
+  4.3+ 与 5.x classic 的 `InternalHttpClient`，4.0–4.2 的 `AbstractHttpClient`、
+  HC5 async 与自定义 `CloseableHttpClient` 子类不在范围内（计划期不会因此标
+  supported）。
 - 改写发生在 HTTP 边界，不绕过 SUT 的编解码、重试、降级链。
+- HTTP/2 prior-knowledge（h2c）不支持：Mock 只讲 HTTP/1.1，改写后的 h2c
+  请求会显式失败；负例 e2e 验证此时真实下游 0 连接，不会悄悄回落。
 - 签名、pinning、连接池复用、重定向与异步链路的副作用尚未验证。

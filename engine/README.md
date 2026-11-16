@@ -502,9 +502,11 @@ token、namespace 和 `mock_calls.jsonl` 路径传给 pytest；运行结束（�
 
 agent 从 `GET /_admin/agent/routes` 拉取只读路由表，在出站 HTTP 客户端调用前把
 URL 改写为 `http://<mock>/_dep/<route_key><原路径>?<原 query>`；响应、分支、
-会话与 `mock_calls.jsonl` 仍由内嵌 Mock 产生。计划内 host 未命中改写为
-`/_agent/unmatched`（502 + `mock_route_unknown`/`mock_route_ambiguous`），计划外
-host 放行并在心跳 `passthrough_hosts` 中计数。agent 不持有会话，不构造响应。
+会话与 `mock_calls.jsonl` 仍由内嵌 Mock 产生。路由匹配与 Mock 端同规则：同类
+候选里恰好一条字面量路径时优先它（`/orders/7` 先于 `/orders/{}`），多个字面量
+或多个模板仍是歧义。计划内 host 未命中改写为 `/_agent/unmatched`（502 +
+`mock_route_unknown`/`mock_route_ambiguous`），计划外 host 放行并在心跳
+`passthrough_hosts` 中计数。agent 不持有会话，不构造响应。
 
 支持范围：
 
@@ -534,9 +536,14 @@ admin=http://127.0.0.1:36000,token=<mock-token>,sut_id=<sut> \
 - `JAVA_TOOL_OPTIONS=-javaagent:<jar>=admin=<mock>,token_env=ASTSIGHT_AGENT_TOKEN,sut_id=<sut>`
 - `ASTSIGHT_AGENT_TOKEN=<mock-token>`
 
-token 只走环境变量，不进入进程命令行；jar 路径可用
-`ASTSIGHT_JAVA_AGENT_JAR` 覆盖，默认取仓库构建产物。jar 缺失、token 缺失或
-路径含空格时显式告警 `injection_agent_unavailable:*`，不假装注入成功。
+token 只走环境变量，不进入进程命令行。jar 解析顺序为
+`ASTSIGHT_JAVA_AGENT_JAR`（显式覆盖）→ 已安装的 `astsight-java-agent` wheel
+（校验 `manifest.json` 的 sha256 / 大小 / 版本 / 协议号）→ 仓库构建产物
+（有 sidecar 就校验，没有则按开发构建接受）。期望版本是
+`astsight.agent.jar.AGENT_VERSION`，可用 `ASTSIGHT_JAVA_AGENT_REQUIRED_VERSION`
+覆盖。jar 缺失、版本或校验和不符、token 缺失、路径含空格都显式告警
+`injection_agent_unavailable:<dep>:<reason>`，不假装注入成功。wheel 构建见
+`java/README.md`（`python tools/build_agent_wheel.py`）。
 
 HTTPS 在改写后走明文，不建 TLS、不装 CA。所有 adapter 都用裸 ASM + 反射 bridge
 实现，避免 Spring Boot fat jar 的 `LaunchedURLClassLoader` 下 ByteBuddy 解析
@@ -557,11 +564,28 @@ ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
 ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
   PYTHONPATH=. python -m pytest tests/integration/test_java_agent_apache_httpclient_e2e.py -q
 
+# HTTP/2 prior-knowledge 负例（改写发生、SUT 显式失败、真实下游 0 连接）
+ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \n  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_h2_prior_knowledge_e2e.py -q
+
 # Spring Boot 3.5.6 fat jar；先构建样例：
 #   cd java/samples/spring-boot-okhttp && mvn -q -DskipTests package
 ASTSIGHT_JAVA_AGENT_SPRING_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
   PYTHONPATH=. python -m pytest tests/integration/test_java_agent_spring_boot_e2e.py -q
+
+# 版本矩阵：JDK 列表用 ; 或 , 分隔；首次运行由 Maven 解析依赖并缓存
+ASTSIGHT_JAVA_AGENT_MATRIX_E2E=1 \
+  ASTSIGHT_JAVA_AGENT_MATRIX_JDKS="<JDK8>;<JDK11>;<JDK17>;<JDK21>" \
+  ASTSIGHT_MAVEN_JAVA_HOME=<JDK17+> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_matrix_e2e.py -q
+
+# agent run 全链路：Java 画像 → 计划 → 注入 → 执行 → 报告（需要 agent jar 与样例 fat jar）
+ASTSIGHT_JAVA_AGENT_FLOW_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK17+> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_flow_e2e.py -q
 ```
+
+矩阵已实测 JDK 8/11/17/21/26 × 16 个客户端版本（OkHttp 3.14.9 / 4.12.0 /
+5.5.1；Feign 10.12 / 11.10 / 12.5 / 13.5；HC4 4.3.6 / 4.4.1 / 4.5.14；
+HC5 5.0 / 5.1 / 5.2.3 / 5.3.1 / 5.4.1 / 5.6.5）共 80 个组合全部通过。
 
 ### 下游调用点识别与计划草案（P1）
 
@@ -578,7 +602,10 @@ AST 扫描**（只读源码，不 import/执行被测项目），把出站 HTTP 
   可确定时进入 `call:` 组并标 `inferred`。`svc:`/`cfg:` 需要解析服务发现或配置值，
   当前不做静态猜测。
 - 无法解析的调用点进入 `downstream_unsupported`（`target_dynamic`、`target_unresolved`、
-  `tls_not_supported`、`http_method_missing`），不进入 Mock 计划。
+  `tls_not_supported`、`http_method_missing`），不进入 Mock 计划。例外：Java 的
+  OkHttp / Feign / RestTemplate / Apache HC 调用点即使目标是 HTTPS 也保留为 dep，
+  由计划层决定 `agent_rewrite`；其他语言或 WebClient / JDK HttpClient 仍按
+  `tls_not_supported` 排除。
 
 生成草案：
 

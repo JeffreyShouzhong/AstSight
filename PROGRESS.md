@@ -1,14 +1,14 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-16
-> 分支：`feat/postgres-mysql-data`（本地领先远端 2 个提交，最近提交 `a1deeb1`；
-> Java HTTP agent P0/P1 已提交，Apache HC4/HC5 直连 adapter 待提交）
+> 分支：`feat/postgres-mysql-data`（已推送；本轮提交见 `git log`）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
 > HTTPS + 心跳 + 证据，SUT 启动可用 `JAVA_TOOL_OPTIONS` 自动注入 agent；普通
-> JVM、HC4+HC5 与 Spring Boot 3.5.6 fat jar 均联调通过；全量测试与 agent e2e
-> 结果见“本轮完成”
+> JVM、HC4+HC5、Spring Boot 3.5.6 fat jar 均联调通过；版本矩阵
+> JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；Mock 路由在同 host
+> 字面量/模板路径并存时字面量优先；全量测试与 agent e2e 结果见“本轮完成”
 
 ## 当前状态
 
@@ -38,9 +38,99 @@
 | 多语言下游 Mock | ✅ 2026-11-12 | Java/Go/Node 下游 HTTP 调用点扫描（`profile/langscan.py`）与非 Python 路由扫描（`profile/langroutes.py`）；Spring/Gin/Echo/Chi/Fiber/Express/Fastify/Koa/NestJS；路由 `line` 贯通画像，内联回调按行定位 |
 | Java 下游契约 | ✅ 2026-11-13 | `langscan` 抽取 RestTemplate/WebClient 响应类型并识别 Feign 字段调用；`javadeps`/`javaclass`/`javatypes` 读 pom/gradle、本地 jar、class 与泛型签名；画像 dep 增加 `response_types` / `response_contract`，Mock `success` body 按响应类型生成，用例绑定校验会对照契约告警字段漂移；DTO 继承链的父类字段递归合并；服务发现型下游改用 `discovery_override`（Spring Cloud 静态实例），已在真实 `spring-cloud-samples/feign-eureka` 工程跑通端到端 |
 | Java HTTP Mock 方案 | ✅ 设计已确认 | 决策记录 §17 / 能力设计 C3.5.5：新增 `agent_rewrite`（配置注入优先、agent 兜底）；agent 只改写 URL 到 `/_dep/<route_key>`，复用内嵌 Mock 的会话/分支/证据；计划内主机未命中一律 502、零透传；HTTPS 仅在 agent 激活时放开；首版不做进程内响应合成 |
+| Java agent 版本矩阵 | ✅ 80 组合 | JDK 8/11/17/21/26 × OkHttp 3.14.9/4.12.0/5.5.1、Feign 10.12/11.10/12.5/13.5、HC4 4.3.6/4.4.1/4.5.14、HC5 5.0/5.1/5.2.3/5.3.1/5.4.1/5.6.5；Spring Boot 3.5.6 在 JDK 17/21/26 通过；入口 `test_java_agent_matrix_e2e.py` |
+| Java agent 分发闭环 | ✅ 2026-11-16 | `tools/build_agent_wheel.py` → `dist/astsight_java_agent-0.1.0.dev0-py3-none-any.whl`（jar + `manifest.json` + sha256 + RECORD + sidecar）；引擎按 env → wheel → repo 解析并校验版本/校验和/协议号，失败给 `injection_agent_unavailable:*`；`test_agent_jar.py` 12 条 |
+| `agent run` 全链路 e2e | ✅ 2026-11-16 | `test_java_agent_flow_e2e.py`：Spring Boot fat jar 经 `run_flow` 完成画像 → 计划 → `JAVA_TOOL_OPTIONS` 注入 → 执行 → 报告；证据 `adapter=okhttp`/`mode=agent_rewrite`/`original_host`，零透传，token 不进命令行；修复 Java HTTPS dep 在画像阶段被丢弃的问题 |
+| Mock 路由精确优先 | ✅ 2026-11-16 | 同 host+method 下字面量路径（`/orders/7`）优先于 `{}` 模板（`/orders/{}`）；Python `RouteTable` 与 Java `RouteTableSnapshot` 同规则；多字面量/多模板仍 `mock_route_ambiguous` 失败关闭；全链路 e2e 同时覆盖 OkHttp 字面量与 RestTemplate 模板 |
+| HTTP/2 prior-knowledge 负例 | ✅ 2026-11-16 | OkHttp `H2_PRIOR_KNOWLEDGE` 改写后无法与 HTTP/1.1 Mock 完成交换：SUT 显式失败（非 0）、真实下游 0 连接、心跳 `http_rewrites>=1`/`http_passthrough=0`；`test_java_agent_h2_prior_knowledge_e2e.py` |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
 
-## 本轮完成（Apache HttpClient 直连 adapter，2026-11-16）
+## 本轮完成（HTTP/2 prior-knowledge 负例，2026-11-16）
+
+1. **负例样例**：新增 `java/samples/OkHttpH2PriorKnowledgeSample.java`，OkHttp
+   只配置 `Protocol.H2_PRIOR_KNOWLEDGE`，对目标发明文 HTTP/2 preface。
+2. **e2e**（`tests/integration/test_java_agent_h2_prior_knowledge_e2e.py`，
+   `ASTSIGHT_JAVA_AGENT_E2E=1`）：计划内 host 指向一个只计数 TCP 连接的本地
+   socket（代表真实下游），Mock 另起端口。实测：agent 仍完成改写
+   （`http_rewrites >= 1`、`http_passthrough == 0`、adapter=okhttp），Mock 解析
+   不了 h2c preface，SUT 打印 `failed=` 并以非 0 退出；计数 socket 0 连接，
+   Mock 无 HTTP 层证据。
+3. **行为契约**：h2c 不建设，不把协议降级为 HTTP/1.1（会扭曲 SUT 行为），
+   失败必须显式且零透传，也不能当作用例通过。
+4. **回归**：全量 **402 passed, 20 skipped**（启用 OkHttp / Apache HC / h2c /
+   Spring Boot / 全链路五个 agent e2e；本轮只新增一个默认跳过的 e2e 与样例，
+   未改运行时代码）。
+
+## 本轮完成（Mock 路由精确优先，2026-11-16）
+
+1. **匹配规则**：同一 host + method 下字面量路径与 `{}` 模板同时匹配时，字面量
+   优先（`/orders/7` 不再因 `/orders/{}` 存在而歧义）；多个字面量或多个模板
+   仍 `mock_route_ambiguous`，继续失败关闭、零透传。规则同时落在 Python
+   `RouteTable.resolve`（`_prefer_exact`）与 Java `RouteTableSnapshot.resolve`
+   （`preferExact`），两侧保持一致。
+2. **测试**：新增 `engine/tests/test_mock_routes.py` 4 条（字面量优先×2、双模板
+   歧义、双字面量歧义）；新增 Java 单测 `RouteTableSnapshotTest` 5 条
+   （`mvn -pl astsight-agent-core test` 通过）。
+3. **全链路 e2e 扩展**：`test_java_agent_flow_e2e.py` 恢复 RestTemplate 模板
+   调用点，与 OkHttp 字面量落在同一 host+method：`/orders/7` 走字面量路由、
+   `/orders/8` 回落模板路由；断言 2/2 passed、两个 adapter（okhttp +
+   resttemplate）、无 `mock_route_ambiguous`/`mock_unexpected_dep`，token 仍
+   不进命令行。
+4. **回归**：全量 **401 passed, 20 skipped**（启用全部四个 agent e2e）。
+5. **构建提醒**：只改 Java 源码后 `mvn -DskipTests package` 可能复用旧 core
+   jar 导致 shade 产物滞后；本轮以 `mvn -pl astsight-agent -am clean package`
+   重建，并重新生成 sidecar/wheel（`python tools/build_agent_wheel.py
+   --skip-build`）。
+
+## 本轮完成（agent 分发闭环与全链路 e2e，2026-11-16）
+
+1. **wheel 分发**（`tools/build_agent_wheel.py`）：把 shaded jar 打成
+   `astsight_java_agent-0.1.0.dev0-py3-none-any.whl`，内含
+   `astsight_java_agent/agent/astsight-agent.jar`、`manifest.json`
+   （`schema/artifact/version/jar_version/protocol/premain/sha256/size`）与标准
+   `dist-info`（METADATA/WHEEL/RECORD）；构建固定时间戳与条目顺序，可复现。
+   同时写 sidecar `astsight-agent.jar.manifest.json`，源码树构建也可校验。
+   版本归一 `0.1.0-SNAPSHOT` → `0.1.0.dev0`，引擎常量
+   `engine/astsight/agent/jar.py:AGENT_VERSION`，单测断言与 `java/pom.xml` 一致。
+2. **引擎解析与校验**（`engine/astsight/agent/jar.py` + `sut.py`）：顺序为
+   `ASTSIGHT_JAVA_AGENT_JAR`（显式覆盖、缺失不回退）→ 已安装 wheel（必须带
+   manifest，校验 sha256/大小/版本/协议号）→ 仓库构建产物（有 sidecar 就校验，
+   否则按开发构建接受但版本仍须匹配）。失败统一
+   `injection_agent_unavailable:<dep>:<reason>`，新增
+   `agent_jar_unreadable` / `agent_jar_version_mismatch` /
+   `agent_jar_manifest_missing` / `agent_jar_manifest_invalid` /
+   `agent_jar_checksum_mismatch` / `agent_jar_size_mismatch` /
+   `agent_jar_protocol_mismatch`；期望版本可用
+   `ASTSIGHT_JAVA_AGENT_REQUIRED_VERSION` 覆盖。实测从 wheel 解包目录解析为
+   `source=wheel` 且 sha256 为真，仓库 jar 为 `source=repo`，篡改 jar 被拒。
+3. **画像修正**：Java 的 HTTPS 调用点此前在画像阶段被 `tls_not_supported`
+   丢弃，计划层看不到 dep、`agent_rewrite` 的 HTTPS 分支不可达。现
+   `build_dep_id_plan` 增加 `https_call_sites`，只对 OkHttp / Feign /
+   RestTemplate / Apache HC 调用点保留 HTTPS dep；其他语言与 WebClient /
+   JDK HttpClient 继续排除。OkHttp `Request.Builder` 未写方法时按 GET 记录
+   （与运行时默认一致）。
+4. **`agent run` 全链路 e2e**（`tests/integration/test_java_agent_flow_e2e.py`，
+   `ASTSIGHT_JAVA_AGENT_FLOW_E2E=1`）：Spring Boot fat jar 作 SUT，模型响应
+   脚本化，经 `run_flow` 完成画像 → mock plan → `JAVA_TOOL_OPTIONS` 注入 →
+   用例执行 → 报告。实测：注入策略 `agent_rewrite`；`execution.json` 1/1 passed、
+   门禁 pass；`mock_calls.jsonl` 记录 `adapter=okhttp`、`mode=agent_rewrite`、
+   `original_host=api.example.com`、`original_path=/orders/7`、`result=ok`，
+   `mock_unexpected_dep` 零条；`sut.log` 含 `Picked up JAVA_TOOL_OPTIONS`，只有
+   `token_env=ASTSIGHT_AGENT_TOKEN`，无 `token=` 明文。四个 agent e2e（OkHttp、
+   HC4+HC5、Spring Boot、全链路）启用后 **4 passed**。
+5. **测试**：新增 `tests/test_agent_jar.py`（12 条：版本归一/POM 对齐、wheel
+   sha256、篡改、版本不符、缺 manifest、env 覆盖优先、缺失不回退、路径含空格、
+   repo 回退、期望版本覆盖、wheel 布局与 RECORD）；`test_downstream_languages.py` 增加
+   Java OkHttp HTTPS 默认 GET、WebClient HTTPS 与 Python HTTPS 仍拒绝 3 条；
+   guard 测试改用带 manifest 的假 jar。全量 **393 passed, 24 skipped**。
+6. **当轮已知边界**（下一轮已修复，见上节“Mock 路由精确优先”）：同 host +
+   method 同时存在字面量路径与模板路径时，路由匹配 `mock_route_ambiguous` →
+   `/_agent/unmatched` 502；agent 仍失败关闭、零透传。当轮全链路 e2e 因此只
+   绑定单 dep，不把该缺口当通过。
+7. **文档**：决策记录 v4.18/§17、能力设计 v4.18、Java README、engine README、
+   `.gitignore`（`dist/`）同步。
+
+## 已完成（Apache HttpClient 直连 adapter，2026-11-16）
 
 1. **adapter**（`java/astsight-agent-http`）：新增 `ApacheHttpClientBridge`、
    `HttpClient4Transformer`、`HttpClient5Transformer` 与两个 Module；HC4 4.3+
@@ -48,7 +138,7 @@
    与请求 URI（`doExecute` 把 target 直接交给 `RoutePlanner`，不能置空），
    证据头与 OkHttp/Feign/RestTemplate 一致。
 2. **版本差异**：HC4/HC5 共用反射 bridge，按类名前缀 `org.apache.hc.` 区分；
-   HC5 参数描述符按 5.0–5.4 适配，Mock target 用 `HttpHost.create(URI)`，
+   HC5 参数描述符按 5.0–5.6 适配，Mock target 用 `HttpHost.create(URI)`，
    HC4 用 `HttpHost(host, port, scheme)`。
 3. **计划期**（`agent/mockplan.py`）：langscan 的 `apache-httpclient` 由
    `unsupported` 改为 supported；JDK 11 `httpclient` 与 `webclient` 仍不支持。
@@ -60,8 +150,14 @@
    `unsupported`）；OkHttp e2e 的 adapter 断言改为集合包含。
 6. **文档**：README、决策记录 v4.17/§17、能力设计 v4.17、使用文档、
    agent 架构同步。
-7. **测试**：全量 **378 passed, 7 skipped**（新增 HC e2e 默认跳过）；启用三个
+7. **回归**：全量 **378 passed, 7 skipped**（新增 HC e2e 默认跳过）；启用三个
    agent e2e 后 **3 passed**（OkHttp、HC 4.5.3+5.4.1、Spring Boot fat jar）。
+8. **版本矩阵**：新增 `test_java_agent_matrix_e2e.py` 与 Feign/HC4/HC5 独立样例；
+   JDK 8/11/17/21/26 × 16 个客户端版本共 **80 组合全部通过**（OkHttp 3.14.9 /
+   4.12.0 / 5.5.1、Feign 10.12 / 11.10 / 12.5 / 13.5、HC4 4.3.6 / 4.4.1 /
+   4.5.14、HC5 5.0 / 5.1 / 5.2.3 / 5.3.1 / 5.4.1 / 5.6.5）；Spring Boot 3.5.6
+   fat jar 在 JDK 17/21/26 通过；样例 javac 增加 `-encoding UTF-8`，兼容 JDK 8
+   在中文 Windows 上的默认 GBK。
 
 ## 上一轮完成（Java HTTP agent P1：Feign / RestTemplate，2026-11-16）
 
@@ -327,21 +423,21 @@
 
 ## 下一步
 
-## 下一步
-
 顺序已确认（详见 `doc/决策记录.md` §17「后续工作」）：
 
-1. **版本矩阵实测**：JDK 8/11/17/21；OkHttp 3.14 / 4.12 / 5.x；Feign 10–13；
-   Apache HC 4.3–4.5、5.0–5.4。每个组合跑通 HTTPS → 明文 Mock 改写，不兼容的
-   版本修 bridge 或从 supported 集合移除，结果回写本文。
-2. **分发闭环**：`astsight-java-agent` wheel（jar + `manifest.json` + sha256）、
-   引擎精确版本校验；安装 wheel 后无需 `ASTSIGHT_JAVA_AGENT_JAR`，缺失或校验
-   不符报 `agent_unavailable`。
-3. **真实 `agent run` 全链路 e2e**：画像 → mock plan → `JAVA_TOOL_OPTIONS` 注入
-   → 用例执行 → 报告；核对零透传、`/_agent/unmatched` 502、`passthrough_hosts`
-   与 `adapter/mode/original_host` 证据。
-4. **覆盖扩展（按需求单独立项）**：Dubbo Filter（P3）、SDK endpoint 发现、
-   HTTP/2 prior-knowledge 反例。
+1. **版本矩阵实测**：✅ 已完成（2026-11-16），JDK 8/11/17/21/26 × 16 个客户端
+   版本共 80 组合全部通过；Spring Boot 3.5.6 在 JDK 17/21/26 通过。
+2. **分发闭环**：✅ 已完成（2026-11-16），`tools/build_agent_wheel.py` 生成
+   `astsight-java-agent` wheel（jar + `manifest.json` + sha256 + RECORD），引擎按
+   环境变量 → wheel → 仓库解析并校验版本/校验和/协议号。
+3. **真实 `agent run` 全链路 e2e**：✅ 已完成（2026-11-16），
+   `test_java_agent_flow_e2e.py` 跑通画像 → 计划 → `JAVA_TOOL_OPTIONS` 注入 →
+   执行 → 报告；证据零透传、token 不进命令行。同 host 字面量/模板路径并存时
+   已实现字面量优先（Python/Java 同规则），e2e 同时覆盖 OkHttp 字面量与
+   RestTemplate 模板两个调用点。
+4. **覆盖扩展（按需求单独立项）**：HTTP/2 prior-knowledge 反例 ✅ 已完成
+   （2026-11-16，负例 e2e）；第三方 SDK 端点发现明确不做（理由见决策记录
+   §17）；剩余 Dubbo Filter（P3），本次开始。
 
 已完成的历史步骤（Java HTTP Mock P0/P1/P1.5）见下方各轮完成记录。
 
