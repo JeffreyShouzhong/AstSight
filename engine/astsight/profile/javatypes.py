@@ -24,6 +24,8 @@ from .javadeps import discover_jars
 _MAX_SOURCE_FILES = 20_000
 _MAX_SOURCE_BYTES = 2 * 1024 * 1024
 _MAX_CONTRACT_FIELDS = 256
+# 父类字段合并的最大深度；Java 单继承链通常很浅，超过即视为异常并告警。
+_MAX_INHERIT_DEPTH = 6
 _SKIP_DIRS = {"target", "build", "out", ".git", "node_modules", "generated"}
 _TEST_HINTS = ("src/test", "src\\test")
 
@@ -57,6 +59,8 @@ _JDK_SCALARS = {
     "BigInteger": "java.math.BigInteger",
     "Void": "java.lang.Void",
 }
+# JDK 根本类没有业务字段，遇到即停止向上合并。
+_JDK_BASES = {"java.lang.Object", "java.lang.Enum", "java.lang.Record"}
 
 
 @dataclass(frozen=True)
@@ -236,6 +240,7 @@ class ContractIndex:
         self._jar_entries: dict[str, tuple[Path, str]] | None = None
         self._jar_classes: dict[str, ClassInfo | None] = {}
         self._jar_indexed = False
+        self._inherit_warned: set[str] = set()
 
     # ── 索引 ──────────────────────────────────────────────
 
@@ -469,13 +474,29 @@ class ContractIndex:
         self._build_source_index()
         return any(item.fqn == fqn for item in (self._decls or {}).get(simple, []))
 
-    def _contract_for(self, fqn: str) -> TypeContract | None:
+    def _contract_for(
+        self,
+        fqn: str,
+        *,
+        _seen: frozenset[str] = frozenset(),
+        _depth: int = 0,
+    ) -> TypeContract | None:
+        """解析类型契约，并递归合并父类字段（子类同名字段优先）。"""
+        if fqn in _seen:
+            # 继承环在 Java 编译期不可能出现；这里只做防御，不继续下钻。
+            return None
         self._build_source_index()
         simple = fqn.rsplit(".", 1)[-1]
+        seen = _seen | {fqn}
         for decl in (self._decls or {}).get(simple, []):
             if decl.fqn != fqn:
                 continue
-            fields = self._fields_from_source(decl)
+            fields = self._with_parent_fields(
+                self._fields_from_source(decl),
+                self._source_parent_fqn(decl),
+                seen,
+                _depth,
+            )
             return TypeContract(
                 name=simple,
                 fqn=fqn,
@@ -491,6 +512,9 @@ class ContractIndex:
             for item in class_info.fields
             if not item.is_static and not item.is_enum_constant
         ][:_MAX_CONTRACT_FIELDS]
+        fields = self._with_parent_fields(
+            fields, class_info.super_name, seen, _depth
+        )
         jar, _entry = self._jar_index()[fqn]
         return TypeContract(
             name=class_info.simple_name,
@@ -499,6 +523,55 @@ class ContractIndex:
             origin=str(jar),
             fields=fields,
         )
+
+    def _with_parent_fields(
+        self,
+        fields: list[TypeField],
+        parent_fqn: str | None,
+        seen: frozenset[str],
+        depth: int,
+    ) -> list[TypeField]:
+        if not parent_fqn or parent_fqn in _JDK_BASES:
+            return fields
+        if depth >= _MAX_INHERIT_DEPTH:
+            if parent_fqn not in self._inherit_warned:
+                self._inherit_warned.add(parent_fqn)
+                self.warnings.append(f"inherit_depth_exceeded:{parent_fqn}")
+            return fields
+        parent = self._contract_for(parent_fqn, _seen=seen, _depth=depth + 1)
+        if parent is None or not parent.fields:
+            return fields
+        names = {item.name for item in fields}
+        merged = list(fields)
+        for item in parent.fields:
+            if item.name in names:
+                # 子类同名字段（shadow）覆盖父类，保留子类声明。
+                continue
+            names.add(item.name)
+            merged.append(item)
+            if len(merged) >= _MAX_CONTRACT_FIELDS:
+                break
+        return merged
+
+    def _source_parent_fqn(self, decl: _Decl) -> str | None:
+        if decl.kind != "class":
+            return None
+        raw = self._read_source(decl.path)
+        if not raw:
+            return None
+        header = _strip_comments(raw[decl.start :])
+        brace = header.find("{")
+        if brace >= 0:
+            header = header[:brace]
+        # 跳过类型参数声明，避免把 <T extends Base> 的边界当成父类。
+        match = re.search(
+            r"\bclass\s+[\w$]+\s*(?:<[^{]*?>)?\s*extends\s+([\w$.]+)",
+            header,
+            re.S,
+        )
+        if not match:
+            return None
+        return self._resolve_fqn(match.group(1), decl.path)
 
     def _rel(self, path: Path) -> str:
         try:

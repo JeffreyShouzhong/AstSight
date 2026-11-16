@@ -42,6 +42,7 @@ def _utf8(value: str) -> bytes:
 def _class_bytes(
     *,
     name: str = "com/example/Item",
+    super_name: str = "java/lang/Object",
     fields: list[str] | None = None,
     signature: str = "",
     annotation: str = "",
@@ -57,8 +58,8 @@ def _class_bytes(
 
     name_index = add(_utf8(name))
     this_class = add(b"\x07" + _u2(name_index))
-    super_name = add(_utf8("java/lang/Object"))
-    super_class = add(b"\x07" + _u2(super_name))
+    super_name_index = add(_utf8(super_name))
+    super_class = add(b"\x07" + _u2(super_name_index))
 
     signature_name = add(_utf8("Signature")) if signature else 0
     signature_value = add(_utf8(signature)) if signature else 0
@@ -444,6 +445,148 @@ def test_contract_index_does_not_guess_unknown_types(tmp_path: Path) -> None:
     assert ContractIndex(tmp_path).resolve("MissingResult") is None
 
 
+def test_contract_index_merges_parent_fields_from_source(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/main/java/com/example/item/BaseEntity.java",
+        """
+package com.example.item;
+
+public class BaseEntity {
+    private Long id;
+    private String createdAt;
+}
+""",
+    )
+    _write(
+        tmp_path,
+        "src/main/java/com/example/item/Item.java",
+        """
+package com.example.item;
+
+public class Item extends BaseEntity {
+    private Integer id;
+    private String name;
+}
+""",
+    )
+    contract = ContractIndex(tmp_path).resolve("com.example.item.Item")
+    assert contract is not None
+    # 子类字段在前；同名字段 shadow 父类声明（id 用子类的 Integer）。
+    assert [(item.name, item.type) for item in contract.fields] == [
+        ("id", "Integer"),
+        ("name", "String"),
+        ("createdAt", "String"),
+    ]
+
+
+def test_contract_index_merges_parent_from_imported_package(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "src/main/java/com/example/common/BaseEntity.java",
+        """
+package com.example.common;
+
+public class BaseEntity {
+    protected Long id;
+}
+""",
+    )
+    _write(
+        tmp_path,
+        "src/main/java/com/example/item/Item.java",
+        """
+package com.example.item;
+
+import com.example.common.BaseEntity;
+
+public class Item extends BaseEntity {
+    private String name;
+}
+""",
+    )
+    contract = ContractIndex(tmp_path).resolve("com.example.item.Item")
+    assert contract is not None
+    assert [(item.name, item.type) for item in contract.fields] == [
+        ("name", "String"),
+        ("id", "Long"),
+    ]
+
+
+def test_contract_index_does_not_treat_type_bound_as_parent(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "src/main/java/com/example/item/BaseEntity.java",
+        """
+package com.example.item;
+
+public class BaseEntity {
+    private Long id;
+}
+""",
+    )
+    _write(
+        tmp_path,
+        "src/main/java/com/example/item/Item.java",
+        """
+package com.example.item;
+
+public class Item<T extends BaseEntity> {
+    private String name;
+}
+""",
+    )
+    contract = ContractIndex(tmp_path).resolve("com.example.item.Item")
+    assert contract is not None
+    assert [(item.name, item.type) for item in contract.fields] == [
+        ("name", "String"),
+    ]
+
+
+def test_contract_index_merges_parent_fields_from_jar(tmp_path: Path) -> None:
+    m2 = tmp_path / "repo"
+    _write_jar(
+        m2 / "com" / "example" / "item-api" / "1.0.0" / "item-api-1.0.0.jar",
+        {
+            "com/example/item/BaseItem.class": _class_bytes(
+                name="com/example/item/BaseItem",
+                fields=["id:J", "createdAt:Ljava/lang/String;"],
+            ),
+            "com/example/item/Item.class": _class_bytes(
+                name="com/example/item/Item",
+                super_name="com/example/item/BaseItem",
+                fields=["id:I", "name:Ljava/lang/String;"],
+            ),
+        },
+    )
+    _write(
+        tmp_path,
+        "pom.xml",
+        """<project>
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>item-api</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>
+""",
+    )
+    contract = ContractIndex(tmp_path, m2_root=m2).resolve("com.example.item.Item")
+    assert contract is not None
+    assert contract.kind == "jar"
+    assert [(item.name, item.type) for item in contract.fields] == [
+        ("id", "int"),
+        ("name", "java.lang.String"),
+        ("createdAt", "java.lang.String"),
+    ]
+
+
 def test_scan_feign_interfaces_from_source(tmp_path: Path) -> None:
     _write(
         tmp_path,
@@ -543,6 +686,46 @@ public class PayResult {
         "code",
         "message",
         "success",
+    ]
+
+
+def test_downstream_contract_includes_inherited_fields(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/main/java/com/example/pay/BaseResult.java",
+        """
+package com.example.pay;
+
+public class BaseResult {
+    private String requestId;
+}
+""",
+    )
+    _write(
+        tmp_path,
+        "src/main/java/com/example/pay/PayResult.java",
+        """
+package com.example.pay;
+
+public class PayResult extends BaseResult {
+    private int code;
+}
+""",
+    )
+    _write(
+        tmp_path,
+        "src/main/java/com/example/pay/PayController.java",
+        PAY_CONTROLLER,
+    )
+    scan = DownstreamScanner(tmp_path).scan(
+        "PayController.detail",
+        file_hint="src/main/java/com/example/pay/PayController.java",
+    )
+    contract = scan.deps[0]["response_contract"]
+    assert contract["status"] == "resolved"
+    assert [field["name"] for field in contract["types"][0]["fields"]] == [
+        "code",
+        "requestId",
     ]
 
 

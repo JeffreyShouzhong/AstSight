@@ -1,9 +1,9 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-16
-> 分支：`feat/postgres-mysql-data`（已推送，最近提交 `a3a20ec`）
-> 当前阶段：Java 下游契约提取与 Feign/服务发现注入完成；真实
-> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；全量 358 passed, 2 skipped
+> 分支：`feat/postgres-mysql-data`（已推送，最近提交 `638ec0f`）
+> 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
+> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；全量 363 passed, 2 skipped
 
 ## 当前状态
 
@@ -31,7 +31,7 @@
 | 断言深度 | ✅ 2026-11-12 | `header/contains`、`body_schema`（OpenAPI 响应 schema）、只读 `db_row`；`assert_strength` 按内容推导（L1–L4） |
 | A5/A6 诊断修复 | ✅ 2026-11-12 | A5/A6 合并为单次 LLM 调用（`schema_version=2`）；默认最多 3 轮；用例补丁以 `astsight-agent:repair` 自动批准；断言不得删除/降强；Mock 结构失配可修并热更新路由表 |
 | 多语言下游 Mock | ✅ 2026-11-12 | Java/Go/Node 下游 HTTP 调用点扫描（`profile/langscan.py`）与非 Python 路由扫描（`profile/langroutes.py`）；Spring/Gin/Echo/Chi/Fiber/Express/Fastify/Koa/NestJS；路由 `line` 贯通画像，内联回调按行定位 |
-| Java 下游契约 | ✅ 2026-11-13 | `langscan` 抽取 RestTemplate/WebClient 响应类型并识别 Feign 字段调用；`javadeps`/`javaclass`/`javatypes` 读 pom/gradle、本地 jar、class 与泛型签名；画像 dep 增加 `response_types` / `response_contract`，Mock `success` body 按响应类型生成，用例绑定校验会对照契约告警字段漂移；服务发现型下游改用 `discovery_override`（Spring Cloud 静态实例），已在真实 `spring-cloud-samples/feign-eureka` 工程跑通端到端 |
+| Java 下游契约 | ✅ 2026-11-13 | `langscan` 抽取 RestTemplate/WebClient 响应类型并识别 Feign 字段调用；`javadeps`/`javaclass`/`javatypes` 读 pom/gradle、本地 jar、class 与泛型签名；画像 dep 增加 `response_types` / `response_contract`，Mock `success` body 按响应类型生成，用例绑定校验会对照契约告警字段漂移；DTO 继承链的父类字段递归合并；服务发现型下游改用 `discovery_override`（Spring Cloud 静态实例），已在真实 `spring-cloud-samples/feign-eureka` 工程跑通端到端 |
 
 ## 本轮完成（Java 下游契约提取，2026-11-13 ~ 2026-11-16）
 
@@ -114,6 +114,14 @@
     classpath 上，未启动 Eureka 服务端时仍能走通静态实例，但这不是所有注册中心
     的通用保证。若两个服务共享同一 method+path，路由会报
     `mock_route_ambiguous`，不会静默选错分支。
+13. **DTO 继承字段合并**（`profile/javatypes.py`）：`_contract_for` 递归合并父类
+    字段，源码侧从 `extends` 解析父类 FQN（按 import / 同包 / 唯一类名解析，跳过
+    泛型边界 `class X<T extends Base>`），jar 侧跟随 `ClassInfo.super_name`；
+    子类同名字段（shadow）优先，超过 6 层停止并写
+    `inherit_depth_exceeded:<fqn>`，继承环有 seen 集合防御，`java.lang.Object/
+    Enum/Record` 不参与合并。真实 DTO 继承 `BaseEntity`/`PageResult` 时，
+    `id`、`createdAt` 等父类字段不再从 Mock `success` body 中漏掉，绑定漂移
+    告警的误报随之减少。
 
 ## 上一轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -349,6 +357,11 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
   - 裸 `@RequestMapping` 只展开五个业务方法，避免端点放大；README 补充能力与
     边界；
   - 全量 **358 passed, 2 skipped**。
+- **2026-11-16**：DTO 继承字段合并：`ContractIndex._contract_for` 递归合并父类
+  字段，源码 `extends` 与 jar `super_name` 两条路径一致处理；子类同名字段优先，
+  限深 6 层并防继承环，`java.lang.Object/Enum/Record` 跳过。新增 5 条测试
+  （源码同包/跨包 import/泛型边界不误判/jar 继承/画像端到端），全量
+  **363 passed, 2 skipped**。
 - **2026-11-13**：Java 下游契约从 A 侧提取：
   - `langscan` 抽取 RestTemplate（按参数位）与 WebClient（`bodyToMono` 等）的响应
     类型，写入 `HttpCallSite.response_type`；变量名不当作类型。
