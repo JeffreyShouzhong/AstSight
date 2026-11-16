@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from contracts import (
     MockInjection,
     MockPlan,
+    MockPlanDubboRoute,
     MockPlanInjection,
     MockPlanRoute,
     MockRoute,
@@ -28,6 +29,7 @@ from .identity import (
     normalize_method,
     normalize_path_key,
     normalize_target_url,
+    parse_dubbo_dep_id,
 )
 from .server import MockHttpServer
 
@@ -172,6 +174,51 @@ def _normalize_route(
     route.target = target
 
 
+def _normalize_dubbo_route(
+    route: MockPlanDubboRoute, index: int
+) -> None:
+    where = f"dubbo_routes[{index}]"
+    dep_id = str(route.dep_id or "").strip()
+    _require(
+        len(dep_id) <= MAX_DEP_ID_CHARS,
+        "mock_dep_id_invalid",
+        f"{where}: dep_id 超过 {MAX_DEP_ID_CHARS} 字符",
+    )
+    parsed = parse_dubbo_dep_id(dep_id)
+    _require(
+        parsed is not None,
+        "mock_dep_id_invalid",
+        f"{where}: 需要规范形态 dubbo:服务#方法(参数类型,...)?group=&version=",
+    )
+    assert parsed is not None
+    _require(
+        parsed.service == str(route.service or "").strip()
+        and parsed.method == str(route.method or "").strip()
+        and list(parsed.parameter_types) == [str(item) for item in route.parameter_types]
+        and (parsed.group or None) == (route.group or None)
+        and (parsed.version or None) == (route.version or None),
+        "mock_dep_id_invalid",
+        f"{where}: dep_id 与服务/方法/参数/group/version 不一致",
+    )
+    _require(
+        len(route.branches) <= MAX_BRANCHES_PER_ROUTE,
+        "mock_plan_too_many_branches",
+        f"{where}: {len(route.branches)} > {MAX_BRANCHES_PER_ROUTE}",
+    )
+    for name in route.branches:
+        _require(
+            bool(str(name).strip()) and len(str(name)) <= MAX_BRANCH_CHARS,
+            "mock_branch_invalid",
+            f"{where}: 分支名 {name!r}",
+        )
+    route.dep_id = dep_id
+    route.service = parsed.service
+    route.method = parsed.method
+    route.parameter_types = list(parsed.parameter_types)
+    route.group = parsed.group
+    route.version = parsed.version
+
+
 def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
     """校验并就地规范化计划；返回 route_key 与告警。"""
     _require(plan.schema_version == 1, "mock_plan_schema_unsupported", str(plan.schema_version))
@@ -203,11 +250,15 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
             raise MockPlanError("mock_host_invalid", repr(plan.host)) from exc
     plan.host = host
 
-    _require(bool(plan.routes), "mock_plan_empty", "至少需要一条 route")
     _require(
-        len(plan.routes) <= MAX_PLAN_ROUTES,
+        bool(plan.routes) or bool(plan.dubbo_routes),
+        "mock_plan_empty",
+        "至少需要一条 route",
+    )
+    _require(
+        len(plan.routes) + len(plan.dubbo_routes) <= MAX_PLAN_ROUTES,
         "mock_plan_too_many_routes",
-        f"{len(plan.routes)} > {MAX_PLAN_ROUTES}",
+        f"{len(plan.routes) + len(plan.dubbo_routes)} > {MAX_PLAN_ROUTES}",
     )
 
     validation = MockPlanValidation()
@@ -248,12 +299,47 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
             )
         )
 
+    for index, route in enumerate(plan.dubbo_routes):
+        _normalize_dubbo_route(route, index)
+        _require(
+            route.dep_id not in seen_deps,
+            "mock_route_conflict",
+            f"重复 dep_id: {route.dep_id}",
+        )
+        seen_deps.add(route.dep_id)
+        if not route.branches:
+            validation.warnings.append(f"mock_branch_empty:{route.dep_id}")
+        deps.append(
+            DepIdEntry(
+                dep_id=route.dep_id,
+                downstream_key="",
+                evidence="dubbo_reference",
+                method=route.method,
+                path_key="",
+                target=None,
+            )
+        )
+
     try:
         route_keys = assign_route_keys(deps)
     except ValueError as exc:
         raise MockPlanError("mock_route_conflict", str(exc)) from exc
     seen_keys: set[str] = set()
     for route in plan.routes:
+        computed = route_keys[route.dep_id]
+        if route.route_key is not None and route.route_key != computed:
+            raise MockPlanError(
+                "mock_route_key_mismatch",
+                f"{route.dep_id}: {route.route_key!r} != {computed!r}",
+            )
+        _require(
+            computed not in seen_keys,
+            "mock_route_conflict",
+            f"重复 route_key: {computed}",
+        )
+        seen_keys.add(computed)
+        route.route_key = computed
+    for route in plan.dubbo_routes:
         computed = route_keys[route.dep_id]
         if route.route_key is not None and route.route_key != computed:
             raise MockPlanError(
@@ -353,7 +439,7 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
 
 
 def _injection_model(
-    route: MockPlanRoute,
+    route: MockPlanRoute | MockPlanDubboRoute,
     injection: MockPlanInjection,
     *,
     endpoint: str,
@@ -362,8 +448,9 @@ def _injection_model(
     if injection.strategy is MockStrategy.URL_OVERRIDE:
         injected = f"{endpoint}/_dep/{route_key}"
         if injection.kind == "endpoint_url":
-            if route.path_key != "/":
-                injected += route.path_key
+            path_key = getattr(route, "path_key", "/")
+            if path_key != "/":
+                injected += path_key
     elif injection.strategy in (
         MockStrategy.DISCOVERY_OVERRIDE,
         MockStrategy.HTTP_PROXY,
@@ -424,6 +511,10 @@ class MockPlanRuntime:
             "history_path": str(self.evidence_path) if self.evidence_path else None,
             "route_count": model.route_count,
             "routes": [route.model_dump(mode="json") for route in model.routes],
+            "dubbo_route_count": len(self.plan.dubbo_routes),
+            "dubbo_routes": [
+                route.model_dump(mode="json") for route in self.plan.dubbo_routes
+            ],
             "injections": [
                 injection.model_dump(mode="json", exclude_none=True)
                 for injection in self.injections
@@ -454,6 +545,7 @@ class MockPlanRuntime:
                 }
                 for route in self.plan.routes
             ],
+            "dubbo_deps": [route.dep_id for route in self.plan.dubbo_routes],
             "injections": [
                 injection.model_dump(mode="json", exclude_none=True)
                 for injection in self.injections
@@ -470,6 +562,7 @@ class MockPlanRuntime:
             "namespace": self.plan.namespace,
             "endpoint": self.server.endpoint,
             "route_count": len(self.plan.routes),
+            "dubbo_route_count": len(self.plan.dubbo_routes),
             "injection_count": len(self.injections),
             "unsupported_count": sum(
                 1
@@ -493,7 +586,10 @@ def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path 
         history_path=history_path,
         capture_bodies=plan.capture_bodies,
     )
-    route_by_dep = {route.dep_id: route for route in plan.routes}
+    route_by_dep = {
+        route.dep_id: route
+        for route in [*plan.routes, *plan.dubbo_routes]
+    }
     try:
         for route in plan.routes:
             assert route.route_key is not None
@@ -509,6 +605,13 @@ def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path 
                     source=route.source,
                 ),
                 dict(route.branches),
+            )
+        for route in plan.dubbo_routes:
+            assert route.route_key is not None
+            server.add_dubbo_dep(
+                route.dep_id,
+                route_key=route.route_key,
+                branches=dict(route.branches),
             )
         runtime = MockPlanRuntime(
             server=server,

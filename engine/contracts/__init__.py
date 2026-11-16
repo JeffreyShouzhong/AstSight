@@ -49,7 +49,7 @@ from .mock import (
     MockSession,
     MockStub,
 )
-from .mock_plan import MockPlan, MockPlanInjection, MockPlanRoute
+from .mock_plan import MockPlan, MockPlanDubboRoute, MockPlanInjection, MockPlanRoute
 from .entities import (
     Assertion,
     Attempt,
@@ -148,6 +148,7 @@ __all__ = [
     "MockInjection",
     "MockMode",
     "MockPlan",
+    "MockPlanDubboRoute",
     "MockPlanInjection",
     "MockPlanRoute",
     "MockRoute",

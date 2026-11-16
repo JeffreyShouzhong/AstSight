@@ -52,6 +52,7 @@ def build_profiles(
             codegraph_client=codegraph_client,
             max_symbols=max_callees,
         )
+    dubbo_scan = scanner.scan_dubbo() if scanner is not None else None
 
     for route in routes:
         method = str(route.get("method") or "").upper()
@@ -161,7 +162,7 @@ def build_profiles(
             except Exception as exc:  # 源码扫描是辅助证据，单次失败不中断画像
                 profile["downstream_error"] = f"{type(exc).__name__}: {exc}"[:300]
             else:
-                profile["downstream_deps"] = scan.deps
+                profile["downstream_deps"] = list(scan.deps)
                 profile["downstream_unmapped"] = not scan.deps
                 profile["downstream_checked"] = scan.checked
                 profile["downstream_call_sites"] = [
@@ -178,6 +179,23 @@ def build_profiles(
             profile["downstream_unmapped"] = True
             profile["downstream_checked"] = False
             profile["downstream_warnings"] = ["downstream_project_root_missing"]
+
+        if dubbo_scan is not None and dubbo_scan.deps:
+            # Dubbo 引用是类字段，按项目汇总后附到每个 profile；用例只绑定
+            # 实际用到的 dep，未绑定的调用在运行期失败关闭。
+            profile["downstream_deps"] = [
+                *(profile.get("downstream_deps") or []),
+                *dubbo_scan.deps,
+            ]
+            profile["downstream_unmapped"] = False
+            profile["dubbo_deps_checked"] = dubbo_scan.checked
+        if dubbo_scan is not None and dubbo_scan.unsupported:
+            profile["dubbo_unsupported"] = list(dubbo_scan.unsupported)
+        if dubbo_scan is not None and dubbo_scan.warnings:
+            profile["downstream_warnings"] = [
+                *(profile.get("downstream_warnings") or []),
+                *dubbo_scan.warnings,
+            ]
 
         profiles.append(profile)
 

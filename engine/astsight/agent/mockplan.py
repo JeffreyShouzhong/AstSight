@@ -7,7 +7,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from contracts import MockPlan, MockPlanInjection, MockPlanRoute, MockSemantic, MockStrategy
+from contracts import (
+    MockPlan,
+    MockPlanDubboRoute,
+    MockPlanInjection,
+    MockPlanRoute,
+    MockSemantic,
+    MockStrategy,
+)
 
 from ..mock import MockPlanError, validate_mock_plan
 from ..profile.downstream import AGENT_REWRITE_CLIENTS
@@ -123,8 +130,44 @@ def _unsupported(dep_id: str, reason: str) -> MockPlanInjection:
     )
 
 
+def _dubbo_route(
+    dep: dict[str, Any], dep_id: str, branches: dict[str, Any]
+) -> MockPlanDubboRoute:
+    service = str(dep.get("service") or "").strip()
+    method = str(dep.get("method") or "").strip()
+    if not service or not method:
+        raise AgentError(
+            "mock_route_incomplete",
+            f"{dep_id} 缺少 service/method，不能生成 Dubbo 路由",
+        )
+    parameter_types = [
+        str(item) for item in dep.get("parameter_types") or [] if str(item)
+    ]
+    return MockPlanDubboRoute(
+        dep_id=dep_id,
+        service=service,
+        method=method,
+        parameter_types=parameter_types,
+        group=str(dep.get("group") or "") or None,
+        version=str(dep.get("version") or "") or None,
+        source="agent",
+        branches=branches,
+    )
+
+
 def _injection_for(dep: dict[str, Any]) -> MockPlanInjection:
     dep_id = str(dep.get("dep_id") or "")
+    if dep_id.startswith("dubbo:") or dep.get("dep_type") == "dubbo":
+        # 只走 Java agent 的消费端 Filter；没有其它注入方式。
+        return MockPlanInjection(
+            dep_id=dep_id,
+            strategy=MockStrategy.AGENT_REWRITE,
+            kind="base_url",
+            property=None,
+            original=None,
+            path_mode="append",
+            reason="dubbo_filter_requires_java_agent",
+        )
     if _is_java_dep(dep):
         return _java_injection(dep, dep_id)
     config_keys = [str(key) for key in dep.get("config_keys") or [] if str(key)]
@@ -192,7 +235,17 @@ def sync_mock_semantic(
                 continue
             entry.branches[branch.branch] = branch.stub.model_copy(deep=True)
             changed.append(f"{entry.route.dep_id}/{branch.branch}")
-    for route in runtime.plan.routes:
+    for entry in runtime.server.dubbo_deps.values():
+        dep = dep_index.get(entry.dep_id)
+        if dep is None:
+            continue
+        for branch in dep.branches:
+            current = entry.branches.get(branch.branch)
+            if current == branch.stub:
+                continue
+            entry.branches[branch.branch] = branch.stub.model_copy(deep=True)
+            changed.append(f"{entry.dep_id}/{branch.branch}")
+    for route in [*runtime.plan.routes, *runtime.plan.dubbo_routes]:
         dep = dep_index.get(route.dep_id)
         if dep is None:
             continue
@@ -225,6 +278,7 @@ def build_mock_plan(
     branches = semantic.branch_index()
     warnings: list[str] = []
     routes: list[MockPlanRoute] = []
+    dubbo_routes: list[MockPlanDubboRoute] = []
     injections: list[MockPlanInjection] = []
 
     for dep_id in sorted(bindings):
@@ -240,24 +294,27 @@ def build_mock_plan(
                     f"Mock 语义中没有分支: {dep_id} / {branch}",
                 )
             route_branches[branch] = spec.stub
-        method = str(dep.get("method") or "").upper()
-        path_key = str(dep.get("path_key") or "")
-        if not method or not path_key:
-            raise AgentError(
-                "mock_route_incomplete",
-                f"{dep_id} 缺少 method/path_key，不能生成路由",
+        if dep_id.startswith("dubbo:") or dep.get("dep_type") == "dubbo":
+            dubbo_routes.append(_dubbo_route(dep, dep_id, route_branches))
+        else:
+            method = str(dep.get("method") or "").upper()
+            path_key = str(dep.get("path_key") or "")
+            if not method or not path_key:
+                raise AgentError(
+                    "mock_route_incomplete",
+                    f"{dep_id} 缺少 method/path_key，不能生成路由",
+                )
+            routes.append(
+                MockPlanRoute(
+                    dep_id=dep_id,
+                    method=method,
+                    path_key=path_key,
+                    host=dep.get("route_host") or None,
+                    target=dep.get("target") or None,
+                    source="agent",
+                    branches=route_branches,
+                )
             )
-        routes.append(
-            MockPlanRoute(
-                dep_id=dep_id,
-                method=method,
-                path_key=path_key,
-                host=dep.get("route_host") or None,
-                target=dep.get("target") or None,
-                source="agent",
-                branches=route_branches,
-            )
-        )
         injection = _injection_for(dep)
         injections.append(injection)
         if injection.strategy is MockStrategy.UNSUPPORTED:
@@ -266,7 +323,10 @@ def build_mock_plan(
                 f"{injection.reason or 'unsupported'}"
             )
         elif injection.strategy is MockStrategy.AGENT_REWRITE:
-            warnings.append(f"mock_injection_agent_rewrite:{dep_id}")
+            if dep_id.startswith("dubbo:"):
+                warnings.append(f"mock_injection_dubbo_filter:{dep_id}")
+            else:
+                warnings.append(f"mock_injection_agent_rewrite:{dep_id}")
         elif injection.strategy is MockStrategy.HTTP_PROXY:
             warnings.append(f"mock_injection_proxy:{dep_id}")
         elif injection.strategy is MockStrategy.DISCOVERY_OVERRIDE:
@@ -282,6 +342,7 @@ def build_mock_plan(
         host=host,
         port=port,
         routes=routes,
+        dubbo_routes=dubbo_routes,
         injections=injections,
     )
     try:

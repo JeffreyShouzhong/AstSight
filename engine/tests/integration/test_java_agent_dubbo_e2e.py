@@ -37,7 +37,7 @@ pytestmark = pytest.mark.skipif(
 
 ROOT = Path(__file__).resolve().parents[3]
 TOKEN = "agent-dubbo-e2e-token"
-DEP_ID = "dubbo:OrderService#create?group=order&version=1.0.0"
+DEP_ID = "dubbo:OrderService#create(java.lang.String)?group=order&version=1.0.0"
 
 
 def _executable(path: Path) -> Path | None:
@@ -231,14 +231,72 @@ def test_dubbo_stub_returns_dto_without_real_call(
         server.stop()
 
 
+def test_dubbo_overload_uses_parameter_signature(
+    sample_classes: tuple[Path, str], tmp_path: Path
+) -> None:
+    classes, classpath = sample_classes
+    sut_id = "sut-dubbo-overload"
+    single = DEP_ID
+    overload = (
+        "dubbo:OrderService#create(java.lang.String,int)"
+        "?group=order&version=1.0.0"
+    )
+    server = MockHttpServer(
+        sut_id=sut_id,
+        token=TOKEN,
+        history_path=tmp_path / "mock_calls.jsonl",
+    )
+    server.add_dubbo_dep(
+        single,
+        branches={"success": MockStub(body={"orderId": "O-1", "amount": 10})},
+    )
+    server.add_dubbo_dep(
+        overload,
+        branches={"success": MockStub(body={"orderId": "O-2", "amount": 5})},
+    )
+    server.start()
+    try:
+        response = httpx.post(
+            f"{server.endpoint}/_admin/sessions",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={
+                "session_id": "session-overload",
+                "namespace": sut_id,
+                "case_id": "case-overload",
+                "ttl_ms": 60_000,
+                "bindings": [
+                    {"dep_id": single, "branch": "success"},
+                    {"dep_id": overload, "branch": "success"},
+                ],
+            },
+            timeout=5,
+        )
+        assert response.status_code == 200, response.text
+
+        completed = _run_sample(
+            classes, classpath, "overload", endpoint=server.endpoint, sut_id=sut_id
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert "overload=O-2,5" in completed.stdout, completed.stdout
+        assert "REAL_CALL" not in completed.stdout, completed.stdout
+        records = server.evidence.records
+        assert len(records) == 1, [record.model_dump() for record in records]
+        assert records[0].dep_id == overload
+    finally:
+        server.stop()
+
+
 def test_dubbo_async_future_oneway_and_generic(
     sample_classes: tuple[Path, str], tmp_path: Path
 ) -> None:
     classes, classpath = sample_classes
     sut_id = "sut-dubbo-modes"
     create = DEP_ID
-    create_async = "dubbo:OrderService#createAsync?group=order&version=1.0.0"
-    ping = "dubbo:OrderService#ping?group=order&version=1.0.0"
+    create_async = (
+        "dubbo:OrderService#createAsync(java.lang.String)"
+        "?group=order&version=1.0.0"
+    )
+    ping = "dubbo:OrderService#ping(java.lang.String)?group=order&version=1.0.0"
     server = MockHttpServer(
         sut_id=sut_id,
         token=TOKEN,

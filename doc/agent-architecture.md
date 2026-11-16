@@ -188,7 +188,7 @@ gRPC：proto/descriptor；Dubbo 2.7+：接口源码 + 标准注解/XML）组织�
 | Mock 绑定 | `mock_bindings.dep_id` 在画像中且属于 `type=http` 或 `type=dubbo`（2.7+）下游；`branch` 在语义分支中；HTTP 下游给出 `mock.strategy`、`route_key` 与实际配置键（或发现/代理覆盖证据），且策略属于 v1 边界（承诺：下游专属 `url_override`、显式明文 `http_proxy`；条件：`discovery_override`、透明代理），Dubbo 下游标 `mock.strategy="agent_filter"` | 缺失或不可解析 → 阻断；绑定 `mock="unsupported"` 的下游（gRPC、HTTPS、共享 base URL、动态 URL 或无法覆盖的 HTTP）→ 阻断；以条件能力冒充 v1 承诺 → 阻断；只绑 `success` 却声称测降级 → `weak_oracle` |
 | 不可 Mock 下游 | 依赖 SUT → gRPC 下游的用例已显式排除或标 `blocked`，且审核文件展示原因 | 静默放行 → 阻断 |
 | gRPC Mock（v4.4） | 绑定 gRPC 下游时，执行计划声明 `mock.strategy="grpc_server"`、Mock 服务器 endpoint 与 descriptor 来源；审核文件展示 `wire_roundtrip` 与已知 int64 匹配限制 | 未声明 / descriptor 缺失 / 服务器未就绪 → 阻断 |
-| Dubbo agent 前提 | 用例绑定 Dubbo 下游时，执行计划必须声明 agent 加载方式（`javaagent`/`classpath`）与兼容矩阵；`serialization_verified=false` 必须在审核文件展示 | 未声明 / 矩阵未覆盖 → 阻断 |
+| Dubbo agent 前提 | 用例绑定 Dubbo 下游时，执行计划必须声明 agent 加载方式（`javaagent`）与兼容矩阵；`serialization_verified=false` 必须在审核文件展示 | 未声明 / 矩阵未覆盖 → 阻断 |
 | 规则引用有效 | `rule_key` 可解析；非 `ungrounded`；C/D 不得单独作 oracle；冲突规则已展示 | `ungrounded`/C-D-only 阻断；冲突只告警 |
 | 规则漂移 | 引用 `rule_drift` 规则的用例未标 `stale`，或已显式降级 | 阻断 |
 | 乐观锁 | `base_store_version` + `base_store_hash` 匹配 | 阻断，要求重新 import |
@@ -656,12 +656,12 @@ drain（默认 200ms）→ DELETE /_admin/sessions/{id} → 释放 lease
 
 ```
 SUT 启动（AstSight 拉起）
-   │  -javaagent:astsight-agent.jar（classpath + dubbo.consumer.filter 未实现）
+   │  -javaagent:astsight-agent.jar（classpath + dubbo.consumer.filter 明确不支持）
    ▼
 agent：ExtensionLoader 加载时反射 defineClass，把 Filter 定义进应用类加载器
    │  Filter 经 Dubbo SPI @Activate(group=CONSUMER) 进入消费端调用链
    ▼
-启动自检：首版读 admin 心跳的 dubbo 块（installed/version/filter_instantiated）；本地心跳文件未实现 + 版本匹配
+启动自检：读 admin 心跳的 dubbo 块（installed/version/filter_instantiated）+ 版本匹配；本地心跳文件不做
    │  缺失/残留/过期 → agent_not_active；身份不符 → mock_identity_mismatch，整批阻断
    ▼
 用例执行：SUT 调下游 → Directory 选中 provider → Filter 命中会话
@@ -675,9 +675,11 @@ agent：ExtensionLoader 加载时反射 defineClass，把 Filter 定义进应用
 
 - 不部署 Mock Provider、不做注册中心替身；注册中心/provider 由测试环境保证；
 - Filter 只拦截 SUT 出站 Dubbo 调用，不参与调用 SUT；
-- 不增强 Dubbo 内部类；Filter 未激活（如应用 `filter=...` 带 `-default`）由心跳文件的 `filter_instantiated=0` 发现；
+- 不增强 Dubbo 内部类；Filter 未激活（如应用 `filter=...` 带 `-default`）由 admin 心跳的 `filter_instantiated=0` 发现，报告记为 `filter_not_in_chain` 并阻断；
+- 画像阶段只读源码识别 `@DubboReference`/`@Reference` 字段与接口方法签名，证明不了就显式 `unsupported`；识别出的 dep 进 `downstream_deps`，Mock 计划生成 `dubbo_routes`，注入固定 `agent_rewrite`，`agent run` 自动注入 `JAVA_TOOL_OPTIONS` 与 token 环境变量；
+- `dep_id` 为 `dubbo:{interface}#{method}({param_types})?group=&version=`，参数签名用于区分重载；
 - 响应对象构造失败 → `mock_response_invalid`；异步调用返回 `AsyncRpcResult`；
-- `serialization_verified=false` 固定写入报告（跳过 Hessian2）。
+- `serialization_verified=false` 固定写入报告（跳过 Hessian2），执行门禁按告警处理。
 
 **HTTP 下游（v4.15，agent 改写 URL；与 Dubbo 共用外壳）**：
 

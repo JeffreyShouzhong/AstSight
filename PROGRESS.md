@@ -9,8 +9,9 @@
 > JVM、HC4+HC5、Spring Boot 3.5.6 fat jar 均联调通过；版本矩阵
 > JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；Mock 路由在同 host
 > 字面量/模板路径并存时字面量优先；Dubbo 消费端 Filter 首版已打通（会话取桩、
-> 失败关闭、零真实调用），实测组合仅 Dubbo 2.7.22 + JDK 26；全量测试与 agent
-> e2e 结果见“本轮完成”
+> 失败关闭、零真实调用）；Dubbo 画像识别、`dubbo_routes` 计划、自动注入与心跳
+> 门禁已打通，`dep_id` 带参数签名支持重载；实测 Dubbo 2.7.22 与 3.2.19 ×
+> JDK 8/11/17/21/26 共 10 个组合全部通过；全量测试与 agent e2e 结果见“本轮完成”
 
 ## 当前状态
 
@@ -45,8 +46,58 @@
 | `agent run` 全链路 e2e | ✅ 2026-11-16 | `test_java_agent_flow_e2e.py`：Spring Boot fat jar 经 `run_flow` 完成画像 → 计划 → `JAVA_TOOL_OPTIONS` 注入 → 执行 → 报告；证据 `adapter=okhttp`/`mode=agent_rewrite`/`original_host`，零透传，token 不进命令行；修复 Java HTTPS dep 在画像阶段被丢弃的问题 |
 | Mock 路由精确优先 | ✅ 2026-11-16 | 同 host+method 下字面量路径（`/orders/7`）优先于 `{}` 模板（`/orders/{}`）；Python `RouteTable` 与 Java `RouteTableSnapshot` 同规则；多字面量/多模板仍 `mock_route_ambiguous` 失败关闭；全链路 e2e 同时覆盖 OkHttp 字面量与 RestTemplate 模板 |
 | HTTP/2 prior-knowledge 负例 | ✅ 2026-11-16 | OkHttp `H2_PRIOR_KNOWLEDGE` 改写后无法与 HTTP/1.1 Mock 完成交换：SUT 显式失败（非 0）、真实下游 0 连接、心跳 `http_rewrites>=1`/`http_passthrough=0`；`test_java_agent_h2_prior_knowledge_e2e.py` |
-| Dubbo Filter 首版 | ✅ 2026-11-16 | `java/astsight-agent-dubbo`：消费端 Filter 由 `@Activate(group="consumer")` 进链；Filter 字节在 `ExtensionLoader` 首次加载时用 `ClassLoader#defineClass` 注入应用类加载器，不增强 Dubbo 内部类；取桩走 `POST /_admin/dubbo/invoke`（按 `dep_id` 命中会话绑定），返回体按接口返回类型经 Jackson 构造；同步/异步/声明 future/oneway/泛化都已处理；计划内取桩失败抛 `RpcException`、真实调用 0 次，计划外 dep 放行且无证据；心跳新增 `dubbo` 块；实测仅 Dubbo 2.7.22 + JDK 26 |
+| Dubbo Filter 首版 | ✅ 2026-11-16 | `java/astsight-agent-dubbo`：消费端 Filter 由 `@Activate(group="consumer")` 进链；Filter 字节在 `ExtensionLoader` 首次加载时用 `ClassLoader#defineClass` 注入应用类加载器，不增强 Dubbo 内部类；取桩走 `POST /_admin/dubbo/invoke`（按 `dep_id` 命中会话绑定），返回体按接口返回类型经 Jackson 构造；同步/异步/声明 future/oneway/泛化都已处理；计划内取桩失败抛 `RpcException`、真实调用 0 次，计划外 dep 放行且无证据；心跳新增 `dubbo` 块 |
+| Dubbo 端到端闭环 | ✅ 2026-11-16 | 画像只读源码识别 `@DubboReference`/`@Reference` 与接口签名，无法证明即 `unsupported`；dep 进 `downstream_deps`，计划生成 `dubbo_routes` 并固定 `agent_rewrite` 注入；`agent run` 自动加 `-javaagent` 与 token 环境变量；执行门禁读心跳，缺心跳/Filter 未进链阻塞 `filter_not_in_chain`，`serialization_verified=false` 告警；`dep_id` 带参数签名支持重载；矩阵 Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 组合通过 |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
+
+## 本轮完成（Dubbo 画像/计划/门禁/重载/矩阵，2026-11-16）
+
+1. **画像识别**：新增 `engine/astsight/profile/dubbo.py`，只读源码扫描
+   `@DubboReference` / Dubbo `@Reference` 字段；接口源码必须在仓库内，方法
+   参数类型要能解析到 JVM 名（`java.lang.String`、`int`、`java.lang.String[]`）。
+   接口只在依赖 jar、方法找不到、同名重载无法区分、参数解析失败时，分别显式
+   记 `dubbo_interface_in_jar` / `dubbo_method_unresolved` /
+   `dubbo_overload_ambiguous` / `dubbo_parameter_invalid`；XML 与 Kotlin 引用
+   分别记 `dubbo_xml_reference_unsupported` / `dubbo_kotlin_reference_unsupported`，
+   不猜。扫描结果由 `DownstreamScanner.scan_dubbo()` 按项目缓存，并附到每个
+   画像的 `downstream_deps`。
+2. **计划与注入**：`MockPlan` 新增 `dubbo_routes` 与 `MockPlanDubboRoute`；
+   计划校验要求 `dep_id` 是带参数签名的规范形态、同一路由不重复；Dubbo 依赖的
+   注入固定为 `agent_rewrite`（原因 `dubbo_filter_requires_java_agent`），
+   `agent run` 据此把 `JAVA_TOOL_OPTIONS` 与 `ASTSIGHT_AGENT_TOKEN` 注入 SUT
+   环境，admin token 不出现在命令行。运行期 `add_dubbo_dep` 与语义热更新同步
+   维护 `dubbo_routes`。
+3. **执行门禁**：`pipeline` 在执行结束后取 `GET /_admin/agent/heartbeat`，写入
+   `mock_evidence.json` 的 `agent` 块；`report/merge.py` 在计划含 Dubbo 路由时
+   检查心跳，缺心跳、`dubbo.installed=false` 或 `filter_instantiated=0` 记为
+   阻塞项 `filter_not_in_chain`，`serialization_verified=false` 记为告警；
+   `mock_not_used` 继续按会话绑定与实际证据比对；报告新增 `## Dubbo Filter`
+   段落。
+4. **重载与 `dep_id`**：`dep_id` 改成
+   `dubbo:<接口>#<方法>(<参数类型,...>)?group=<g>&version=<v>`，参数类型用
+   JVM 名、无参数写 `()`。Java `DubboBridge` 产出签名（泛化调用取 `args[2]`），
+   Python `identity.build_dubbo_dep_id` / `parse_dubbo_dep_id` 统一校验，Mock
+   server 与计划校验拒绝无签名的旧形态；样例新增 `create(String, int)` 重载与
+   `overload` 模式。
+5. **版本矩阵**：新增 `engine/tests/integration/test_java_agent_dubbo_matrix_e2e.py`，
+   默认跳过；启用后对每个 JDK × Dubbo 版本编译并运行 `DubboFilterSample`，
+   核对 `filter=...AstSightDubboFilter`、桩结果、真实调用 0 次、心跳版本与
+   `serialization_verified=false`。实测 Dubbo 2.7.22 与 3.2.19 分别在
+   Temurin JDK 8.0.512 / 11.0.33 / 17.0.21 / 21.0.13 与本机 OpenJDK 26 上
+   通过，共 **10 个组合**。首次运行经 Maven 下载依赖，缓存在
+   `~/.astsight/java-agent-dubbo-matrix/`。
+6. **Java 构建与测试**：重新执行
+   `mvn -pl astsight-agent -am -DskipTests clean package`；`DubboBridgeTest`
+   修正一处方法名写错并验证参数签名/重载区分；Java 单测通过。
+7. **Python 测试**：新增 `tests/test_profile_dubbo.py`（6 条）与
+   `tests/test_dubbo_gates.py`（4 条）；`tests/test_mock_identity.py` 与
+   `tests/test_mock_dubbo.py` 补参数签名与重载用例；Dubbo e2e 5 条通过；
+   矩阵 10 条通过；全量 **419 passed, 32 skipped**（默认跳过的 agent e2e 与
+   矩阵不计入 passed）。
+8. **文档**：`java/README.md`、`engine/README.md`、`doc/决策记录.md`
+   （新增 v4.22）、`doc/framework-capability-design.md`、
+   `doc/agent-architecture.md` 同步新的 `dep_id` 形态、画像/计划/门禁与矩阵
+   结论；矩阵外版本仍按未验证处理。
 
 ## 本轮完成（Dubbo 消费端 Filter 首版，2026-11-16）
 
@@ -69,7 +120,8 @@
    `{schema_version, route_key, dep_id, branch, body, delay_ms}`；错误码沿用
    `mock_dep_unplanned`（404）、`mock_unexpected_dep`、`mock_branch_not_found`、
    `mock_session_missing/expired/late_call`、`mock_response_invalid`。
-   `dep_id` 形如 `dubbo:接口#方法?group=&version=`（空参数省略）。返回体按接口
+   `dep_id` 形如 `dubbo:接口#方法(参数类型,...)?group=&version=`（v4.22 起
+   必带参数签名，无参数写 `()`）。返回体按接口
    方法的 `getGenericReturnType()` 用 Jackson 转换，转换失败即
    `mock_response_invalid`；泛化调用按 `Map`/`Object` 处理。
 5. **调用形态**：同步、老式异步（`async=true` attachment）、声明
@@ -102,9 +154,11 @@
 9. **构建**：`mvn -pl astsight-agent -am -DskipTests clean package` 后
    `python tools/build_agent_wheel.py --skip-build` 刷新 sidecar/wheel。注意
    只跑 `mvn package` 时 shaded dist jar 可能仍是旧的，联调前先 clean。
-10. **明确未做**：classpath + `dubbo.consumer.filter` 形态、本地心跳文件、
-    JDK 8/11/17/21 与 Dubbo 3.x 组合。这些在画像阶段按 `unsupported` 处理，
-    不做运行期试探。
+10. **当时未验证**：JDK 8/11/17/21 与 Dubbo 3.x 组合（v4.22 已补实测，
+    见上一节）。classpath + `dubbo.consumer.filter` 形态与本地心跳文件经评估
+    **明确不做**：classpath 形态没有 `premain`，只能挂 Dubbo Filter、覆盖不了
+    HTTP，收益不足以支撑额外支持面。矩阵外组合在画像阶段按 `unsupported`
+    处理，不做运行期试探。
 
 ## 本轮完成（HTTP/2 prior-knowledge 负例，2026-11-16）
 
@@ -500,9 +554,9 @@
    （2026-11-16，负例 e2e）；第三方 SDK 端点发现明确不做（理由见决策记录
    §17）；Dubbo 消费端 Filter 首版 ✅ 已完成（2026-11-16，`-javaagent` +
    会话取桩 + 失败关闭 + 零真实调用）。
-5. **Dubbo 后续（未排期）**：JDK 8/11/17/21 与 Dubbo 3.x 实测、classpath +
-   `dubbo.consumer.filter` 形态与本地心跳文件。未实测组合一律按
-   `unsupported` 处理。
+5. **Dubbo 版本矩阵**：✅ 已完成（2026-11-16），Dubbo 2.7.22 与 3.2.19 ×
+   JDK 8/11/17/21/26 共 10 组合通过。classpath + `dubbo.consumer.filter`
+   形态与本地心跳文件明确不做。矩阵外组合一律按 `unsupported` 处理。
 
 已完成的历史步骤（Java HTTP Mock P0/P1/P1.5）见下方各轮完成记录。
 
@@ -599,6 +653,9 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-16**：回退 Dubbo classpath 形态与本地心跳文件实现，评估后**明确不做**：
+  classpath 形态没有 `premain`，只能挂 Dubbo Filter、覆盖不了 HTTP，收益不足以
+  支撑额外支持面；`agent_not_active` 继续以 admin 心跳为准。
 - **2026-11-16**：Dubbo 消费端 Filter 首版：
   - 新增 `java/astsight-agent-dubbo`（Filter、`DubboBridge`、`DubboClassInjector`、
     `AstSightDubboModule`）；`dubbo-rpc-api:2.7.22` 为 `provided`；

@@ -33,6 +33,30 @@ class MockPlanRoute(BaseModel):
     branches: dict[str, MockStub] = Field(default_factory=dict)
 
 
+class MockPlanDubboRoute(BaseModel):
+    """一个 Dubbo 消费端方法与它的语义分支。
+
+    `dep_id` 必须等于按 `service/method/parameter_types/group/version` 生成的
+    规范形态；参数签名用于区分重载，不可省略。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dep_id: str = Field(
+        description="dubbo:{service}#{method}({参数类型,...})?group=&version="
+    )
+    service: str
+    method: str
+    parameter_types: list[str] = Field(default_factory=list)
+    group: str | None = None
+    version: str | None = None
+    source: str = "plan"
+    route_key: str | None = Field(
+        default=None, description="可选；提供时必须等于 dep_id 的确定性 route_key"
+    )
+    branches: dict[str, MockStub] = Field(default_factory=dict)
+
+
 class MockPlanInjection(BaseModel):
     """下游 URL 注入计划；运行时把 `injected` 补全后写入 manifest。"""
 
@@ -65,7 +89,13 @@ class MockPlan(BaseModel):
     port: int = Field(default=0, ge=0, le=65_535)
     capture_bodies: bool = False
     routes: list[MockPlanRoute] = Field(default_factory=list)
+    dubbo_routes: list[MockPlanDubboRoute] = Field(default_factory=list)
     injections: list[MockPlanInjection] = Field(default_factory=list)
 
 
-__all__ = ["MockPlan", "MockPlanInjection", "MockPlanRoute"]
+__all__ = [
+    "MockPlan",
+    "MockPlanDubboRoute",
+    "MockPlanInjection",
+    "MockPlanRoute",
+]

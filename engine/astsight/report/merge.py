@@ -219,6 +219,32 @@ def build_report(
                 "相关用例可能未真正隔离"
             )
 
+    dubbo_routes = int(plan.get("dubbo_route_count") or 0)
+    if dubbo_routes:
+        agent_state = mock.get("agent") or {}
+        heartbeat = agent_state.get("heartbeat") or {}
+        dubbo_agent = heartbeat.get("dubbo") or {}
+        if not heartbeat:
+            blockers.append(
+                "计划内 Dubbo 下游未确认 Filter 在消费端链上"
+                f"（filter_not_in_chain）：{agent_state.get('reason') or 'agent_heartbeat_missing'}"
+            )
+        elif not dubbo_agent.get("installed"):
+            blockers.append(
+                "计划内 Dubbo 下游已登记，但 agent 心跳未上报 Dubbo Filter"
+                "（filter_not_in_chain：dubbo.installed=false）"
+            )
+        elif int(dubbo_agent.get("filter_instantiated") or 0) <= 0:
+            blockers.append(
+                "计划内 Dubbo 下游已登记，但消费端 Filter 从未实例化"
+                "（filter_not_in_chain：dubbo.filter_instantiated=0）"
+            )
+        if heartbeat and not dubbo_agent.get("serialization_verified", False):
+            warnings.append(
+                "Dubbo 桩响应 serialization_verified=false："
+                "跳过 Hessian2 链路，序列化保真未验证（degraded）"
+            )
+
     route_health = (route_audit or {}).get("health") or {}
     if route_health.get("status") == "degraded":
         reasons = "，".join(route_health.get("reasons") or [])
@@ -547,6 +573,29 @@ def render_markdown(report: dict) -> str:
                     f"{call.get('error') or '-'}"
                 )
             lines.append("</details>")
+        lines.append("")
+    agent_state = mock.get("agent") or {}
+    if int((mock.get("plan") or {}).get("dubbo_route_count") or 0):
+        heartbeat = agent_state.get("heartbeat") or {}
+        dubbo_agent = heartbeat.get("dubbo") or {}
+        lines.append("## Dubbo Filter")
+        lines.append("")
+        if not heartbeat:
+            lines.append(
+                f"- Filter 未确认在链上：`{agent_state.get('reason') or 'agent_heartbeat_missing'}`"
+            )
+        else:
+            lines.append(
+                f"- 版本：`{dubbo_agent.get('version') or '-'}` / "
+                f"实例化 {dubbo_agent.get('filter_instantiated', 0)} 次 / "
+                f"命中 {dubbo_agent.get('filter_hits', 0)} 次 / "
+                f"放行 {dubbo_agent.get('passthrough', 0)} 次 / "
+                f"错误 {dubbo_agent.get('errors', 0)} 次"
+            )
+            lines.append(
+                "- 序列化保真："
+                + ("已验证" if dubbo_agent.get("serialization_verified") else "未验证（serialization_verified=false）")
+            )
         lines.append("")
     elif mock.get("reason") not in (None, "mock_evidence_not_configured"):
         lines.append("## 下游 Mock")

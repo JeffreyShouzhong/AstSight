@@ -164,7 +164,9 @@ async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 
 
 以上 HTTP 相关用例均已实测通过；版本矩阵在 JDK 8/11/17/21/26 上共 80 个
 JDK×客户端组合全部通过，Spring Boot 样例在 JDK 17/21/26 通过。Dubbo e2e
-在 Dubbo 2.7.22 + JDK 26 通过。
+在 Dubbo 2.7.22 + JDK 26 通过；Dubbo 版本矩阵另见
+`test_java_agent_dubbo_matrix_e2e.py`，2.7.22 与 3.2.19 × JDK 8/11/17/21/26
+共 10 个组合全部通过。
 
 ## Dubbo 消费端 Filter
 
@@ -182,8 +184,11 @@ Filter 只引用 Dubbo 类型和系统类加载器里的 `DubboBridge`；bridge 
 
 调用路径：
 
-- `dep_id` 形如 `dubbo:<接口>#<方法>?group=<g>&version=<v>`（空参数省略）；
-  泛化调用从 `args[0]`/`args[1]` 取接口和方法名，并读取 `interface` attachment。
+- `dep_id` 形如
+  `dubbo:<接口>#<方法>(<参数类型,...>)?group=<g>&version=<v>`，参数类型用
+  JVM 名（如 `java.lang.String`、`int`），无参数写 `()`，用于区分重载；
+  泛化调用从 `args[0]`/`args[1]` 取接口和方法名，从 `args[2]` 取参数类型，
+  并读取 `interface` attachment。
 - 计划内调用向 `POST /_admin/dubbo/invoke` 取桩，Mock 按会话绑定返回
   `{route_key, dep_id, branch, body, delay_ms}`；返回体按接口方法的
   `getGenericReturnType()` 用 Jackson 构造，void 返回 null。
@@ -198,11 +203,12 @@ Filter 只引用 Dubbo 类型和系统类加载器里的 `DubboBridge`；bridge 
 errors / serialization_verified`，其中 `serialization_verified` 固定为
 `false`（首版不校验序列化保真）。
 
-**首版范围**：只支持 `-javaagent` 形态。同步、老式异步、声明
-`CompletableFuture<T>`、oneway 与泛化 `$invoke`/`$invokeAsync` 都已处理；
-实测组合只有 Dubbo 2.7.22 + JDK 26。classpath + `dubbo.consumer.filter`
-形态、本地心跳文件、JDK 8/11/17/21 与 Dubbo 3.x 均未实现或未验证，画像期
-按 `unsupported` 处理。
+**支持范围**：只支持 `-javaagent` 形态。同步、老式异步、声明
+`CompletableFuture<T>`、oneway 与泛化 `$invoke`/`$invokeAsync` 都已处理。
+已实测的版本矩阵为 Dubbo 2.7.22 与 3.2.19，各自跑过 JDK
+8/11/17/21/26，共 10 个组合全部通过。classpath + `dubbo.consumer.filter`
+形态与本地心跳文件**明确不支持**（classpath 只对 Dubbo 有效，无法覆盖 HTTP）。
+未出现在矩阵里的 Dubbo 版本不做运行期试探，画像期按 `unsupported` 处理。
 
 端到端测试默认跳过，启用方式：
 
@@ -212,6 +218,15 @@ mvn -pl astsight-agent -am -DskipTests clean package
 # 生成 target/dubbo-classpath.txt（2.7.22 及其依赖）
 cd ../engine
 ASTSIGHT_JAVA_AGENT_E2E=1 python -m pytest tests/integration/test_java_agent_dubbo_e2e.py -q
+```
+
+版本矩阵另行启用（首次运行会经 Maven 下载 Dubbo 依赖）：
+
+```bash
+cd engine
+ASTSIGHT_JAVA_AGENT_DUBBO_MATRIX_E2E=1 \
+ASTSIGHT_JAVA_AGENT_DUBBO_MATRIX_JDKS="<JDK8>;<JDK11>;<JDK17>;<JDK21>;<JDK26>" \
+python -m pytest tests/integration/test_java_agent_dubbo_matrix_e2e.py -q
 ```
 
 样例 `java/samples/DubboFilterSample.java` 不启动注册中心与 provider：它经
@@ -230,6 +245,7 @@ Dubbo SPI 取出 Filter，对计数假 Invoker 调用，分别验证取桩成功
 - HTTP/2 prior-knowledge（h2c）不支持：Mock 只讲 HTTP/1.1，改写后的 h2c
   请求会显式失败；负例 e2e 验证此时真实下游 0 连接，不会悄悄回落。
 - 签名、pinning、连接池复用、重定向与异步链路的副作用尚未验证。
-- Dubbo Filter 首版只覆盖 `-javaagent` 形态，实测组合仅 Dubbo 2.7.22 +
-  JDK 26；`serialization_verified` 固定为 `false`，不宣称序列化保真。
-  classpath 形态与 Dubbo 3.x 未验证。
+- Dubbo Filter 只覆盖 `-javaagent` 形态，已实测 Dubbo 2.7.22 与 3.2.19 ×
+  JDK 8/11/17/21/26 共 10 个组合；矩阵外版本不承诺。
+  `serialization_verified` 固定为 `false`，不宣称序列化保真。classpath
+  形态明确不支持。

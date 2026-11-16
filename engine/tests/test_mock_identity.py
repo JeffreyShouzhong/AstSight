@@ -8,9 +8,11 @@ from astsight.mock import (
     assign_route_keys,
     build_dep_id,
     build_dep_id_plan,
+    build_dubbo_dep_id,
     normalize_host,
     normalize_path_key,
     normalize_target_url,
+    parse_dubbo_dep_id,
 )
 
 
@@ -161,3 +163,50 @@ def test_route_keys_are_unique_and_stable() -> None:
 def test_build_dep_id_rejects_empty_method() -> None:
     with pytest.raises(DepIdError):
         build_dep_id("svc:x", "", "/x")
+
+
+def test_dubbo_dep_id_includes_parameter_signature() -> None:
+    assert (
+        build_dubbo_dep_id(
+            "com.acme.OrderService",
+            "create",
+            ["java.lang.String"],
+            group="order",
+            version="1.0.0",
+        )
+        == "dubbo:com.acme.OrderService#create(java.lang.String)"
+        "?group=order&version=1.0.0"
+    )
+    assert (
+        build_dubbo_dep_id("com.acme.OrderService", "list")
+        == "dubbo:com.acme.OrderService#list()"
+    )
+    assert (
+        build_dubbo_dep_id(
+            "com.acme.OrderService", "create", ["java.lang.String", "int"]
+        )
+        != build_dubbo_dep_id("com.acme.OrderService", "create", ["java.lang.String"])
+    )
+
+
+def test_parse_dubbo_dep_id_requires_canonical_form() -> None:
+    canonical = "dubbo:com.acme.OrderService#create(java.lang.String)"
+    parsed = parse_dubbo_dep_id(canonical)
+    assert parsed is not None
+    assert parsed.service == "com.acme.OrderService"
+    assert parsed.method == "create"
+    assert parsed.parameter_types == ("java.lang.String",)
+    assert parsed.dep_id == canonical
+
+    assert parse_dubbo_dep_id("dubbo:com.acme.OrderService#create") is None
+    assert (
+        parse_dubbo_dep_id(
+            "dubbo:com.acme.OrderService#create(java.lang.String)?version=2&group=order"
+        )
+        is None
+    )
+
+
+def test_dubbo_dep_id_rejects_ambiguous_parameter_names() -> None:
+    with pytest.raises(DepIdError):
+        build_dubbo_dep_id("com.acme.OrderService", "create", ["java.lang.String,int"])

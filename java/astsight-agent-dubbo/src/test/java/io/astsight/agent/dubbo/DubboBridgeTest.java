@@ -8,23 +8,62 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 final class DubboBridgeTest {
 
     @Test
-    void depIdIncludesGroupAndVersionInStableOrder() {
+    void depIdIncludesParameterSignature() {
         assertEquals(
-                "dubbo:com.acme.OrderService#create?group=order&version=1.0.0",
+                "dubbo:com.acme.OrderService#create(java.lang.String)"
+                        + "?group=order&version=1.0.0",
                 DubboBridge.depId(
-                        "com.acme.OrderService", "create", "order", "1.0.0"));
+                        "com.acme.OrderService",
+                        "create",
+                        new String[]{"java.lang.String"},
+                        "order",
+                        "1.0.0"));
+        assertEquals(
+                "dubbo:com.acme.OrderService#create()",
+                DubboBridge.depId(
+                        "com.acme.OrderService", "create", new String[0], null, null));
+        assertEquals(
+                "dubbo:com.acme.OrderService#create(java.lang.String,int[])",
+                DubboBridge.depId(
+                        "com.acme.OrderService",
+                        "create",
+                        new String[]{"java.lang.String", "int[]"},
+                        null,
+                        null));
+    }
+
+    @Test
+    void depIdDistinguishesOverloads() {
+        assertEquals(
+                "dubbo:com.acme.OrderService#create(java.lang.String)",
+                DubboBridge.depId(
+                        "com.acme.OrderService",
+                        "create",
+                        new String[]{"java.lang.String"},
+                        null,
+                        null));
+        assertEquals(
+                "dubbo:com.acme.OrderService#create(java.lang.String,int)",
+                DubboBridge.depId(
+                        "com.acme.OrderService",
+                        "create",
+                        new String[]{"java.lang.String", "int"},
+                        null,
+                        null));
     }
 
     @Test
     void depIdOmitsEmptyParameters() {
         assertEquals(
-                "dubbo:com.acme.OrderService#create",
-                DubboBridge.depId("com.acme.OrderService", "create", null, ""));
+                "dubbo:com.acme.OrderService#create()",
+                DubboBridge.depId("com.acme.OrderService", "create", null, null, ""));
         assertEquals(
-                "dubbo:com.acme.OrderService#create?group=order",
-                DubboBridge.depId("com.acme.OrderService", "create", "order", null));
+                "dubbo:com.acme.OrderService#create()?group=order",
+                DubboBridge.depId(
+                        "com.acme.OrderService", "create", new String[0], "order", null));
         assertEquals(
-                "dubbo:com.acme.OrderService#create?version=2",
-                DubboBridge.depId("com.acme.OrderService", "create", "", "2"));
+                "dubbo:com.acme.OrderService#create()?version=2",
+                DubboBridge.depId(
+                        "com.acme.OrderService", "create", new String[0], "", "2"));
     }
 }

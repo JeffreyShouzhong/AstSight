@@ -138,6 +138,41 @@ def _resolve_mock_evidence(
     return str(history), None
 
 
+def _fetch_agent_heartbeat(
+    config: "RunConfig",
+) -> tuple[dict | None, str | None]:
+    """读取 Java agent 心跳，用于校验 Dubbo Filter 是否真的在链上。
+
+    `GET /_admin/agent/heartbeat` 在 agent 尚未上报时返回 404；这不能当成
+    “没有 Dubbo 调用”糊弄过去，调用方必须按 `filter_not_in_chain` 阻断。
+    """
+    if not config.mock_admin_url:
+        return None, "mock_admin_url_not_configured"
+    headers = (
+        {"Authorization": f"Bearer {config.mock_token}"}
+        if config.mock_token else {}
+    )
+    try:
+        response = httpx.get(
+            f"{config.mock_admin_url.rstrip('/')}/_admin/agent/heartbeat",
+            headers=headers,
+            timeout=5.0,
+        )
+    except httpx.HTTPError as exc:
+        return None, f"agent_heartbeat_unreachable: {type(exc).__name__}: {exc}"[:500]
+    if response.status_code == 404:
+        return None, "agent_not_active"
+    if response.status_code != 200:
+        return None, f"agent_heartbeat_http_{response.status_code}"
+    try:
+        payload = response.json()
+    except ValueError:
+        return None, "agent_heartbeat_invalid"
+    if not isinstance(payload, dict):
+        return None, "agent_heartbeat_invalid"
+    return payload, None
+
+
 def _fetch_mock_sessions(
     config: "RunConfig", run_scope: str | None
 ) -> tuple[list[dict] | None, str | None]:
@@ -722,6 +757,7 @@ def _execute_and_report_inner(
 
     mock_evidence_path, mock_evidence_reason = _resolve_mock_evidence(project, config)
     mock_sessions, mock_sessions_reason = _fetch_mock_sessions(config, mock_run_scope)
+    agent_heartbeat, agent_heartbeat_reason = _fetch_agent_heartbeat(config)
     mock_summary = summarize_evidence(
         mock_evidence_path,
         sessions=mock_sessions,
@@ -750,6 +786,13 @@ def _execute_and_report_inner(
         }
     if mock_plan_state:
         mock_summary = {**mock_summary, "plan": mock_plan_state}
+    mock_summary = {
+        **mock_summary,
+        "agent": {
+            "heartbeat": agent_heartbeat,
+            "reason": agent_heartbeat_reason,
+        },
+    }
     run_dir.write_json("mock_evidence.json", mock_summary)
 
     report = build_report(

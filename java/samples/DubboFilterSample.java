@@ -29,6 +29,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 interface OrderService {
     DubboFilterSample.Order create(String id);
 
+    DubboFilterSample.Order create(String id, int amount);
+
     CompletableFuture<DubboFilterSample.Order> createAsync(String id);
 
     void ping(String id);
@@ -72,6 +74,8 @@ public final class DubboFilterSample {
         try {
             if ("async".equals(mode)) {
                 runAsync();
+            } else if ("overload".equals(mode)) {
+                runOverload();
             } else if ("future".equals(mode)) {
                 runFuture();
             } else if ("oneway".equals(mode)) {
@@ -99,6 +103,19 @@ public final class DubboFilterSample {
                 new Object[]{"A-1"});
         Result result = invoke(url, OrderService.class, invocation);
         System.out.println("result=" + describe(result.getValue()));
+    }
+
+    private static void runOverload() throws Exception {
+        // 同名方法靠参数签名区分：这里只绑定 (String, int) 的重载。
+        URL url = urlFor(OrderService.class, "order");
+        RpcInvocation invocation = new RpcInvocation(
+                "create",
+                OrderService.class.getName(),
+                "Ljava/lang/String;I",
+                new Class<?>[]{String.class, int.class},
+                new Object[]{"A-2", 3});
+        Result result = invoke(url, OrderService.class, invocation);
+        System.out.println("overload=" + describe(result.getValue()));
     }
 
     private static void runAsync() throws Exception {

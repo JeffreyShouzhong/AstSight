@@ -41,7 +41,7 @@ from contracts import (
 )
 
 from .evidence import MockEvidenceWriter
-from .identity import DepIdEntry, DepIdError, route_key_for
+from .identity import DepIdEntry, DepIdError, parse_dubbo_dep_id, route_key_for
 from .routes import RouteEntry, RouteResolution, RouteTable
 from .sessions import MAX_SESSION_HISTORY, SessionError, SessionManager
 
@@ -277,14 +277,15 @@ class MockHttpServer:
         branches: dict[str, MockStub] | None = None,
     ) -> DubboRouteEntry:
         """登记一个 Dubbo 下游端点；`dep_id` 形如
-        `dubbo:com.acme.OrderService#create?group=order&version=1.0.0`。
+        `dubbo:com.acme.OrderService#create(java.lang.String)?group=order&version=1.0.0`。
 
-        Dubbo 调用不经过 HTTP 路由匹配，按 `dep_id` 精确命中；分支与会话
-        绑定复用同一套 `mock_bindings`。
+        参数签名不可省略：重载方法只有签名不同，缺签名会让不同方法撞同一个
+        `dep_id`。Dubbo 调用不经过 HTTP 路由匹配，按 `dep_id` 精确命中；
+        分支与会话绑定复用同一套 `mock_bindings`。
         """
         if self._server is not None:
             raise RuntimeError("cannot add route after server start")
-        if not dep_id.startswith("dubbo:") or "#" not in dep_id:
+        if parse_dubbo_dep_id(dep_id) is None:
             raise DepIdError("mock_dep_id_invalid", dep_id)
         if dep_id in self.dubbo_deps:
             raise DepIdError("mock_route_conflict", f"dep_id={dep_id}")

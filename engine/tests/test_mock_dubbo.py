@@ -11,7 +11,7 @@ from contracts import MockStub
 
 TOKEN = "dubbo-admin-token"
 ADMIN = {"Authorization": f"Bearer {TOKEN}"}
-DEP_ID = "dubbo:com.acme.OrderService#create?group=order&version=1.0.0"
+DEP_ID = "dubbo:com.acme.OrderService#create(java.lang.String)?group=order&version=1.0.0"
 
 
 def _server(tmp_path: Path) -> MockHttpServer:
@@ -118,7 +118,7 @@ def test_dubbo_unbound_dep_fails_closed(tmp_path: Path) -> None:
     server = _server(tmp_path)
     _session(
         server,
-        bindings=[{"dep_id": "dubbo:com.acme.OtherService#other", "branch": "success"}],
+        bindings=[{"dep_id": "dubbo:com.acme.OtherService#other(java.lang.String)", "branch": "success"}],
     )
 
     response = _invoke(server)
@@ -152,11 +152,11 @@ def test_dubbo_unplanned_dep_is_explicit(tmp_path: Path) -> None:
     server = _server(tmp_path)
     _session(server, bindings=[{"dep_id": DEP_ID, "branch": "success"}])
 
-    response = _invoke(server, dep_id="dubbo:com.acme.Unknown#calc")
+    response = _invoke(server, dep_id="dubbo:com.acme.Unknown#calc(java.lang.String)")
     assert response.status_code == 404
     assert response.json()["error"] == "mock_dep_unplanned"
     call = server.evidence.records[0]
-    assert call.dep_id == "dubbo:com.acme.Unknown#calc"
+    assert call.dep_id == "dubbo:com.acme.Unknown#calc(java.lang.String)"
     assert call.result.value == "unknown"
 
 
@@ -170,3 +170,26 @@ def test_dubbo_raw_base64_stub_is_invalid(tmp_path: Path) -> None:
     response = _invoke(server)
     assert response.status_code == 502
     assert response.json()["error"] == "mock_response_invalid"
+
+
+def test_add_dubbo_dep_requires_parameter_signature(tmp_path: Path) -> None:
+    import pytest
+    from astsight.mock import DepIdError
+
+    server = MockHttpServer(sut_id="sut-dubbo", token=TOKEN)
+    with pytest.raises(DepIdError):
+        server.add_dubbo_dep("dubbo:com.acme.OrderService#create")
+
+
+def test_dubbo_overloads_are_distinct_routes(tmp_path: Path) -> None:
+    first = "dubbo:com.acme.OrderService#create(java.lang.String)"
+    second = "dubbo:com.acme.OrderService#create(java.lang.String,int)"
+    server = MockHttpServer(
+        sut_id="sut-dubbo",
+        token=TOKEN,
+        history_path=tmp_path / "mock_calls.jsonl",
+    )
+    server.add_dubbo_dep(first, branches={"success": MockStub(body={"n": 1})})
+    server.add_dubbo_dep(second, branches={"success": MockStub(body={"n": 2})})
+    routes = _run(_call(server, "GET", "/_admin/agent/routes")).json()
+    assert routes["dubbo_deps"] == sorted([first, second])

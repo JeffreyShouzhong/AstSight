@@ -614,7 +614,7 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 | --- | --- | --- | --- | --- |
 | `http` | ✅ | OpenAPI / Spring MVC 注解 | HTTP 客户端 | — |
 | `grpc` | ✅ 仅 unary | `.proto` / descriptor；server reflection 仅作辅助 | gRPC 客户端 | streaming / 异步 / oneway；无 descriptor 且 reflection 关闭 |
-| `dubbo` | ✅ Dubbo 2.7+ | 标准注解 / XML；接口类必须在仓库源码内 | Java sidecar 泛化调用 | Dubbo 2.6；接口类只在依赖 jar；动态代理/反射/`getBean`；非标准封装注解 |
+| `dubbo` | ✅ Dubbo 2.7+ | 标准注解 / XML；接口类必须在仓库源码内 | Java agent 消费端 Filter（`-javaagent`） | Dubbo 2.6；接口类只在依赖 jar；动态代理/反射/`getBean`；非标准封装注解 |
 
 **端点标识**：
 
@@ -622,9 +622,9 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 | --- | --- |
 | HTTP | `POST /api/orders` |
 | gRPC | `grpc:/acme.order.v1.OrderService/Create` |
-| Dubbo | `dubbo:com.acme.OrderService#create?group=order&version=1.0.0` |
+| Dubbo | `dubbo:com.acme.OrderService#create(com.acme.CreateOrderRequest)?group=order&version=1.0.0` |
 
-HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字符串，不伪造 `method/path`。
+HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字符串，不伪造 `method/path`。Dubbo 的 `dep_id` 必须带参数签名（JVM 类型名，无参数写 `()`），用于区分重载；`original_path` 仍为方法级 `dubbo:{interface}#{method}`。
 
 **transport 选择（C3 确定性判定）**：
 
@@ -746,7 +746,7 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
   "endpoints": [
     {"transport": "http", "method": "POST", "path": "/api/orders", "params": {}, "request_body": {}, "success_codes": [201]},
     {"transport": "grpc", "endpoint": "grpc:/acme.order.v1.OrderService/Create", "request_type": "CreateOrderRequest", "response_type": "CreateOrderResponse"},
-    {"transport": "dubbo", "endpoint": "dubbo:com.acme.OrderService#create?group=order&version=1.0.0", "param_types": ["com.acme.CreateOrderRequest"]}
+    {"transport": "dubbo", "endpoint": "dubbo:com.acme.OrderService#create(com.acme.CreateOrderRequest)?group=order&version=1.0.0", "param_types": ["com.acme.CreateOrderRequest"]}
   ],
   "limits": {"max_rules": 500, "max_rule_text": 500, "max_fields": 50}
 }
@@ -1308,7 +1308,7 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 **注入链路**：
 
 ```
-AstSight 启动 SUT（-javaagent 或 classpath + 配置）
+AstSight 启动 SUT（-javaagent）
         │
         ▼
 astsight-agent：ByteBuddy Agent 加载 → 把 Mock Filter jar 追加进 classloader
@@ -1353,7 +1353,7 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 | 形态 | 做法 | 适用 |
 |---|---|---|
 | `-javaagent`（主推） | SUT 启动参数加 agent，框架自行控制 | AstSight 拉起 SUT 的常规场景 |
-| classpath + 配置 | agent jar 进 classpath，配 `dubbo.consumer.filter=astSightMock` + `-Dastsight.mock.heartbeat=<abs path>`（缺则 `agent_not_active`，不猜路径） | 禁止 agent 或已有固定启动脚本的环境；**v4.21 预留，尚未实现** |
+| classpath + 配置 | agent jar 进 classpath，配 `dubbo.consumer.filter=astSightMock` + `-Dastsight.mock.heartbeat=<abs path>` | 禁止 agent 或已有固定启动脚本的环境；**明确不支持**：没有 `premain`，只能挂 Dubbo Filter、覆盖不了 HTTP，收益不足（见决策记录 §3） |
 
 > **v4.21 实现状态（2026-11-16）**：
 >
@@ -1361,7 +1361,8 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 >   通过 `ClassLoader#defineClass` 定义进应用类加载器（JDK 9+ 先用
 >   `Instrumentation.redefineModule` 打开 `java.lang`），不增强 Dubbo 内部类。
 > - 取桩走 `POST /_admin/dubbo/invoke`：按 `dep_id`
->   （`dubbo:接口#方法?group=&version=`）精确命中，复用会话绑定；返回
+>   （`dubbo:接口#方法(参数类型,...)?group=&version=`，无参数写 `()`）精确
+>   命中，复用会话绑定；返回
 >   `{route_key, dep_id, branch, body, delay_ms}`。失败子码与本节一致。
 > - 证据行写进 `mock_calls.jsonl`：`adapter=dubbo-filter`、`mode=agent_filter`、
 >   `method` 为 RPC 方法名、`original_path=dubbo:接口#方法`。
@@ -1377,9 +1378,11 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 >   短路后由 bridge 补设 `RpcContext` future 与 `InvokeMode.FUTURE`；
 >   `CompletableFuture<T>` 的桩体按 `T` 构造，oneway 返回空结果但仍消费桩、
 >   留证据。
-> - classpath 形态、本地心跳文件、JDK 8/11/17/21 与 Dubbo 3.x 兼容矩阵：
->   **未实现或未验证**，按 `unsupported` 处理。当前唯一实测格子：Dubbo
->   2.7.22 + JDK 26（本机）。
+> - classpath 形态与本地心跳文件**明确不做**（classpath 只对 Dubbo 有效，
+>   无法覆盖 HTTP；`agent_not_active` 继续以 admin 心跳为准）。
+> - **v4.22 矩阵（2026-11-16）**：Dubbo 2.7.22 与 3.2.19 分别在 JDK
+>   8/11/17/21/26 上跑通同步取桩样例，10 个组合全部通过；矩阵外版本仍按
+>   未验证处理。
 
 **失败子码**：
 
@@ -1408,14 +1411,18 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 | 维度 | 取值 |
 |---|---|
 | Dubbo | 2.7.6 / 2.7.22 / 3.0.x / 3.2.x |
-| JDK | 8 / 11 / 17 / 21 |
+| JDK | 8 / 11 / 17 / 21 / 26 |
 | 调用形态 | 同步 / 异步（`AsyncRpcResult`）/ `oneway` |
 | DTO 形态 | typed DTO / 泛化调用（`GenericService`）/ 重载方法 |
 
 - **判定口径**：“在 2.7+ 范围内”≠“已验证”：只有矩阵内且实测通过的组合才允许绑定；矩阵外组合在 A4.5/C4 阶段就标 `unsupported`，不生成 Mock 绑定，也不在运行期试探。新增组合先补实测再写进矩阵。
-- **v4.21 已实测**：Dubbo 2.7.22 + JDK 26 + 同步/老式异步/声明 future/oneway/泛化调用 + typed DTO（`verified`）。其余格子尚未实测，不得当作已支持。
+- **v4.22 已实测**：Dubbo 2.7.22 与 3.2.19 分别在 JDK 8/11/17/21/26 上通过同步取桩、零真实调用与心跳核对，共 10 个格子（`verified`）；调用形态在老式异步/声明 future/oneway/泛化与 typed DTO/重载上也已用 2.7.22 + JDK 26 覆盖。其余格子尚未实测，不得当作已支持。
 
-**`agent_not_active` 探测：本地心跳文件（定稿）**
+**`agent_not_active` 探测：本地心跳文件（设计口径，v4.21 未实现）**
+
+> **实现状态**：本地心跳文件明确不做；当前 `agent_not_active` 以 admin 心跳
+> （`GET /_admin/agent/heartbeat`）为准。本节保留为设计口径，避免与上文
+> “明确不做”的结论混淆。
 
 - **路径由框架指定**，不由 agent 猜：`-javaagent:astsight-agent.jar=heartbeat=<abs path>`；classpath 形态用 `-Dastsight.mock.heartbeat=<abs path>`，**缺该属性直接报 `agent_not_active`，不回退到 `user.dir` 默认路径**（路径不明确时回落容易读到错误目录的文件）；两种形态写同一套文件协议。路径必须含 `sut_id`（如 `/tmp/astsight/<sut_id>.heartbeat.json`），多 SUT 环境不得共用同一路径；启动前只清理本实例路径（见 5.5）。路径随报告出报。
 - **文件内容**（原子写：临时文件 + rename）：`agent_version / mode / sut_id / namespace / admin_endpoint / token_fingerprint / pid / jvm_start_time / dubbo_version / filter_instantiated（按 consumer reference 计数）/ filter_hits / supported_matrix / last_heartbeat_at / state`。
@@ -1642,7 +1649,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 - **失败关闭（adapter 级）**：`AgentRuntime.isPlanned` 区分“计划内未命中/歧义/未知”与计划外 host；计划内请求若 `rewrite` 返回未改写或 bridge 抛异常，adapter 必须抛 `AgentRewriteException` 让本次调用失败，绝不返回原始请求透传到真实下游。计划外主机原样放行并计数。
 - **HTTPS**：仅该 dep 选 `agent_rewrite` 时允许 `https://` 目标；改写后为 `http://`，不建立 TLS。客户端拒绝 scheme 变化、URL 不可改或改写后仍需 TLS 的，标 `agent_rewrite_unsupported`。
 - **证据**：仍只写 `mock_calls.jsonl`；`MockCall` 增加 `adapter`、`mode="agent_rewrite"`、`original_host`。未命中由 Mock 服务的 `/_agent/unmatched` 统一记录，不新增第二份 agent 日志。
-- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate / Apache HC 4/5，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（消费端 Filter、`DubboBridge`、`defineClass` 注入器，`dubbo-rpc-api` 为 `provided`）。HTTP 部分字节码目标 JDK 8，实测 JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；Dubbo 首版实测仅 2.7.22 + JDK 26；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar、`manifest.json`（版本/协议号/sha256/大小）与 RECORD），由 `tools/build_agent_wheel.py` 可复现构建，运行期不下载；引擎按 环境变量 → wheel → 仓库 顺序解析并精确校验，缺 jar/校验和/版本不符报 `injection_agent_unavailable:<dep>:<reason>`。
+- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate / Apache HC 4/5，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（消费端 Filter、`DubboBridge`、`defineClass` 注入器，`dubbo-rpc-api` 为 `provided`）。HTTP 部分字节码目标 JDK 8，实测 JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；Dubbo 实测 2.7.22 与 3.2.19 × JDK 8/11/17/21/26 共 10 组合全部通过；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar、`manifest.json`（版本/协议号/sha256/大小）与 RECORD），由 `tools/build_agent_wheel.py` 可复现构建，运行期不下载；引擎按 环境变量 → wheel → 仓库 顺序解析并精确校验，缺 jar/校验和/版本不符报 `injection_agent_unavailable:<dep>:<reason>`。
 - **画像前提（v4.18）**：Java 的 OkHttp / Feign / RestTemplate / Apache HC 调用点在 HTTPS 下仍要保留为 dep（`build_dep_id_plan(https_call_sites=...)`），否则计划层看不到而 `agent_rewrite` 不可达；其余语言与 WebClient / JDK HttpClient 继续 `tls_not_supported`。OkHttp `Request.Builder` 未写方法时按 GET 记录。
 - **HTTP/2 prior-knowledge（v4.20）**：Mock 与 agent 只处理 HTTP/1.1，h2c 不建设。
   agent 的 URL 改写与客户端协议无关，h2c 请求同样改写为 `/_dep/<route_key>`；
@@ -1650,7 +1657,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
   退出）且真实下游 0 连接，不允许悄悄回落或把该失败当用例通过；负例 e2e
   `test_java_agent_h2_prior_knowledge_e2e.py` 固定这一行为。
 - **匹配边界（v4.19）**：同一 host + method 下字面量路径优先于 `{}` 模板（`/orders/7` 命中字面量路由，`/orders/8` 才落到 `/orders/{}`）；两个字面量或两个模板同时命中时仍是 `mock_route_ambiguous` → `/_agent/unmatched` 502，零透传，要求画像消歧；不做更细的模板特异性排序。
-- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo 消费端 Filter 首版已接入同一 core（`-javaagent` + 会话取桩 + 同步/异步/future/oneway/泛化 + 零真实调用 e2e，2026-11-16；版本矩阵与 classpath 形态待补）；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；Dubbo 剩余项（JDK/Dubbo 版本矩阵、classpath 形态）见 `doc/决策记录.md` §3「首版实现」与 §17「后续工作」。
+- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo 消费端 Filter 首版已接入同一 core（`-javaagent` + 会话取桩 + 同步/异步/future/oneway/泛化 + 零真实调用 e2e，2026-11-16；版本矩阵待补，classpath 形态明确不做）；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；Dubbo 剩余项（JDK/Dubbo 版本矩阵）见 `doc/决策记录.md` §3「首版实现」与 §17「后续工作」。
 
 **桩响应模型**：
 
@@ -1973,7 +1980,7 @@ Dubbo 草案片段：
 ```json
 {
   "transport": "dubbo",
-  "endpoint": "dubbo:com.acme.order.api.OrderService#createOrder?group=order&version=1.0.0",
+  "endpoint": "dubbo:com.acme.order.api.OrderService#createOrder(com.acme.order.api.CreateOrderRequest)?group=order&version=1.0.0",
   "interface": "com.acme.order.api.OrderService",
   "method": "createOrder",
   "param_types": ["com.acme.order.api.CreateOrderRequest"],
@@ -1987,7 +1994,7 @@ Dubbo 草案片段：
 }
 ```
 
-> `endpoint` 必须与 context 中的端点标识完全一致（HTTP 为 `http:{METHOD} {path}`，gRPC 为 `grpc:/{package}.{Service}/{Method}`，Dubbo 为 `dubbo:{interface}#{method}?group=&version=`）。gRPC/Dubbo 的 `request`/`arguments` 字段必须能在 proto message / 接口源码中定位；`param_types` 顺序必须与方法声明一致。断言至少一条 transport 原生状态断言（`status_code` / `grpc_status` / `rpc_status`）。
+> `endpoint` 必须与 context 中的端点标识完全一致（HTTP 为 `http:{METHOD} {path}`，gRPC 为 `grpc:/{package}.{Service}/{Method}`，Dubbo 为 `dubbo:{interface}#{method}({param_types})?group=&version=`）。gRPC/Dubbo 的 `request`/`arguments` 字段必须能在 proto message / 接口源码中定位；`param_types` 顺序必须与方法声明一致，且与 `endpoint` 中的参数签名一致。断言至少一条 transport 原生状态断言（`status_code` / `grpc_status` / `rpc_status`）。
 
 **覆盖角色约束（生成与校验的前置口径）**：
 
@@ -2368,7 +2375,7 @@ Dubbo 草案片段：
   "unsupported": {
     "count": 2,
     "items": [{"endpoint": "grpc:/pkg.Legacy/Stream", "reason": "streaming"},
-              {"endpoint": "dubbo:com.acme.LegacyApi#call", "reason": "dubbo_2_6"}]
+              {"endpoint": "dubbo:com.acme.LegacyApi#call(java.lang.String)", "reason": "dubbo_2_6"}]
   },
   "transport_fallback": {
     "used": 1,
@@ -2383,7 +2390,7 @@ Dubbo 草案片段：
     "alias": 3,
     "independent": 1,
     "alias_smoke": {"total": 3, "pass": 3, "fail": 0},
-    "alias_skipped": [{"endpoint": "dubbo:com.acme.OrderApi#create?group=order&version=1.0.0",
+    "alias_skipped": [{"endpoint": "dubbo:com.acme.OrderApi#create(com.acme.CreateOrderRequest)?group=order&version=1.0.0",
                        "role": "alias", "reason": "transport_scope_primary"}],
     "equivalent_skipped": [{"endpoint": "grpc:/acme.order.v1.OrderService/CreateOrder",
                             "alias_of": "POST /api/orders",
@@ -2433,7 +2440,7 @@ Dubbo 草案片段：
     "evidence": [{"case_id": "TC-B-001", "session_id": "s-001", "status": "closed",
                   "bindings": [{"dep_id": "http:svc:pay-service POST /gateway/pay", "branch": "success",
                                 "binding_source": "case", "calls": 1},
-                               {"dep_id": "dubbo:com.acme.StockApi#deduct", "branch": "insufficient",
+                               {"dep_id": "dubbo:com.acme.StockApi#deduct(java.lang.String,int)", "branch": "insufficient",
                                 "binding_source": "case", "calls": 1, "mock_mode": "javaagent"}]}],
     "degraded": false
   },
@@ -2542,7 +2549,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | TestFile     | C6     | C7/人     | 保护段、transport、溯源头                                                  |
 | ConflictSet  | C7.1   | C7.2     | resources, group, parallel_group                              |
 | MockSemantic | C3.5.1 | C4       | http/dubbo 下游：dep_id（HTTP 为 `http:{downstream_key} {METHOD} {path}`，见 C3.5.5）, semantic_branches[], mock.strategy/property, 用例绑定；grpc 下游 v4.3 为 `mock=unsupported`，v4.4 起为 `mock.strategy="grpc_server"`（见 C3.5.4） |
-| MockAgent    | C3.5.3 | C6/C7    | mode(javaagent/classpath), version, active, sut_id, namespace, admin_endpoint, token_fingerprint, heartbeat_path, pid, jvm_start_time, filter_heartbeat, filter_instantiated, dubbo_version, supported_matrix, serialization_verified；v4.15 增加 http_adapters[](id/version/active), http_hooked, http_rewrites, http_errors, http_stack_unsupported[] |
+| MockAgent    | C3.5.3 | C6/C7    | mode(javaagent), version, active, sut_id, namespace, admin_endpoint, token_fingerprint, heartbeat_path, pid, jvm_start_time, filter_heartbeat, filter_instantiated, dubbo_version, supported_matrix, serialization_verified；v4.15 增加 http_adapters[](id/version/active), http_hooked, http_rewrites, http_errors, http_stack_unsupported[] |
 | MockServer   | C3.5.4/C3.5.5 | C6/C7 | transport(http/grpc), mode(embedded/gripmock), version, sut_id, namespace, endpoint(host:port), admin_endpoint, token_fingerprint, route_modes[](path_prefix/host_group/method_path), route_count, routes[], health, history_path, started_at, pid/container_id；gRPC 另有 binary{version,sha256,platform,source}, descriptor_sha256, stub_count, serialization_verified=wire_roundtrip；HTTP 另有 injection 证据、`tls_not_supported` 清单与 agent 改写证据 |
 | MockRoute    | C3.5.5 | C6/C7    | route_key, dep_id, method, path_key, host, target, strategy(url_override/discovery_override/http_proxy/agent_rewrite/unsupported), route_match, source |
 | MockCall     | C3.5.5 | C7/报告   | call_id, session_id, case_id, route_key, dep_id, route_match, adapter, mode(agent_rewrite/…), original_host, method, original_path, query_keys, request_headers(脱敏), body_sha256, body_bytes, branch, response_status, delay_ms, drop_mode, result(ok/unknown/ambiguous/unbound/branch_missing/late), at |
@@ -2775,7 +2782,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M2.7 | **transport 回退（受限）**：仅 `transport_class=dubbo` 的 gRPC→sidecar，`--allow-transport-fallback` 显式开启、单次、报告 `transport_fallback + degraded` | 默认关闭；回退失败归 `adapter_error`；禁止跨形态回退 |
 | M2.8 | **多协议覆盖策略**：C2 provider-only + base/target 契约 diff + `change_kinds`；C3 `business_key`/`coverage_role`/`adapter_fingerprint`；C4 alias 冒烟 + `--transport-scope`；C7.4 `transport_coverage` | 纯契约变更分支可产出端点；每个 `business_key` 仅一个 primary；alias 冒烟可执行且不计入业务覆盖；`transport_alias_skipped` 可见 |
 | M2.9 | **Mock 用例级会话（方案 A）**：Mock 服务 admin session API、`mock_bindings` 导入期补全、C7.1 `mock:<namespace>` 独占、C7.2 mock lease 串行、C6 session fixture、C7.4 `mock_sessions` 证据 | 单命名空间单 active session；冲突/未命中/晚到调用全部显式报错；mock-bound 用例串行且证据可复核；无 session 证据的 Mock 用例标 `weak_oracle` |
-| M2.10 | **Dubbo 下游 Mock（agent + ByteBuddy + Filter）**：agent 加载（`-javaagent`/classpath）、Filter 拦截、会话分支、同步/异步/重载/泛化、心跳自检、`serialization_verified=false`、兼容矩阵 | agent 未激活整批阻断；绑定 dep 命中 0 次报 `mock_not_used`；`No provider available` 报 `env_error`；2.7/3.x + JDK 8/11/17/21 主组合可运行 |
+| M2.10 | **Dubbo 下游 Mock（agent + ByteBuddy + Filter）**：agent 加载（`-javaagent`）、Filter 拦截、会话分支、同步/异步/重载/泛化、心跳自检、`serialization_verified=false`、兼容矩阵 | agent 未激活整批阻断；绑定 dep 命中 0 次报 `mock_not_used`；`No provider available` 报 `env_error`；2.7/3.x + JDK 8/11/17/21 主组合可运行 |
 | M2.11 | **多 SUT 并发隔离（5.5）**：`--sut-id` 与 `namespace=sut_id`、端口 `bind(:0)` 原子分配 + `run_manifest`、心跳身份字段、每实例 token、DB `run_scope` 前缀、用例库 `flock`、报告 `instance` 块 | 同环境并发 ≥2 个 SUT 时无端口/命名空间冲突；心跳与 manifest 身份一致；DB 清理只影响本 run；并发 approve 不会丢更新 |
 | M2.12 | **gRPC 下游 Mock（C3.5.4）**：gripmock 随包二进制（平台专用 wheel，`linux/amd64` + `linux/arm64`）、每命名空间进程、stub API、history 取证、target 改写、已知缺陷规避、失败子码 | 安装 `astsight[grpc-mock]` 即用，不要求用户单独下载；版本/sha256 校验通过；矩阵外显式 `mock_binary_missing`；绑定桩命中 ≥1 次 |
 | M2.13 | **HTTP 下游 Mock（C3.5.5，仅明文）**：内嵌 FastAPI/uvicorn、每 `sut_id` 实例、`bind(:0)` + manifest、`dep_id` 唯一性算法、`route_key`、v1 承诺的下游专属 `url_override` 与显式 `http_proxy`（`discovery_override`/透明代理条件支持）、会话分支、`mock_calls.jsonl` 证据、HTTPS `tls_not_supported` | 两个服务同路径不撞 `dep_id`；同端点多调用点只生成一个 dep；未知/歧义路由阻断；共享 base URL 报 `mock_config_ambiguous`；绑定 route 命中 ≥1；HTTPS 显式 `unsupported` 且用例 `blocked` |

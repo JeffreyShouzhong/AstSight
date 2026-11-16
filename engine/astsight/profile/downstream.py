@@ -31,6 +31,7 @@ from ..mock.identity import (
     normalize_method,
 )
 from .callsite import HttpCallSite
+from .dubbo import DubboScanResult, scan_dubbo_sources
 from .javatypes import ContractIndex, FeignInterface, scan_feign_interfaces
 from .langscan import (
     _line_of,
@@ -889,6 +890,7 @@ class DownstreamScanner:
         self._supported_languages: set[str] | None = None
         self._contract_index: ContractIndex | None = None
         self._feign_interfaces: list[FeignInterface] | None = None
+        self._dubbo_scan: DubboScanResult | None = None
 
     def _contract_index_or_none(self) -> ContractIndex | None:
         try:
@@ -1004,6 +1006,27 @@ class DownstreamScanner:
                 result.append((path, language))
         self._lang_file_order = result
         return result
+
+    def scan_dubbo(self) -> DubboScanResult:
+        """项目级 Dubbo 消费端扫描；一次构建内复用结果。
+
+        与 HTTP 扫描不同，Dubbo 引用是类字段，无法可靠地归到某个 HTTP
+        handler 的调用树；因此按项目汇总，画像层再把结果附到每个 profile。
+        """
+        if self._dubbo_scan is None:
+            files = [
+                (path, language_for(path) or "")
+                for path in self._walk_source_files()
+            ]
+            self._dubbo_scan = scan_dubbo_sources(
+                files=files,
+                root=self.root,
+                read_text=self._language_text,
+            )
+            for warning in self._dubbo_scan.warnings:
+                if warning not in self.warnings:
+                    self.warnings.append(warning)
+        return self._dubbo_scan
 
     def _language_text(self, path: Path) -> str:
         cached = self._lang_texts.get(path)
@@ -1760,6 +1783,11 @@ def build_plan_from_profiles(
                     "target": dep.get("target"),
                     "call_sites": [],
                     "config_keys": [],
+                    "dep_type": str(dep.get("dep_type") or "http"),
+                    "service": dep.get("service"),
+                    "parameter_types": list(dep.get("parameter_types") or []),
+                    "group": dep.get("group"),
+                    "version": dep.get("version"),
                 }
                 merged[dep_id] = current
             for item in dep.get("call_sites") or []:
@@ -1774,9 +1802,33 @@ def build_plan_from_profiles(
                 current["host"] = dep["route_host"]
 
     routes: list[dict[str, Any]] = []
+    dubbo_routes: list[dict[str, Any]] = []
     injections: list[dict[str, Any]] = []
     for dep_id in sorted(merged):
         dep = merged[dep_id]
+        if dep["dep_type"] == "dubbo" or dep_id.startswith("dubbo:"):
+            dubbo_routes.append(
+                {
+                    "dep_id": dep_id,
+                    "service": dep["service"],
+                    "method": dep["method"],
+                    "parameter_types": dep["parameter_types"],
+                    "group": dep["group"],
+                    "version": dep["version"],
+                    "source": "c3",
+                    "branches": {},
+                }
+            )
+            injections.append(
+                {
+                    "dep_id": dep_id,
+                    "strategy": "agent_rewrite",
+                    "kind": "base_url",
+                    "path_mode": "append",
+                    "reason": "dubbo_filter_requires_java_agent",
+                }
+            )
+            continue
         routes.append(
             {
                 "dep_id": dep_id,
@@ -1826,6 +1878,7 @@ def build_plan_from_profiles(
         "port": int(port),
         "capture_bodies": False,
         "routes": routes,
+        "dubbo_routes": dubbo_routes,
         "injections": injections,
     }
 

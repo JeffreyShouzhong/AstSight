@@ -198,6 +198,109 @@ def build_dep_id(downstream_key: str, method: str, path_key: str) -> str:
     return f"http:{downstream_key} {normalized} {normalize_path_key(path_key)}"
 
 
+def build_dubbo_dep_id(
+    service: str,
+    method: str,
+    parameter_types: list[str] | tuple[str, ...] = (),
+    *,
+    group: str | None = None,
+    version: str | None = None,
+) -> str:
+    """构造 Dubbo 下游身份：`dubbo:服务#方法(参数类型,...)?group=&version=`。
+
+    参数类型取 JVM 侧 `Class#getName()` 的文本（如 `java.lang.String`、
+    `int`、`java.lang.String[]`），用于区分重载方法。泛化调用使用真实接口
+    签名。参数类型名本身不允许空白、逗号或括号，否则无法无歧义解析。
+    """
+    if not str(service or "").strip():
+        raise DepIdError("dubbo_service_missing")
+    if not str(method or "").strip():
+        raise DepIdError("dubbo_method_missing")
+    for item in parameter_types:
+        text = str(item)
+        if not text or any(ch in text for ch in " \t\r\n,()?#"):
+            raise DepIdError("dubbo_parameter_invalid", text)
+    dep_id = (
+        f"dubbo:{service}#{method}"
+        f"({','.join(str(item) for item in parameter_types)})"
+    )
+    has_group = bool(group)
+    has_version = bool(version)
+    if has_group or has_version:
+        dep_id += "?"
+        if has_group:
+            dep_id += f"group={group}"
+            if has_version:
+                dep_id += "&"
+        if has_version:
+            dep_id += f"version={version}"
+    return dep_id
+
+
+_DUBBO_DEP_ID = re.compile(
+    r"^dubbo:(?P<service>[^#?]+)#(?P<method>[^(?]+)"
+    r"\((?P<params>[^)]*)\)(?:\?(?P<query>.*))?$"
+)
+
+
+@dataclass(frozen=True)
+class DubboDepId:
+    service: str
+    method: str
+    parameter_types: tuple[str, ...]
+    group: str | None = None
+    version: str | None = None
+
+    @property
+    def dep_id(self) -> str:
+        return build_dubbo_dep_id(
+            self.service,
+            self.method,
+            self.parameter_types,
+            group=self.group,
+            version=self.version,
+        )
+
+
+def parse_dubbo_dep_id(dep_id: str) -> DubboDepId | None:
+    """解析并校验规范形态；非规范（缺签名、参数顺序不同）返回 None。"""
+    match = _DUBBO_DEP_ID.match(str(dep_id or ""))
+    if match is None:
+        return None
+    params = match.group("params")
+    parameter_types = tuple(params.split(",")) if params else ()
+    group = None
+    version = None
+    query = match.group("query")
+    if query:
+        for item in query.split("&"):
+            key, _, value = item.partition("=")
+            if key == "group" and value:
+                group = value
+            elif key == "version" and value:
+                version = value
+            else:
+                return None
+    parsed = DubboDepId(
+        service=match.group("service"),
+        method=match.group("method"),
+        parameter_types=parameter_types,
+        group=group,
+        version=version,
+    )
+    try:
+        canonical = build_dubbo_dep_id(
+            parsed.service,
+            parsed.method,
+            parsed.parameter_types,
+            group=parsed.group,
+            version=parsed.version,
+        )
+    except DepIdError:
+        return None
+    return parsed if canonical == dep_id else None
+
+
 def route_key_for(dep_id: str, length: int = 12) -> str:
     if length not in (12, 16, 20):
         raise ValueError("route_key length must be 12, 16 or 20")

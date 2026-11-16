@@ -100,6 +100,8 @@ public final class DubboBridge {
         String service;
         String method;
         Class<?>[] parameterTypes;
+        /** `dep_id` 里的参数签名：泛化调用取真实接口的参数类型名。 */
+        String[] parameterSignature;
         Object[] arguments;
         /** 已展开 CompletableFuture 的返回类型；泛化调用为 Object。 */
         Type returnType;
@@ -109,11 +111,26 @@ public final class DubboBridge {
         boolean oneway;
     }
 
-    static String depId(String service, String method, String group, String version) {
+    static String depId(
+            String service,
+            String method,
+            String[] parameterTypes,
+            String group,
+            String version) {
         StringBuilder value = new StringBuilder("dubbo:")
                 .append(service == null ? "" : service)
                 .append('#')
-                .append(method == null ? "" : method);
+                .append(method == null ? "" : method)
+                .append('(');
+        if (parameterTypes != null) {
+            for (int index = 0; index < parameterTypes.length; index++) {
+                if (index > 0) {
+                    value.append(',');
+                }
+                value.append(parameterTypes[index] == null ? "" : parameterTypes[index]);
+            }
+        }
+        value.append(')');
         boolean hasGroup = group != null && !group.isEmpty();
         boolean hasVersion = version != null && !version.isEmpty();
         if (hasGroup || hasVersion) {
@@ -129,6 +146,18 @@ public final class DubboBridge {
             }
         }
         return value.toString();
+    }
+
+    /** 参数签名用于区分重载；泛化调用的真实签名在 {@code parameterTypes} 参数里。 */
+    private static String[] parameterNames(Class<?>[] types) {
+        if (types == null) {
+            return new String[0];
+        }
+        String[] names = new String[types.length];
+        for (int index = 0; index < types.length; index++) {
+            names[index] = types[index] == null ? "" : types[index].getName();
+        }
+        return names;
     }
 
     private static CallInfo describe(Object invoker, Object invocation) {
@@ -152,6 +181,7 @@ public final class DubboBridge {
 
             CallInfo info = new CallInfo();
             info.parameterTypes = parameterTypes == null ? new Class<?>[0] : parameterTypes;
+            info.parameterSignature = parameterNames(info.parameterTypes);
             info.arguments = arguments == null ? new Object[0] : arguments;
             info.service = iface.getName();
             info.method = methodName;
@@ -175,6 +205,12 @@ public final class DubboBridge {
                 if (methodArg instanceof String) {
                     info.method = (String) methodArg;
                 }
+                // 泛化调用第 3 个参数是真实参数类型名数组。
+                if (info.arguments.length > 2 && info.arguments[2] instanceof String[]) {
+                    info.parameterSignature = (String[]) info.arguments[2];
+                } else {
+                    info.parameterSignature = new String[0];
+                }
                 info.returnType = Object.class;
                 // $invokeAsync 声明即返回 CompletableFuture，不依赖 attachment。
                 info.future = "$invokeAsync".equals(methodName);
@@ -193,7 +229,8 @@ public final class DubboBridge {
             ClassLoader loader = invocation.getClass().getClassLoader();
             detectInvokeMode(info, invocation, url, loader);
             info.oneway = isOneway(invocation, url, info.method, loader);
-            info.depId = depId(info.service, info.method, group, version);
+            info.depId = depId(
+                    info.service, info.method, info.parameterSignature, group, version);
             return info;
         } catch (Throwable failure) {
             System.err.println("[astsight-agent] dubbo describe failed: " + failure);
