@@ -48,6 +48,8 @@ _SKIP_DIRS = {
 }
 
 _HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
+# 裸 `@RequestMapping` 展开时只列业务方法；HEAD/OPTIONS/TRACE 不作为用例端点。
+_DEFAULT_ROUTE_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _SPRING_MAPPING = {
     "GetMapping": ["GET"],
     "PostMapping": ["POST"],
@@ -332,8 +334,9 @@ def _spring_methods(annotation: str) -> list[str]:
         methods = re.findall(r"\b([A-Z]+)\b", chunk.group(1))
         return [method for method in methods if method in _HTTP_METHODS]
     if name == "RequestMapping":
-        # 方法级 `@RequestMapping` 不写 method 时 Spring 映射所有方法。
-        return sorted(_HTTP_METHODS)
+        # 方法级 `@RequestMapping` 不写 method 时 Spring 映射所有方法；
+        # 只展开业务方法，HEAD/OPTIONS/TRACE 由框架派生，不生成用例端点。
+        return list(_DEFAULT_ROUTE_METHODS)
     return []
 
 

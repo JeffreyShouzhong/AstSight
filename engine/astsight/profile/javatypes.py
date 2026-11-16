@@ -41,6 +41,22 @@ _CONTAINERS = {
     "Slice": "page",
 }
 _WRAPPERS = {"Optional", "ResponseEntity", "Mono", "Callable", "CompletableFuture"}
+# 没有业务字段但可静态判定的 JDK 响应类型；记为 scalar 契约，不当作解析失败。
+_JDK_SCALARS = {
+    "String": "java.lang.String",
+    "Object": "java.lang.Object",
+    "Integer": "java.lang.Integer",
+    "Long": "java.lang.Long",
+    "Boolean": "java.lang.Boolean",
+    "Double": "java.lang.Double",
+    "Float": "java.lang.Float",
+    "Byte": "java.lang.Byte",
+    "Short": "java.lang.Short",
+    "Character": "java.lang.Character",
+    "BigDecimal": "java.math.BigDecimal",
+    "BigInteger": "java.math.BigInteger",
+    "Void": "java.lang.Void",
+}
 
 
 @dataclass(frozen=True)
@@ -56,7 +72,7 @@ class TypeField:
 class TypeContract:
     name: str
     fqn: str
-    kind: str  # source / jar
+    kind: str  # source / jar / scalar
     origin: str
     fields: list[TypeField] = field(default_factory=list)
     container: str | None = None
@@ -345,11 +361,18 @@ class ContractIndex:
         target = base
         if item and container in ("list", "page"):
             target = item if not item.endswith("[]") else item[:-2]
-        if target.rsplit(".", 1)[-1] in {
-            "String", "Object", "Integer", "Long", "Boolean", "Double", "Float",
-            "Byte", "Short", "Character", "BigDecimal", "BigInteger", "Void",
-        }:
-            return None
+        simple = target.rsplit(".", 1)[-1]
+        scalar_fqn = _JDK_SCALARS.get(simple)
+        if scalar_fqn is not None:
+            # JDK 标量没有业务字段，但契约是“已解析”的；Mock 侧按类型给默认值。
+            return TypeContract(
+                name=simple,
+                fqn=scalar_fqn,
+                kind="scalar",
+                origin="jdk",
+                fields=[],
+                container=container,
+            )
         fqn = self._resolve_fqn(target, context_file)
         if fqn is None:
             return None

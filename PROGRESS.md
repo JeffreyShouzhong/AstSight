@@ -3,7 +3,7 @@
 > 最后更新：2026-11-16
 > 分支：`feat/postgres-mysql-data`（已推送，最近提交 `a3a20ec`）
 > 当前阶段：Java 下游契约提取与 Feign/服务发现注入完成；真实
-> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；全量 355 passed, 2 skipped
+> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；全量 358 passed, 2 skipped
 
 ## 当前状态
 
@@ -98,8 +98,17 @@
    响应类型、泛型签名、class 解析（含注解）、pom/gradle、本地仓库定位、源码/jar
    契约、jar 内 Feign、Feign 字段调用、画像挂载、Mock 语义、绑定漂移、静态
    实例注入与服务名大小写；真实 `logback-classic-1.5.38.jar` 解析 177 个 class
-   全部成功。全量 **355 passed, 2 skipped**。
-10. **已知限制**：静态实例覆盖要求 SUT 使用 Spring Cloud LoadBalancer 并启用
+   全部成功。全量 **358 passed, 2 skipped**。
+10. **标量响应契约**（`profile/javatypes.py`、`mock/semantic.py`）：JDK 标量
+    （`String`/数字/布尔/`Object`/`Void`，含 `List<String>` 等容器）记为
+    `kind="scalar"` 的已解析契约，不再落到 `missing`；Mock `success` body 按类型
+    给 `""`/`0`/`false`，列表包一层数组。真实样例的 `String` 响应不再退化成
+    `{}`。
+11. **路由收敛**（`profile/langroutes.py`）：方法级裸 `@RequestMapping` 只展开
+    `GET/POST/PUT/PATCH/DELETE`，`HEAD/OPTIONS/TRACE` 由框架派生，不生成用例
+    端点；样例工程端点从 8 个收敛到 5 个。README 补充多语言下游契约与
+    `discovery_override` 的适用边界。
+12. **已知限制**：静态实例覆盖要求 SUT 使用 Spring Cloud LoadBalancer 并启用
     `SimpleDiscoveryClient`；其他发现机制（Nacos/Eureka 独占、Ribbon）或非
     Spring 应用仍无法覆盖，会在启动告警中体现。样例里 Eureka 客户端同时在
     classpath 上，未启动 Eureka 服务端时仍能走通静态实例，但这不是所有注册中心
@@ -336,7 +345,10 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
   - `discovery_override` 运行时（Spring Cloud 静态实例），注入保留服务名大小写；
   - 用真实 Spring Cloud 工程联调，修复 `injection_document` 缺路由、
     `@RequestMapping` 静态导入方法解析等问题；
-  - 全量 **355 passed, 2 skipped**。
+  - JDK 标量响应（String/数字/布尔）记为已解析契约，Mock body 按类型生成；
+  - 裸 `@RequestMapping` 只展开五个业务方法，避免端点放大；README 补充能力与
+    边界；
+  - 全量 **358 passed, 2 skipped**。
 - **2026-11-13**：Java 下游契约从 A 侧提取：
   - `langscan` 抽取 RestTemplate（按参数位）与 WebClient（`bodyToMono` 等）的响应
     类型，写入 `HttpCallSite.response_type`；变量名不当作类型。

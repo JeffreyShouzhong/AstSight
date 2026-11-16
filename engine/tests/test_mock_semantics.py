@@ -75,6 +75,31 @@ def _ruleset(*rules: Rule) -> RuleSet:
     )
 
 
+def test_scalar_contract_generates_typed_success_body() -> None:
+    context = _context()
+    dep = context["profiles"][0]["downstream_deps"][0]
+    dep["response_contract"] = {
+        "status": "resolved",
+        "types": [
+            {
+                "name": "String",
+                "fqn": "java.lang.String",
+                "kind": "scalar",
+                "origin": "jdk",
+                "container": None,
+                "fields": [],
+            }
+        ],
+        "unresolved": [],
+    }
+    semantic = build_mock_semantic(context)
+    assert semantic.deps[0].branches[0].stub.body == ""
+
+    dep["response_contract"]["types"][0]["container"] = "list"
+    semantic = build_mock_semantic(context)
+    assert semantic.deps[0].branches[0].stub.body == [""]
+
+
 def test_contract_layer_always_has_success_branch() -> None:
     semantic = build_mock_semantic(_context())
     assert len(semantic.deps) == 1

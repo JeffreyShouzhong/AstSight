@@ -209,7 +209,7 @@ public class HelloController {
     )
     routes, _ = scan_language_routes(tmp_path)
     methods = {route["method"] for route in routes}
-    assert {"GET", "POST", "PUT", "DELETE"} <= methods
+    assert methods == {"GET", "POST", "PUT", "PATCH", "DELETE"}
     assert {(route["path"], route["handler"]) for route in routes} == {
         ("/", "hello")
     }

@@ -618,6 +618,68 @@ def test_feign_call_site_uses_service_identity(tmp_path: Path) -> None:
     ]
 
 
+def test_contract_index_treats_jdk_scalars_as_resolved(tmp_path: Path) -> None:
+    index = ContractIndex(tmp_path)
+    contract = index.resolve("String")
+    assert contract is not None
+    assert contract.kind == "scalar"
+    assert contract.fqn == "java.lang.String"
+    assert contract.fields == []
+    listed = index.resolve("List<String>")
+    assert listed is not None
+    assert listed.container == "list"
+    assert listed.name == "String"
+    assert index.resolve("com.example.Unknown") is None
+
+
+def test_feign_scalar_response_contract_is_resolved(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/main/java/com/example/item/ItemClient.java",
+        """
+package com.example.item;
+
+@FeignClient("ItemApi")
+public interface ItemClient {
+    @GetMapping("/ping")
+    String ping();
+}
+""",
+    )
+    _write(
+        tmp_path,
+        "src/main/java/com/example/item/OrderController.java",
+        """
+package com.example.item;
+
+@RestController
+public class OrderController {
+    private final ItemClient itemClient;
+
+    public OrderController(ItemClient itemClient) {
+        this.itemClient = itemClient;
+    }
+
+    @GetMapping("/orders/ping")
+    public String ping() {
+        return itemClient.ping();
+    }
+}
+""",
+    )
+    scan = DownstreamScanner(tmp_path).scan(
+        "OrderController.ping",
+        file_hint="src/main/java/com/example/item/OrderController.java",
+    )
+    dep = scan.deps[0]
+    assert dep["response_types"] == ["String"]
+    contract = dep["response_contract"]
+    assert contract["status"] == "resolved"
+    assert contract["unresolved"] == []
+    assert contract["types"][0]["kind"] == "scalar"
+    assert contract["types"][0]["fields"] == []
+
+
 def test_feign_request_mapping_reads_static_request_method(
     tmp_path: Path,
 ) -> None:

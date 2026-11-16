@@ -135,7 +135,8 @@ def _value_for_type(type_text: str) -> Any:
 def _contract_body(raw: dict[str, Any] | None) -> Any:
     """从 A 的响应类型生成 success body；没有契约时返回 None。
 
-    只做一层字段展开：嵌套对象给 `{}`，列表给 `[]`。不编造业务取值。
+    只做一层字段展开：嵌套对象给 `{}`，列表给 `[]`；标量按类型给
+    `""`/`0`/`false`。不编造业务取值。
     """
     if not isinstance(raw, dict):
         return None
@@ -146,14 +147,18 @@ def _contract_body(raw: dict[str, Any] | None) -> Any:
         if not isinstance(item, dict):
             continue
         fields = item.get("fields") or []
-        if not fields:
-            continue
-        body = {
-            str(field.get("name")): _value_for_type(field.get("type", ""))
-            for field in fields
-            if isinstance(field, dict) and field.get("name")
-        }
         container = item.get("container")
+        if fields:
+            body: Any = {
+                str(field.get("name")): _value_for_type(field.get("type", ""))
+                for field in fields
+                if isinstance(field, dict) and field.get("name")
+            }
+        elif item.get("kind") == "scalar":
+            # String/数字/布尔等标量响应没有字段，按类型给默认值而不是 {}。
+            body = _value_for_type(str(item.get("name") or ""))
+        else:
+            continue
         if container == "list":
             return [body]
         if container == "page":

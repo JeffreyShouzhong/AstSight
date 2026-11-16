@@ -43,6 +43,7 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、Open
 | 人工审核与版本化 | 提案逐条审批，`TC-NNNN` 编号永不复用，旧版本进入 history |
 | 多请求用例 | `steps[]` 顺序请求与跨步骤引用，覆盖频控、验证码、幂等重试 |
 | Mock 与造数 | 下游明文 HTTP Mock、C5a 数据目录、C5b 逐用例造数（SQLite / PostgreSQL / MySQL） |
+| 多语言下游契约 | Java/Go/Node 出站调用点识别；Java 可读 pom/gradle 与本地 jar，提取 DTO 字段和泛型签名，识别 Feign 调用并解析响应契约 |
 | 三种运行范围 | `full` 建基线、`delta` 按代码变更重判、`cases` 只执行已批准用例 |
 | 证据化报告 | 通过/失败之外，未映射范围、未执行用例、待审提案、规则漂移单列 |
 
@@ -232,6 +233,13 @@ pytest 生成与执行、`agent run` 编排均已落地，示例项目 38 条用
 - 造数支持 SQLite / PostgreSQL / MySQL；三者共用同一套 fixture 校验与事务语义，
   驱动分别为 stdlib `sqlite3`、`psycopg`、`PyMySQL`。
 - HTTP 是主路径；gRPC 仅 unary、Dubbo 2.7+ 通过 sidecar，Mock 实现仍在推进。
+- Java 下游契约只做只读静态解析：源码优先，依赖 jar 兜底；JDK 标量（String/数字/
+  布尔）记为无字段契约并按类型生成 Mock body。动态代理、运行时注册中心地址解析
+  不在此范围。
+- 服务发现型下游（如 Feign `@FeignClient(name=...)`）使用 `discovery_override`：
+  需要 SUT 使用 Spring Cloud LoadBalancer 并启用 `SimpleDiscoveryClient`，服务名
+  按注册名精确匹配（区分大小写）；Nacos/Eureka 独占、Ribbon 或非 Spring 应用
+  会在启动告警中显式标 `discovery_not_supported`，不假装成功。
 - 时间窗口恢复、真实并发、外部配置切换等场景需要时钟注入或专用测试接口，
   当前以“连续请求立即命中”近似，并在报告中显式标注。
 - 初始用例审核必须人工完成，`deprecate` 不会自动批准；运行期修复（默认最多 3 轮）
