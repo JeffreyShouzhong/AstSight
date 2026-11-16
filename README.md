@@ -233,8 +233,10 @@ pytest 生成与执行、`agent run` 编排均已落地，示例项目 38 条用
 - 造数支持 SQLite / PostgreSQL / MySQL；三者共用同一套 fixture 校验与事务语义，
   驱动分别为 stdlib `sqlite3`、`psycopg`、`PyMySQL`。
 - HTTP 是主路径；gRPC 仅 unary。Dubbo 2.7+ 消费端 Mock 由 Java agent 的 Filter
-  拦截，已在 Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 个组合验证；调用被测
-  Dubbo 服务的一侧仍走 sidecar。
+  拦截，已在 Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 个组合验证；真实
+  `ReferenceConfig` 代理在普通 classpath 与 Spring Boot fat jar 下都验证过桩
+  返回与零建连；`agent run` 全链路（HTTP 入口 → Dubbo 下游，画像 → 计划 →
+  自动注入 → 执行 → 报告）也已实测；调用被测 Dubbo 服务的一侧仍走 sidecar。
 - Java 下游契约只做只读静态解析：源码优先，依赖 jar 兜底；JDK 标量（String/数字/
   布尔）记为无字段契约并按类型生成 Mock body。动态代理、运行时注册中心地址解析
   不在此范围。

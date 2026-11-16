@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（v4.21，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例、v4.21 Dubbo 消费端 Filter 首版）
+# AstSight — 能力设计规格说明书（v4.21，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例、v4.21 Dubbo 消费端 Filter 首版、v4.24 `agent run` Dubbo 全链路）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -1359,7 +1359,11 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 >
 > - 只支持 `-javaagent` 形态。Filter 类在 `ExtensionLoader` 首次加载时由 agent
 >   通过 `ClassLoader#defineClass` 定义进应用类加载器（JDK 9+ 先用
->   `Instrumentation.redefineModule` 打开 `java.lang`），不增强 Dubbo 内部类。
+>   `Instrumentation.redefineModule` 把 `java.lang` 打开给 agent 与应用加载器
+>   两个 unnamed module；v4.23 修正，fat jar 下只开给 agent 会同时卡住 Filter
+>   注入和 Dubbo 2.7.x 的 javassist 编译），不增强 Dubbo 内部类。Filter 与
+>   bridge 跨类加载器调用必须是 `public`。真实 `ReferenceConfig` 代理在普通
+>   classpath 与 Spring Boot fat jar 下均有 e2e，计数端口 accept 与字节数都是 0。
 > - 取桩走 `POST /_admin/dubbo/invoke`：按 `dep_id`
 >   （`dubbo:接口#方法(参数类型,...)?group=&version=`，无参数写 `()`）精确
 >   命中，复用会话绑定；返回
@@ -1383,6 +1387,20 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 > - **v4.22 矩阵（2026-11-16）**：Dubbo 2.7.22 与 3.2.19 分别在 JDK
 >   8/11/17/21/26 上跑通同步取桩样例，10 个组合全部通过；矩阵外版本仍按
 >   未验证处理。
+> - **v4.24 全链路（2026-11-16）**：新增 Spring Boot 样例
+>   `java/samples/spring-boot-dubbo`（HTTP 入口 `/orders/{id}` 调用
+>   `@DubboReference` 字段声明的下游），经 `run_flow` 走完整编排：画像识别
+>   Dubbo dep → 计划生成 `dubbo_routes` 与 `agent_rewrite` 注入 → 自动
+>   `JAVA_TOOL_OPTIONS` + `token_env` → 执行 → 报告。样例的注解字段供画像
+>   读取，运行期由 `ReferenceConfig` 直连 URL 填同一字段（Dubbo 2.7.x 的
+>   注解处理依赖 Spring 4/5 集成，与 Spring Boot 3 不兼容）；两边 dep_id
+>   一致，端到端断言同一条调用。计数端口 accept/字节数为 0，报告
+>   `filter_not_in_chain` 不阻断，`serialization_verified=false` 仅告警。
+>   心跳默认 5s 一拍，报告读到的 `filter_hits` 可能滞后，调用凭据以
+>   `mock_calls.jsonl` 证据行为准。计划含 Dubbo 路由时，报告在心跳显示
+>   `installed=true` 且 `filter_instantiated=0` 的情况下最多轮询 6s，避免把
+>   刚进链、尚未上报的 Filter 误判为 `filter_not_in_chain`；超时仍按阻断
+>   处理。对应 `test_java_agent_dubbo_flow_e2e.py`。
 
 **失败子码**：
 

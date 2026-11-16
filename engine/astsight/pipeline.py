@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -138,14 +139,22 @@ def _resolve_mock_evidence(
     return str(history), None
 
 
-def _fetch_agent_heartbeat(
-    config: "RunConfig",
-) -> tuple[dict | None, str | None]:
-    """读取 Java agent 心跳，用于校验 Dubbo Filter 是否真的在链上。
+# Dubbo Filter 进入 consumer 链发生在 SUT 启动期；心跳默认 5s 一拍，报告读到的
+# 可能是实例化之前那一拍。计划含 Dubbo 路由时最多等这么久，避免把“刚进链、
+# 还没上报”误判成 `filter_not_in_chain`。
+_DUBBO_FILTER_WAIT_SECONDS = 6.0
+_HEARTBEAT_POLL_SECONDS = 0.2
 
-    `GET /_admin/agent/heartbeat` 在 agent 尚未上报时返回 404；这不能当成
-    “没有 Dubbo 调用”糊弄过去，调用方必须按 `filter_not_in_chain` 阻断。
-    """
+
+def _dubbo_filter_pending(payload: dict | None) -> bool:
+    """心跳显示 Dubbo 模块已装、但 Filter 还没实例化时，值得再等一拍。"""
+    dubbo = (payload or {}).get("dubbo") or {}
+    return bool(dubbo.get("installed")) and int(
+        dubbo.get("filter_instantiated") or 0
+    ) <= 0
+
+
+def _read_agent_heartbeat(config: "RunConfig") -> tuple[dict | None, str | None]:
     if not config.mock_admin_url:
         return None, "mock_admin_url_not_configured"
     headers = (
@@ -171,6 +180,34 @@ def _fetch_agent_heartbeat(
     if not isinstance(payload, dict):
         return None, "agent_heartbeat_invalid"
     return payload, None
+
+
+def _fetch_agent_heartbeat(
+    config: "RunConfig", *, wait_for_dubbo_filter: bool = False
+) -> tuple[dict | None, str | None]:
+    """读取 Java agent 心跳，用于校验 Dubbo Filter 是否真的在链上。
+
+    `GET /_admin/agent/heartbeat` 在 agent 尚未上报时返回 404；这不能当成
+    “没有 Dubbo 调用”糊弄过去，调用方必须按 `filter_not_in_chain` 阻断。
+
+    计划含 Dubbo 路由时，若心跳显示模块已安装但 `filter_instantiated=0`，
+    在有限窗口内轮询：Filter 可能在上一拍之后才进入 consumer 链。超时仍返回
+    最后一拍，由报告照常阻断；不会把“确实没进链”放过去。
+    """
+    payload, reason = _read_agent_heartbeat(config)
+    if not wait_for_dubbo_filter or not _dubbo_filter_pending(payload):
+        return payload, reason
+    deadline = time.monotonic() + _DUBBO_FILTER_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(_HEARTBEAT_POLL_SECONDS)
+        latest, latest_reason = _read_agent_heartbeat(config)
+        if latest is None:
+            # agent 彻底不可达/未激活：继续等也不会有 Filter。
+            return latest, latest_reason
+        payload, reason = latest, latest_reason
+        if not _dubbo_filter_pending(payload):
+            break
+    return payload, reason
 
 
 def _fetch_mock_sessions(
@@ -757,7 +794,12 @@ def _execute_and_report_inner(
 
     mock_evidence_path, mock_evidence_reason = _resolve_mock_evidence(project, config)
     mock_sessions, mock_sessions_reason = _fetch_mock_sessions(config, mock_run_scope)
-    agent_heartbeat, agent_heartbeat_reason = _fetch_agent_heartbeat(config)
+    agent_heartbeat, agent_heartbeat_reason = _fetch_agent_heartbeat(
+        config,
+        wait_for_dubbo_filter=bool(
+            (mock_plan_state or {}).get("dubbo_route_count")
+        ),
+    )
     mock_summary = summarize_evidence(
         mock_evidence_path,
         sessions=mock_sessions,

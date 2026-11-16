@@ -46,7 +46,12 @@ public final class DubboBridge {
         runtime = value;
     }
 
-    static void filterInstantiated(Class<?> filterClass) {
+    /**
+     * 必须 public：Spring Boot fat jar 里 Filter 由应用类加载器定义，与 bridge
+     * 所在的 agent 类加载器不是同一个 runtime package，包级可见会抛
+     * {@code IllegalAccessError}。
+     */
+    public static void filterInstantiated(Class<?> filterClass) {
         AgentRuntime current = runtime;
         if (current == null) {
             return;
@@ -55,10 +60,12 @@ public final class DubboBridge {
     }
 
     /**
+     * 必须 public，原因同 {@link #filterInstantiated(Class)}。
+     *
      * @return 命中桩时返回 Dubbo {@code Result} 对象；非计划内下游返回 {@code null}
      * @throws IllegalStateException 计划内下游取桩失败；消息为失败子码
      */
-    static Object intercept(Object invoker, Object invocation, Class<?> filterClass) {
+    public static Object intercept(Object invoker, Object invocation, Class<?> filterClass) {
         AgentRuntime current = runtime;
         if (current == null) {
             throw new IllegalStateException("agent_not_active");

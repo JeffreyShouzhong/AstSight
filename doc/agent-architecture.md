@@ -659,6 +659,7 @@ SUT 启动（AstSight 拉起）
    │  -javaagent:astsight-agent.jar（classpath + dubbo.consumer.filter 明确不支持）
    ▼
 agent：ExtensionLoader 加载时反射 defineClass，把 Filter 定义进应用类加载器
+   │  （JDK 9+ 把 java.lang 打开给 agent 与应用两个 unnamed module）
    │  Filter 经 Dubbo SPI @Activate(group=CONSUMER) 进入消费端调用链
    ▼
 启动自检：读 admin 心跳的 dubbo 块（installed/version/filter_instantiated）+ 版本匹配；本地心跳文件不做

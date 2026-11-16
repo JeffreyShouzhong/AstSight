@@ -12,6 +12,7 @@ import java.security.CodeSource;
 import java.security.ProtectionDomain;
 import java.security.cert.Certificate;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -55,7 +56,7 @@ final class DubboClassInjector {
             runtime.dubboError("filter class bytes missing");
             return;
         }
-        openJavaLang();
+        openJavaLang(null);
         instrumentation.addTransformer(new ClassFileTransformer() {
             @Override
             public byte[] transform(
@@ -77,11 +78,17 @@ final class DubboClassInjector {
     }
 
     /**
-     * JDK 9+ 需要把 {@code java.lang} 打开给 agent 所在模块，才能反射调用
+     * JDK 9+ 需要把 {@code java.lang} 打开给相关模块，才能反射调用
      * {@code ClassLoader#defineClass}；JDK 8 没有模块系统，直接可设访问。
      * 这里全部用反射，保持 release=8 可编译。
+     *
+     * <p>除 agent 自己所在模块外，还要打开给应用类加载器对应的 unnamed
+     * module：Spring Boot fat jar 里应用是独立 unnamed module，只开给 agent
+     * 自己时，Filter 注入和 Dubbo 2.7.x 自带 javassist 编译都会失败。</p>
+     *
+     * @param loader 应用类加载器；{@code null} 表示只打开给 agent 自己
      */
-    private void openJavaLang() {
+    private void openJavaLang(ClassLoader loader) {
         try {
             Class<?> moduleType = Class.forName("java.lang.Module");
             Method getModule = Class.class.getMethod("getModule");
@@ -94,9 +101,18 @@ final class DubboClassInjector {
                     Set.class,
                     Map.class);
             Object base = getModule.invoke(Object.class);
-            Object self = getModule.invoke(DubboClassInjector.class);
+            Set<Object> targets = new LinkedHashSet<Object>();
+            targets.add(getModule.invoke(DubboClassInjector.class));
+            if (loader != null) {
+                Object appModule = ClassLoader.class
+                        .getMethod("getUnnamedModule")
+                        .invoke(loader);
+                if (appModule != null) {
+                    targets.add(appModule);
+                }
+            }
             Map<String, Set<Object>> opens = Collections.<String, Set<Object>>singletonMap(
-                    "java.lang", Collections.<Object>singleton(self));
+                    "java.lang", targets);
             redefine.invoke(
                     instrumentation,
                     base,
@@ -118,6 +134,7 @@ final class DubboClassInjector {
             // 先占位，避免定义过程中再次触发同一加载器。
             injected.put(loader, Boolean.TRUE);
         }
+        openJavaLang(loader);
         try {
             Method method = ClassLoader.class.getDeclaredMethod(
                     "defineClass",

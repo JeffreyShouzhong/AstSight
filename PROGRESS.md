@@ -11,7 +11,11 @@
 > 字面量/模板路径并存时字面量优先；Dubbo 消费端 Filter 首版已打通（会话取桩、
 > 失败关闭、零真实调用）；Dubbo 画像识别、`dubbo_routes` 计划、自动注入与心跳
 > 门禁已打通，`dep_id` 带参数签名支持重载；实测 Dubbo 2.7.22 与 3.2.19 ×
-> JDK 8/11/17/21/26 共 10 个组合全部通过；全量测试与 agent e2e 结果见“本轮完成”
+> JDK 8/11/17/21/26 共 10 个组合全部通过；真实 `ReferenceConfig` 消费端代理在
+> 普通 classpath 与 Spring Boot fat jar 下都验证了桩返回与零建连；`agent run`
+> 的 Dubbo 全链路（HTTP 入口 → Dubbo 下游）已打通：画像 → `dubbo_routes` →
+> 自动注入 → 执行 → 报告一次跑完，目标端口零建连；全量测试与 agent e2e
+> 结果见“本轮完成”
 
 ## 当前状态
 
@@ -48,7 +52,71 @@
 | HTTP/2 prior-knowledge 负例 | ✅ 2026-11-16 | OkHttp `H2_PRIOR_KNOWLEDGE` 改写后无法与 HTTP/1.1 Mock 完成交换：SUT 显式失败（非 0）、真实下游 0 连接、心跳 `http_rewrites>=1`/`http_passthrough=0`；`test_java_agent_h2_prior_knowledge_e2e.py` |
 | Dubbo Filter 首版 | ✅ 2026-11-16 | `java/astsight-agent-dubbo`：消费端 Filter 由 `@Activate(group="consumer")` 进链；Filter 字节在 `ExtensionLoader` 首次加载时用 `ClassLoader#defineClass` 注入应用类加载器，不增强 Dubbo 内部类；取桩走 `POST /_admin/dubbo/invoke`（按 `dep_id` 命中会话绑定），返回体按接口返回类型经 Jackson 构造；同步/异步/声明 future/oneway/泛化都已处理；计划内取桩失败抛 `RpcException`、真实调用 0 次，计划外 dep 放行且无证据；心跳新增 `dubbo` 块 |
 | Dubbo 端到端闭环 | ✅ 2026-11-16 | 画像只读源码识别 `@DubboReference`/`@Reference` 与接口签名，无法证明即 `unsupported`；dep 进 `downstream_deps`，计划生成 `dubbo_routes` 并固定 `agent_rewrite` 注入；`agent run` 自动加 `-javaagent` 与 token 环境变量；执行门禁读心跳，缺心跳/Filter 未进链阻塞 `filter_not_in_chain`，`serialization_verified=false` 告警；`dep_id` 带参数签名支持重载；矩阵 Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 组合通过 |
+| Dubbo 真实代理 e2e | ✅ 2026-11-16 | `java/samples/dubbo-consumer` 用 `ReferenceConfig` 直连 URL（`check=false`、`lazy=true`，不启注册中心/provider），经真实消费端代理调用；Python 计数端口断言 accept 与收到字节数均为 0；普通 classpath 与 Spring Boot fat jar 均返回桩、心跳 `filter_instantiated>0`；修复 fat jar 下 `java.lang` 模块打开范围与 bridge 跨加载器可见性 |
+| Dubbo 全链路 e2e | ✅ 2026-11-16 | `java/samples/spring-boot-dubbo`（HTTP `/orders/{id}` → `@DubboReference` 字段 → `OrderApi`）+ `test_java_agent_dubbo_flow_e2e.py`：`run_flow` 完成画像 → `dubbo_routes` → `agent_rewrite` 注入（`JAVA_TOOL_OPTIONS` + `token_env`）→ 执行 → 报告；HTTP 响应体为桩数据，证据 `adapter=dubbo-filter`/`mode=agent_filter`，目标端口零建连零字节，门禁 pass（`filter_not_in_chain` 不阻断，`serialization_verified=false` 告警）；注解字段供画像读取，运行期由 `ReferenceConfig` 填同一字段，dep_id 一致 |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
+
+## 本轮完成（`agent run` Dubbo 全链路 e2e，2026-11-16）
+
+1. **SUT 样例**：新增 `java/samples/spring-boot-dubbo`（Spring Boot 3.5.6 +
+   Dubbo 2.7.22）。HTTP 入口 `GET /orders/{id}` 调用 `@DubboReference` 字段
+   声明的 `OrderApi#create(String)`；`--dubbo.url` 指向测试侧计数端口。
+   注解字段承担画像读取，运行期由 `ReferenceConfig` 直连 URL 填同一个字段
+   （Dubbo 2.7.x 的注解处理依赖 Spring 4/5 集成，与 Spring Boot 3 不兼容），
+   接口/group/version 与注解一致，dep_id 与画像产出相同。
+2. **e2e**：新增 `engine/tests/integration/test_java_agent_dubbo_flow_e2e.py`。
+   脚本化模型响应驱动 `run_flow`，一次完成规则 → Mock 语义 → 用例草案 →
+   `dubbo_routes` 计划 → Mock 启动 → SUT 启动（`JAVA_TOOL_OPTIONS` +
+   `token_env=ASTSIGHT_AGENT_TOKEN`）→ pytest → 报告。
+3. **断言**：注入为 `agent_rewrite`（原因
+   `dubbo_filter_requires_java_agent`）；`mock_plan.json` 的 `dubbo_routes`
+   与画像 dep_id 一致；HTTP 响应体断言 `orderId`/`amount` 来自桩；证据
+   `adapter=dubbo-filter`/`mode=agent_filter`/`original_path=dubbo:...#create`；
+   目标 Dubbo 端口 accept 与字节数均为 0；心跳 `installed` / `version` /
+   `filter_instantiated>0` / `serialization_verified=false`；门禁 pass，
+   `filter_not_in_chain` 不在阻塞项，`serialization_verified=false` 在告警中；
+   `sut.log` 有 `Picked up JAVA_TOOL_OPTIONS` 与 `token_env=`，无 `token=`。
+4. **心跳节拍**：默认 5s 一拍，报告读到的 `filter_hits` 可能落后于本次调用，
+   因此 e2e 不用它判定“本次命中”；调用凭据以 `mock_calls.jsonl` 证据行为准，
+   门禁本身只要求 `filter_instantiated>0`。
+5. **门禁复核窗口**：`_fetch_agent_heartbeat` 增加
+   `wait_for_dubbo_filter`：计划含 Dubbo 路由且心跳显示 `installed=true`、
+   `filter_instantiated=0` 时，最多轮询 6s 再下结论。消除“Filter 刚进链、
+   还没到下一拍心跳”被误判为 `filter_not_in_chain` 的竞态；超时仍按阻断
+   处理，不放宽门禁。新增 4 条单测（等待到新值、无 Dubbo 计划不等待、
+   agent 消失即返回、模块未装不等待），`tests/test_dubbo_gates.py`。
+6. **测试结果**：新增 e2e 1 条在 JDK 17 与 JDK 21 上均通过；样例
+   `mvn package` 构建通过（fat jar）；全量 Python **423 passed, 35 skipped**。
+7. **文档**：`java/README.md`、`engine/README.md`、根 `README.md`、
+   `doc/决策记录.md`（新增 v4.24）、`doc/framework-capability-design.md`
+   同步全链路验证范围、样例说明与门禁复核窗口。
+
+## 本轮完成（Dubbo 真实消费端代理 e2e，2026-11-16）
+
+1. **真实代理样例**：新增 `java/samples/dubbo-consumer`（`OrderApi` /
+   `OrderView` / `DubboConsumerSample` + 独立 pom）。用 `ReferenceConfig`
+   直连 `dubbo://127.0.0.1:<计数端口>`，`check=false`、`lazy=true`，不启
+   注册中心与 provider；`mvn package` 同时产出普通 classpath 依赖清单
+   `target/consumer-classpath.txt` 和 Spring Boot fat jar。样例打印 `loader=`
+   与 `filter_loader=`，便于核对 Filter 由哪个加载器定义。
+2. **e2e**：新增 `engine/tests/integration/test_java_agent_dubbo_consumer_e2e.py`
+   2 条（普通 classpath / Spring Boot fat jar）。Python 侧在目标端口监听，
+   断言 accept 次数与收到的字节数都是 0；两条都返回桩 `O-1,10`、心跳
+   `filter_instantiated>0`、证据 `adapter=dubbo-filter`，并核对 Filter 与
+   应用类加载器一致。默认跳过，启用条件与既有 Dubbo e2e 相同。
+3. **修复 fat jar 类加载**：`DubboClassInjector` 在 JDK 9+ 除了把 `java.lang`
+   打开给 agent 自己，还打开给应用加载器的 unnamed module。修复前 fat jar 下
+   Dubbo 2.7.22 的 javassist 编译直接失败（`InaccessibleObjectException`）。
+4. **修复跨加载器访问**：`DubboBridge.filterInstantiated` / `intercept` 改为
+   `public`。Filter 由 `LaunchedClassLoader` 定义、bridge 在 agent 加载器，
+   两者运行时包不同，包级可见会抛 `IllegalAccessError`。
+5. **测试结果**：Dubbo e2e 7 条通过（新增 2 + 原有 5）；新增的 2 条在 JDK 17
+   与 JDK 21 上各跑一次均通过；Dubbo 版本矩阵 2.7.22/3.2.19 × JDK
+   8/11/17/21/26 共 10 组合重跑通过；Java 单测通过；全量 Python
+   **419 passed, 34 skipped**（新增 2 条纳入默认跳过）。
+6. **文档**：`java/README.md`、`engine/README.md`、`doc/决策记录.md`（新增
+   v4.23）、`doc/agent-architecture.md`、`doc/framework-capability-design.md`
+   同步真实代理验证、模块打开范围与 bridge 可见性约束。
 
 ## 本轮完成（Dubbo 画像/计划/门禁/重载/矩阵，2026-11-16）
 
@@ -557,6 +625,10 @@
 5. **Dubbo 版本矩阵**：✅ 已完成（2026-11-16），Dubbo 2.7.22 与 3.2.19 ×
    JDK 8/11/17/21/26 共 10 组合通过。classpath + `dubbo.consumer.filter`
    形态与本地心跳文件明确不做。矩阵外组合一律按 `unsupported` 处理。
+6. **Dubbo 真实消费端代理 e2e**：✅ 已完成（2026-11-16），`ReferenceConfig`
+   直连 URL 经真实代理调用，普通 classpath 与 Spring Boot fat jar 均返回桩、
+   计数端口零建连零字节。下一步是 `agent run` 的 Dubbo 全链路 e2e
+   （HTTP + Dubbo SUT，画像 → 计划 → 自动注入 → 执行 → 报告）。
 
 已完成的历史步骤（Java HTTP Mock P0/P1/P1.5）见下方各轮完成记录。
 

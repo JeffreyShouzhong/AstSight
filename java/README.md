@@ -19,7 +19,8 @@ Java agent 有两条接入路径：
 | `astsight-agent` | 最终 shaded jar，入口 `io.astsight.agent.core.AstSightAgent` |
 
 字节码目标为 JDK 8；构建使用 JDK 8+。HTTP adapter 的运行矩阵已在
-JDK 8/11/17/21/26 上实测；Dubbo 目前只在 JDK 26 + Dubbo 2.7.22 上验证。
+JDK 8/11/17/21/26 上实测；Dubbo Filter 在 Dubbo 2.7.22 与 3.2.19 ×
+JDK 8/11/17/21/26 共 10 个组合上实测。
 ASM、ByteBuddy 与 Jackson 打进 shaded jar；OkHttp、Feign、Spring、Dubbo
 均为 `provided`，不随 agent 分发。
 
@@ -161,10 +162,18 @@ async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 
 - `engine/tests/integration/test_java_agent_dubbo_e2e.py`：Dubbo 消费端 Filter，
   验证取桩返回 DTO、未绑定失败关闭、计划外放行，以及异步/声明 future/
   oneway/泛化四种形态（详见下一节）。
+- `engine/tests/integration/test_java_agent_dubbo_consumer_e2e.py`：真实
+  `ReferenceConfig` 代理调用（直连 URL、不启 provider），普通 classpath 与
+  Spring Boot fat jar 两种类加载器都验证：返回桩对象、目标端口零建连零请求、
+  Filter 与 bridge 跨类加载器可调用。
+- `engine/tests/integration/test_java_agent_dubbo_flow_e2e.py`：`agent run`
+  全链路（HTTP 入口 + Dubbo 下游），覆盖画像 → `dubbo_routes` →
+  `JAVA_TOOL_OPTIONS` + `token_env` 注入 → 执行 → 报告，并断言目标 Dubbo
+  端口零建连、门禁 pass。
 
 以上 HTTP 相关用例均已实测通过；版本矩阵在 JDK 8/11/17/21/26 上共 80 个
 JDK×客户端组合全部通过，Spring Boot 样例在 JDK 17/21/26 通过。Dubbo e2e
-在 Dubbo 2.7.22 + JDK 26 通过；Dubbo 版本矩阵另见
+（含真实消费端代理与 `agent run` 全链路）在 JDK 17 与 21 上跑过；Dubbo 版本矩阵另见
 `test_java_agent_dubbo_matrix_e2e.py`，2.7.22 与 3.2.19 × JDK 8/11/17/21/26
 共 10 个组合全部通过。
 
@@ -174,13 +183,18 @@ JDK×客户端组合全部通过，Spring Boot 样例在 JDK 17/21/26 通过。D
 （SPI 名 `astSightMock`，`@Activate(group = "consumer")`）。agent jar 在系统
 类加载器，Filter 必须在应用类加载器里才认得 Dubbo 类型，所以注入方式是：
 监听 `org/apache/dubbo/common/extension/ExtensionLoader` 的加载，反射调用该
-加载器的 `ClassLoader#defineClass` 定义 Filter 字节（JDK 9+ 先
-`Instrumentation.redefineModule` 打开 `java.lang`）。不增强 Dubbo 内部类，
-也不使用 `URLClassLoader#addURL` 或动态代理。
+加载器的 `ClassLoader#defineClass` 定义 Filter 字节（JDK 9+ 先用
+`Instrumentation.redefineModule` 把 `java.lang` 同时打开给 agent 自己与应用
+类加载器对应的 unnamed module——fat jar 里两者是不同模块，只开给 agent 时
+Filter 注入和 Dubbo 2.7.x 自带的 javassist 编译都会失败）。不增强 Dubbo
+内部类，也不使用 `URLClassLoader#addURL` 或动态代理。
 
 它注册在 `astsight-agent` 的分发 jar 里，随 `-javaagent` 一起生效。注入的
-Filter 只引用 Dubbo 类型和系统类加载器里的 `DubboBridge`；bridge 对
-`Invoker`/`Invocation`/`URL`/`Result`/`AsyncRpcResult` 全走反射。
+Filter 只引用 Dubbo 类型和父类加载器里的 `DubboBridge`；bridge 对
+`Invoker`/`Invocation`/`URL`/`Result`/`AsyncRpcResult` 全走反射。因为 Filter
+与应用可能不在同一个类加载器，两者的运行时包不同，bridge 的
+`filterInstantiated` / `intercept` 必须是 `public`，包级可见会抛
+`IllegalAccessError`（fat jar e2e 已覆盖）。
 
 调用路径：
 
@@ -216,8 +230,18 @@ errors / serialization_verified`，其中 `serialization_verified` 固定为
 cd java
 mvn -pl astsight-agent -am -DskipTests clean package
 # 生成 target/dubbo-classpath.txt（2.7.22 及其依赖）
-cd ../engine
-ASTSIGHT_JAVA_AGENT_E2E=1 python -m pytest tests/integration/test_java_agent_dubbo_e2e.py -q
+# 真实消费端样例：普通 classpath 与 Spring Boot fat jar
+cd samples/dubbo-consumer && mvn -q -DskipTests package
+# 全链路样例：HTTP 入口 + Dubbo 下游
+cd ../spring-boot-dubbo && mvn -q -DskipTests package
+cd ../../..
+cd engine
+ASTSIGHT_JAVA_AGENT_E2E=1 \
+python -m pytest tests/integration/test_java_agent_dubbo_e2e.py \
+  tests/integration/test_java_agent_dubbo_consumer_e2e.py -q
+
+ASTSIGHT_JAVA_AGENT_DUBBO_FLOW_E2E=1 \
+python -m pytest tests/integration/test_java_agent_dubbo_flow_e2e.py -q
 ```
 
 版本矩阵另行启用（首次运行会经 Maven 下载 Dubbo 依赖）：
@@ -232,6 +256,21 @@ python -m pytest tests/integration/test_java_agent_dubbo_matrix_e2e.py -q
 样例 `java/samples/DubboFilterSample.java` 不启动注册中心与 provider：它经
 Dubbo SPI 取出 Filter，对计数假 Invoker 调用，分别验证取桩成功、未绑定失败
 关闭与计划外放行。
+
+样例 `java/samples/dubbo-consumer` 再往前一步：用真实
+`ReferenceConfig` 直连 `dubbo://127.0.0.1:<计数端口>`（`check=false`、
+`lazy=true`，不启注册中心与 provider），经真实消费端代理调用。Python 侧在
+该端口监听，断言 accept 次数与收到的字节数都是 0；`mvn package` 同时产出
+普通 classpath 用的依赖清单和 Spring Boot fat jar，分别覆盖
+`AppClassLoader` 与 `LaunchedClassLoader` 两种类加载场景。
+
+样例 `java/samples/spring-boot-dubbo` 是 `agent run` 的 SUT：HTTP 入口
+`GET /orders/{id}` 调用 `@DubboReference` 字段声明的 `OrderApi`，
+`--dubbo.url` 指向计数端口。注解字段供画像读取；运行期由
+`ReferenceConfig` 直连 URL 填同一字段（Dubbo 2.7.x 的注解处理依赖
+Spring 4/5 集成，与 Spring Boot 3 不兼容），接口/group/version 与注解一致，
+因此 dep_id 与画像产出相同。全链路断言 HTTP 响应体是桩数据、证据
+`adapter=dubbo-filter`/`mode=agent_filter`、目标端口零建连零字节。
 
 ## 已知边界
 

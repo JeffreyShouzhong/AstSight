@@ -593,7 +593,11 @@ HC5 5.0 / 5.1 / 5.2.3 / 5.3.1 / 5.4.1 / 5.6.5）共 80 个组合全部通过。
 jar 在系统类加载器，Filter 必须在应用类加载器里才认得 Dubbo 类型，因此 agent
 监听 `org/apache/dubbo/common/extension/ExtensionLoader` 的加载，反射调用该
 加载器的 `ClassLoader#defineClass` 定义 Filter 字节（JDK 9+ 先
-`Instrumentation.redefineModule` 打开 `java.lang`）；不增强 Dubbo 内部类。
+`Instrumentation.redefineModule` 把 `java.lang` 打开给 agent 自己与应用模块；
+Spring Boot fat jar 是两个不同的 unnamed module，只开给 agent 会同时卡住
+Filter 注入和 Dubbo 2.7.x 自带的 javassist 编译）；不增强 Dubbo 内部类。
+Filter 与 `DubboBridge` 可能分属两个类加载器，跨加载器调用只走 `public`
+方法，否则抛 `IllegalAccessError`。
 
 - 画像识别：`astsight/profile/dubbo.py` 只读源码扫描 `@DubboReference` /
   Dubbo `@Reference` 字段，接口源码必须在仓库内，方法参数类型能解析到 JVM
@@ -633,16 +637,27 @@ jar 在系统类加载器，Filter 必须在应用类加载器里才认得 Dubbo
   `GET /_admin/agent/heartbeat`。没有心跳（`agent_not_active`）、
   `dubbo.installed=false` 或 `filter_instantiated=0` 记为阻塞项
   `filter_not_in_chain`，执行结果不能通过；`serialization_verified=false`
-  记为告警（首版不校验序列化保真）。`mock_not_used` 按会话绑定与实际证据
-  比对，绑定了却没调用同样出报。
+  记为告警（首版不校验序列化保真）。心跳默认 5s 一拍，若读到
+  `installed=true` 但 `filter_instantiated=0`，报告会在 6s 内轮询复核
+  （Filter 可能在上一拍之后才进链），超时仍按阻断处理。
+  `mock_not_used` 按会话绑定与实际证据比对，绑定了却没调用同样出报。
 
 ```bash
 # 先构建 agent 与 Dubbo classpath（package 阶段生成 dubbo-classpath.txt）
 cd java && mvn -pl astsight-agent -am -DskipTests clean package
+# 真实消费端样例：普通 classpath + Spring Boot fat jar
+cd samples/dubbo-consumer && mvn -q -DskipTests package && cd ../..
 
 cd ../engine
 ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
-  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_dubbo_e2e.py -q
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_dubbo_e2e.py \
+  tests/integration/test_java_agent_dubbo_consumer_e2e.py -q
+
+# agent run 全链路（HTTP 入口 + Dubbo 下游）：先构建样例
+#   cd java/samples/spring-boot-dubbo && mvn -q -DskipTests package
+ASTSIGHT_JAVA_AGENT_DUBBO_FLOW_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK17+> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_dubbo_flow_e2e.py -q
+
 # 单元测试：Mock 取桩入口、画像识别、执行门禁
 PYTHONPATH=. python -m pytest tests/test_mock_dubbo.py tests/test_profile_dubbo.py tests/test_dubbo_gates.py -q
 
@@ -651,6 +666,23 @@ ASTSIGHT_JAVA_AGENT_DUBBO_MATRIX_E2E=1 \
 ASTSIGHT_JAVA_AGENT_DUBBO_MATRIX_JDKS="<JDK8>;<JDK11>;<JDK17>;<JDK21>;<JDK26>" \
 PYTHONPATH=. python -m pytest tests/integration/test_java_agent_dubbo_matrix_e2e.py -q
 ```
+
+真实代理链路单独覆盖：`java/samples/dubbo-consumer` 用 `ReferenceConfig`
+直连 `dubbo://127.0.0.1:<计数端口>`（`check=false`、`lazy=true`，不启注册中心
+与 provider），Python 侧监听该端口并断言 accept 次数与收到的字节数都是 0；
+普通 classpath（`AppClassLoader`）与 Spring Boot fat jar
+（`LaunchedClassLoader`）两种类加载场景都返回桩对象、心跳
+`filter_instantiated > 0`，且 Filter 由应用类加载器定义。
+
+全链路另由 `java/samples/spring-boot-dubbo` 覆盖：HTTP 入口 `/orders/{id}`
+调用 `@DubboReference` 字段声明的 `OrderApi`，`run_flow` 一次跑完画像、
+`dubbo_routes` 计划、`agent_rewrite` 注入、执行与报告；HTTP 响应体是桩数据，
+证据为 `adapter=dubbo-filter`/`mode=agent_filter`，目标 Dubbo 端口零建连零
+字节，门禁 `filter_not_in_chain` 不阻断。样例里的注解字段供画像读取，运行期
+由 `ReferenceConfig` 直连 URL 填同一字段（Dubbo 2.7.x 的注解处理依赖
+Spring 4/5 集成，与 Spring Boot 3 不兼容）；两边 dep_id 一致，断言的是同一
+条调用。心跳默认 5s 一拍，报告读到的 `filter_hits` 可能落后于本次调用，调用
+凭据以 `mock_calls.jsonl` 证据行为准。
 
 支持范围：只支持 `-javaagent` 形态；同步/异步/声明 future/oneway/泛化与
 typed DTO 均已覆盖。已实测 Dubbo 2.7.22 与 3.2.19 分别在 JDK
