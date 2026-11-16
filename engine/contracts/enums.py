@@ -99,11 +99,12 @@ class MockMode(str, Enum):
 
 
 class MockStrategy(str, Enum):
-    """HTTP 下游注入策略（v4.6.1 支持边界见 C3.5.5）。"""
+    """HTTP 下游注入策略（v4.15 支持边界见 C3.5.5）。"""
 
     URL_OVERRIDE = "url_override"
     DISCOVERY_OVERRIDE = "discovery_override"
     HTTP_PROXY = "http_proxy"
+    AGENT_REWRITE = "agent_rewrite"
     UNSUPPORTED = "unsupported"
 
 

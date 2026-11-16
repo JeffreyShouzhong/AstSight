@@ -509,7 +509,7 @@ State（全局共享状态）：
 | 造数器 | C5b | 否 | catalog 校验、fixtures → 按方言参数化 SQL、SQLite/PostgreSQL/MySQL apply/teardown |
 | C5 语义适配器 | C5a/C5b | 是 | 字段业务语义、候选业务态/取值；只能引用 catalog 中的表/列/枚举，不输出 SQL |
 | Mock 编排器 | C3.5 | 否 | 语义模板、Mock 会话（session）与出站隔离 |
-| Mock Agent | C3.5.3 | 否 | ByteBuddy agent 加载、Dubbo Filter、心跳自检；只拦截 SUT 出站调用 |
+| Mock Agent | C3.5.3/C3.5.5 | 否 | agent 加载（HTTP 用 ASM 织入 + 反射 bridge，Dubbo 用 ByteBuddy + Filter）、心跳自检；只拦截 SUT 出站调用 |
 | 执行器 | C7 | 否 | 执行编排子图（状态机+单用例管道+Mock 会话租约），详见 5.1 |
 | 报告器 | C7.4 | 否 | 归因合并、门禁判定 |
 
@@ -678,6 +678,34 @@ agent：ByteBuddy Agent 加载 → filter jar 追加进 classloader
 - 不增强 Dubbo 内部类；Filter 未激活（如应用 `filter=...` 带 `-default`）由心跳文件的 `filter_instantiated=0` 发现；
 - 响应对象构造失败 → `mock_response_invalid`；异步调用返回 `AsyncRpcResult`；
 - `serialization_verified=false` 固定写入报告（跳过 Hessian2）。
+
+**HTTP 下游（v4.15，agent 改写 URL；与 Dubbo 共用外壳）**：
+
+```
+SUT 启动（AstSight 拉起）
+   │  JAVA_TOOL_OPTIONS=-javaagent:astsight-agent.jar=admin=...,token_env=ASTSIGHT_AGENT_TOKEN,sut_id=...
+   ▼
+agent：字节码织入（三个 adapter 都用 ASM + 反射 bridge）→ 注册 HTTP adapters（OkHttp/Feign/RestTemplate）
+   │  通过 GET /_admin/agent/routes 拉取 route table
+   ▼
+启动自检：心跳 pid/jvm_start_time/身份匹配；画像声明的客户端栈均有激活 adapter
+   │  agent 未激活 → agent_not_active；栈无 adapter → agent_adapter_missing
+   ▼
+用例执行：SUT 出站 HTTP → adapter 识别 method + URL
+   │  ├─ 命中 route → 改写为 http://<mock>/_dep/<route_key><原路径>，Mock 按会话返回分支
+   │  ├─ 计划内主机未命中 → /_agent/unmatched（502 + mock_route_unknown，不透传）
+   │  └─ 计划外主机 → 真实下游（报告必须列出）
+   ▼
+证据：mock_calls.jsonl 记 adapter/mode/original_host；绑定 route 0 次 → mock_not_used
+```
+
+- 配置注入仍优先；HTTP agent 只在配置覆盖不到且有 adapter 时启用；
+- 只改写 URL，不 mock 客户端 bean、不构造响应、不绕过编解码/重试/降级链；
+- HTTPS 仅在 agent 激活时可用：连接建立前改写为明文 Mock 地址，不建 TLS、不装 CA；
+- 计划内请求改写失败必须抛错失败关闭，不能返回原始请求透传到真实下游；
+- WebClient、第三方 SDK、裸 Apache HC/JDK HttpClient/`HttpURLConnection`、
+  async-http-client 不建 adapter，计划期标 `unsupported`；
+- agent 不持有用例会话，会话仍由执行链路通过 `/_admin/sessions` 建立。
 
 **失败子码与处理**：
 

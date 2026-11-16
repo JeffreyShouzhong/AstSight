@@ -24,8 +24,107 @@ def _dep_index(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return index
 
 
+_JAVA_CLIENTS = {
+    "okhttp",
+    "feign",
+    "resttemplate",
+    "webclient",
+    "httpclient",
+    "apache-httpclient",
+}
+_JAVA_SUPPORTED_CLIENTS = {"okhttp", "feign", "resttemplate"}
+
+
+def _is_java_dep(dep: dict[str, Any]) -> bool:
+    languages = {str(item) for item in dep.get("languages") or []}
+    if "java" in languages or str(dep.get("language") or "") == "java":
+        return True
+    return bool({str(item) for item in dep.get("clients") or []} & _JAVA_CLIENTS)
+
+
+def _java_injection(dep: dict[str, Any], dep_id: str) -> MockPlanInjection:
+    """Java 只支持 OkHttp/Feign/RestTemplate；其余客户端在计划期阻断。
+
+    WebClient/第三方 SDK 不建设 adapter；若它们的地址来自可覆盖配置，
+    仍允许 `url_override`（这是纯配置注入，不依赖 agent）。
+    """
+    config_keys = [str(key) for key in dep.get("config_keys") or [] if str(key)]
+    target = str(dep.get("target") or "")
+    https = target.lower().startswith("https://")
+    clients = {str(item) for item in dep.get("clients") or []}
+    unsupported_clients = clients - _JAVA_SUPPORTED_CLIENTS
+    unsupported = bool(unsupported_clients)
+    unknown = not clients
+
+    if https:
+        # HTTPS 只在 agent_rewrite 下放开；配置注入不改 scheme。
+        if unsupported:
+            return _unsupported(dep_id, "https_requires_supported_agent_client")
+        if unknown:
+            return _unsupported(dep_id, "client_unknown")
+        return MockPlanInjection(
+            dep_id=dep_id,
+            strategy=MockStrategy.AGENT_REWRITE,
+            kind="base_url",
+            property=None,
+            original=None,
+            path_mode="append",
+            reason="https_requires_agent_rewrite",
+        )
+    if config_keys:
+        return MockPlanInjection(
+            dep_id=dep_id,
+            strategy=MockStrategy.URL_OVERRIDE,
+            kind="base_url",
+            property=config_keys[0],
+            original=None,
+            path_mode="append",
+            reason="original_unknown",
+        )
+    if dep.get("evidence") == "svc" and dep.get("service_name"):
+        return MockPlanInjection(
+            dep_id=dep_id,
+            strategy=MockStrategy.DISCOVERY_OVERRIDE,
+            service_name=str(dep["service_name"]),
+            kind="base_url",
+            property=None,
+            original=None,
+            path_mode="append",
+            reason="discovery_requires_static_instances",
+        )
+    if unsupported:
+        return _unsupported(dep_id, "client_unsupported")
+    if unknown:
+        return _unsupported(dep_id, "client_unknown")
+    if dep.get("target"):
+        return MockPlanInjection(
+            dep_id=dep_id,
+            strategy=MockStrategy.AGENT_REWRITE,
+            kind="base_url",
+            property=None,
+            original=None,
+            path_mode="append",
+            reason="agent_rewrite_required",
+        )
+    return _unsupported(dep_id, "target_unresolved")
+
+
+def _unsupported(dep_id: str, reason: str) -> MockPlanInjection:
+    return MockPlanInjection(
+        dep_id=dep_id,
+        strategy=MockStrategy.UNSUPPORTED,
+        kind="base_url",
+        property=None,
+        original=None,
+        path_mode="append",
+        reason=reason,
+    )
+
+
 def _injection_for(dep: dict[str, Any]) -> MockPlanInjection:
     dep_id = str(dep.get("dep_id") or "")
+    if _is_java_dep(dep):
+        return _java_injection(dep, dep_id)
     config_keys = [str(key) for key in dep.get("config_keys") or [] if str(key)]
     if config_keys:
         return MockPlanInjection(
@@ -160,7 +259,12 @@ def build_mock_plan(
         injection = _injection_for(dep)
         injections.append(injection)
         if injection.strategy is MockStrategy.UNSUPPORTED:
-            warnings.append(f"mock_injection_unsupported:{dep_id}")
+            warnings.append(
+                f"mock_injection_unsupported:{dep_id}:"
+                f"{injection.reason or 'unsupported'}"
+            )
+        elif injection.strategy is MockStrategy.AGENT_REWRITE:
+            warnings.append(f"mock_injection_agent_rewrite:{dep_id}")
         elif injection.strategy is MockStrategy.HTTP_PROXY:
             warnings.append(f"mock_injection_proxy:{dep_id}")
         elif injection.strategy is MockStrategy.DISCOVERY_OVERRIDE:

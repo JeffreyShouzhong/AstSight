@@ -36,9 +36,11 @@ from .enums import (
     Transport,
 )
 from .mock import (
+    MockAgent,
     MockBinding,
     MockCall,
     MockDrainResult,
+    MockHttpAdapter,
     MockInjection,
     MockRoute,
     MockServer,
@@ -132,6 +134,7 @@ __all__ = [
     "ForeignKey",
     "GapKind",
     "GraphSource",
+    "MockAgent",
     "MockBinding",
     "MockBranch",
     "MockBranchSource",
@@ -139,6 +142,7 @@ __all__ = [
     "MockCallResult",
     "MockDep",
     "MockDrainResult",
+    "MockHttpAdapter",
     "MockInjection",
     "MockMode",
     "MockPlan",

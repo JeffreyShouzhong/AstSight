@@ -48,7 +48,9 @@ Java agent；v4.3 起 Mock 覆盖 SUT → HTTP 与 Dubbo 2.7+ 下游（Dubbo 走
 Filter，定位为低侵入；SUT → gRPC 下游 v4.3 仍 `mock="unsupported"`，v4.4 决策为 gripmock
 假服务器 + target 重定向，尚未实现）。v4.6 起删除 Feign 特殊支持：HTTP 客户端（含 Feign）
 一律按普通出站调用处理，通用机制覆盖不了的下游直接标 `mock="unsupported"` / `unidentified`。
-v4.6.1 起 HTTP Mock 首版只做明文 HTTP，HTTPS 标 `tls_not_supported`；下游 `dep_id` 为
+v4.6.1 起 HTTP Mock 首版只做明文 HTTP，HTTPS 标 `tls_not_supported`；v4.15 起仅在
+Java agent 激活且该 dep 选 `agent_rewrite` 时放开 HTTPS（改写为明文 Mock 端点），
+未启用 agent 时维持原口径。下游 `dep_id` 为
 `http:{downstream_key} {METHOD} {path}`，运行期按 `route_key` 路由。运行时核心已在
 `astsight/mock/` 落地：`dep_id`/`route_key` 构建、Host/路径路由、会话分支、`mock_calls.jsonl`
 与内嵌 uvicorn；执行链路已接入：生成物按用例创建/绑定会话，先 drain 再关闭，runner 透传
@@ -56,6 +58,12 @@ Mock 管理地址与 token，晚到调用归因到已关闭用例。`run --mock-
 服务并产出注入清单；`agent run` 消费同一份清单，在启动 SUT 时写入注入环境变量。
 v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discovery_override`/透明代理条件支持，
 共享 base URL（`mock_config_ambiguous`）、同 JVM bean mock、动态 URL、请求匹配/序列/流式不支持。
+v4.15 的 `agent_rewrite` 是配置注入的兜底：agent 只改写 URL 到 `/_dep/<route_key>`，
+不构造响应、不持有会话；计划内下游零透传，计划外主机放行但上报。已打通
+OkHttp / Feign / RestTemplate + HTTPS + 心跳 + 证据，`agent run` 会通过
+`JAVA_TOOL_OPTIONS` 自动加载 agent；WebClient、第三方 SDK、直接使用
+Apache HC / JDK HttpClient / HttpURLConnection / async-http-client 的调用
+不提供 adapter，计划期标 `unsupported`，不做“假装支持”的降级。
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
@@ -73,6 +81,7 @@ v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discover
 | `astsight/execute/` C7 | ✅ | JUnit XML、确定性归因、只对环境抖动做有界重试 |
 | `astsight/report/` C7.4 | ✅ | JSON + Markdown；用例库版本、待审、需求覆盖、drift 单列 |
 | `astsight/mock/` C3.5.5 | ◐ 核心+执行链路+语义+计划+启动注入 | `dep_id` 唯一性/`route_key`、Host/路径路由、会话分支、drain、晚到调用归因、会话历史、`mock_not_used`、`mock_calls.jsonl`、内嵌 uvicorn；`mock semantics` 生成契约 `success` + 规则分支（可选 `--draft`/`--llm` 候选）；`run --mock-plan` 管理生命周期、写 `run_manifest.json`/`mock_injection.json`；`mock plan` 从 C3 调用点生成计划草案；`agent run` 用注入清单启动 SUT |
+| `java/`（agent） | ✅ OkHttp/Feign/RestTemplate | `astsight-agent-core` + `astsight-agent-http`：premain、admin 路由表拉取、心跳、ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute` 的 URL 改写、`/_agent/unmatched` 零透传、HTTPS 改写为明文；计划内改写失败失败关闭；普通 JVM 与 Spring Boot 3.5.6 fat jar 均已联调通过；WebClient/第三方 SDK/裸 HC/JDK HttpClient 明确不支持 |
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
 | `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
@@ -479,13 +488,72 @@ token、namespace 和 `mock_calls.jsonl` 路径传给 pytest；运行结束（�
   `agent run` 会自动完成这个顺序。
 - `url_override` 必须提供 `property` 与 `original`；仅静态识别到配置键、不知道原值时，
   可省略 `original` 并写 `reason="original_unknown"`（会产出 warning，SUT 侧按 `url_override`
-  覆盖该环境变量）。HTTPS 目标直接以 `tls_not_supported` 阻断；`unsupported` 必须给 `reason`。
+  覆盖该环境变量）。HTTPS 目标在非 `agent_rewrite` 策略下以 `tls_not_supported` 阻断；
+  选 `agent_rewrite` 时允许 HTTPS，由 agent 改写为明文 Mock 端点。`unsupported` 必须给 `reason`。
 - 运行目录新增：
   - `run_manifest.json`：实际 endpoint/port、route、injection、token 指纹；**不含 token**。
   - `mock_injection.json`：供 SUT 启动器消费的注入清单；**不含 token**。
   - `mock_calls.jsonl`：调用证据，参与 `mock_not_used` 校验。
 - `run --mock-plan` 不启动 SUT，也不改写 SUT 配置，只负责“起 Mock + 产出注入事实”；
   需要一条命令完成注入与启动时使用 `agent run`（`astsight/agent/sut.py`）。
+
+### Java HTTP agent（OkHttp / Feign / RestTemplate）
+
+agent 从 `GET /_admin/agent/routes` 拉取只读路由表，在出站 HTTP 客户端调用前把
+URL 改写为 `http://<mock>/_dep/<route_key><原路径>?<原 query>`；响应、分支、
+会话与 `mock_calls.jsonl` 仍由内嵌 Mock 产生。计划内 host 未命中改写为
+`/_agent/unmatched`（502 + `mock_route_unknown`/`mock_route_ambiguous`），计划外
+host 放行并在心跳 `passthrough_hosts` 中计数。agent 不持有会话，不构造响应。
+
+支持范围：
+
+- OkHttp 3/4/5：织入 `OkHttpClient#newCall(Request)`；
+- Feign 阻塞客户端：织入 `SynchronousMethodHandler#targetRequest`，默认 /
+  OkHttp / Apache HC 传输都走同一入口；
+- Spring `RestTemplate`：织入 `doExecute`（Spring 5 四参、Spring 6.2 五参），
+  与底层 JDK / Apache / OkHttp RequestFactory 无关；
+- 不支持：WebClient/Reactor、第三方 SDK、直接使用 Apache HC 4/5、JDK 11
+  HttpClient、`HttpURLConnection`、async-http-client。计划期即标
+  `unsupported`，不会静默放行。
+
+```bash
+cd java
+mvn -q -DskipTests package   # 产物：java/astsight-agent/target/astsight-agent.jar
+
+java -javaagent:astsight-agent/target/astsight-agent.jar=\
+admin=http://127.0.0.1:36000,token=<mock-token>,sut_id=<sut> \
+  -cp <sut-classpath> <main>
+```
+
+`agent run` 消费 `agent_rewrite` 注入时会自动设置：
+
+- `JAVA_TOOL_OPTIONS=-javaagent:<jar>=admin=<mock>,token_env=ASTSIGHT_AGENT_TOKEN,sut_id=<sut>`
+- `ASTSIGHT_AGENT_TOKEN=<mock-token>`
+
+token 只走环境变量，不进入进程命令行；jar 路径可用
+`ASTSIGHT_JAVA_AGENT_JAR` 覆盖，默认取仓库构建产物。jar 缺失、token 缺失或
+路径含空格时显式告警 `injection_agent_unavailable:*`，不假装注入成功。
+
+HTTPS 在改写后走明文，不建 TLS、不装 CA。三个 adapter 都用裸 ASM + 反射 bridge
+实现，避免 Spring Boot fat jar 的 `LaunchedURLClassLoader` 下 ByteBuddy 解析
+`okhttp3.Request` / `feign.Request` 失败。计划内请求若改写失败（bridge 异常、
+签名不兼容等），adapter 抛出 `AgentRewriteException` 让本次调用失败，绝不返回
+原始请求透传到真实下游。心跳字段：`http_adapters`、`http_hooked`、
+`http_rewrites`、`http_errors`、`http_stack_unsupported`、`http_passthrough`、
+`passthrough_hosts`。
+
+可选联调测试（默认跳过，均已实测通过）：
+
+```bash
+# 普通 JVM + OkHttp
+ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_okhttp_e2e.py -q
+
+# Spring Boot 3.5.6 fat jar；先构建样例：
+#   cd java/samples/spring-boot-okhttp && mvn -q -DskipTests package
+ASTSIGHT_JAVA_AGENT_SPRING_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_spring_boot_e2e.py -q
+```
 
 ### 下游调用点识别与计划草案（P1）
 
@@ -699,9 +767,11 @@ python examples/demo_agent_flow.py --keep --no-auto-approve       # 停在待审
   `path_params/query/headers/body/asserts/mock_bindings` 与实际绑定的 Mock 分支
   `status/headers/body/semantics`；不改用例身份、规则引用、前置状态，数据/环境错误不触发修复。
   5xx 只有在归因为 `mock_error` 时才允许修 Mock，避免把真实代码缺陷“修绿”；
-- 启动期注入只支持环境变量形式的 `url_override` 与显式 `http_proxy`；配置文件、注册中心、
+- 启动期注入支持环境变量形式的 `url_override`、Spring Cloud 静态实例的
+  `discovery_override`、显式 `http_proxy`，以及 Java 的 `agent_rewrite`
+  （通过 `JAVA_TOOL_OPTIONS` 自动加载 agent）；配置文件、注册中心、
   DNS 改写会显式告警为 unsupported；
-- 下游自动识别覆盖 Python 的 `requests`/`httpx`/`urllib`，以及 Java（RestTemplate、WebClient、Java 11 HttpClient、OkHttp、Apache HttpClient）、Go（`net/http`、resty）与 Node（`fetch`、axios、got、`http.request`）；声明式客户端（Feign、生成式 SDK）与动态代理仍不识别；
+- 下游自动识别覆盖 Python 的 `requests`/`httpx`/`urllib`，以及 Java（RestTemplate、WebClient、Java 11 HttpClient、OkHttp、Apache HttpClient、Feign 接口）、Go（`net/http`、resty）与 Node（`fetch`、axios、got、`http.request`）；生成式 SDK 与动态代理仍不识别；
 - 每轮对模型输出都有条数/长度上限，模型输出按不可信输入处理。
 
 ## 产物与门禁
@@ -846,6 +916,12 @@ python -m pytest -q
   需要 Node >= 22.5 与 `@colbymchenry/codegraph`；先执行
   `python -m astsight codegraph install`，或用 `ASTSIGHT_CODEGRAPH_MODULE_ROOT`
   指定 node_modules，环境不具备时显式 SKIP。
+- `tests/integration/test_java_feign_e2e.py`：真实 Spring Cloud 工程联调，默认 SKIP。
+  设置 `ASTSIGHT_JAVA_E2E=1`、`ASTSIGHT_JAVA_E2E_PROJECT=<feign-eureka 根目录>`
+  （client 模块需先 `mvn -q -pl client -am package -DskipTests`），必要时用
+  `ASTSIGHT_JAVA_E2E_JAVA` 指定 java。覆盖扫描 Feign 调用点 → `build_mock_plan`
+  → 静态实例注入 → SUT 真实启动 → 请求命中 Mock → `mock_calls.jsonl` 留证，
+  并反证服务名大小写敏感。
 
 ## 下一步
 

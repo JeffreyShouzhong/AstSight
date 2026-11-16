@@ -209,6 +209,81 @@ def test_injection_for_service_dependency_uses_discovery() -> None:
     assert injection.reason == "discovery_requires_static_instances"
 
 
+def test_injection_for_java_supported_client_uses_agent_rewrite() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "http:host:api.example.com GET /orders/{}",
+            "dep_type": "http",
+            "evidence": "host",
+            "target": "http://api.example.com/orders/{}",
+            "clients": ["okhttp"],
+            "languages": ["java"],
+        }
+    )
+    assert injection.strategy.value == "agent_rewrite"
+    assert injection.reason == "agent_rewrite_required"
+
+
+def test_injection_for_java_https_uses_agent_rewrite() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "http:host:api.example.com GET /orders/{}",
+            "dep_type": "http",
+            "evidence": "host",
+            "target": "https://api.example.com/orders/{}",
+            "clients": ["resttemplate"],
+            "languages": ["java"],
+        }
+    )
+    assert injection.strategy.value == "agent_rewrite"
+    assert injection.reason == "https_requires_agent_rewrite"
+
+
+def test_injection_for_java_webclient_is_unsupported() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "http:host:api.example.com GET /orders/{}",
+            "dep_type": "http",
+            "evidence": "host",
+            "target": "http://api.example.com/orders/{}",
+            "clients": ["webclient"],
+            "languages": ["java"],
+        }
+    )
+    assert injection.strategy.value == "unsupported"
+    assert injection.reason == "client_unsupported"
+
+
+def test_injection_for_java_unknown_client_is_unsupported() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "http:host:api.example.com GET /orders/{}",
+            "dep_type": "http",
+            "evidence": "host",
+            "target": "http://api.example.com/orders/{}",
+            "languages": ["java"],
+        }
+    )
+    assert injection.strategy.value == "unsupported"
+    assert injection.reason == "client_unknown"
+
+
+def test_injection_for_java_config_key_still_wins() -> None:
+    injection = _injection_for(
+        {
+            "dep_id": "http:cfg:ORDER_BASE_URL GET /orders/{}",
+            "dep_type": "http",
+            "evidence": "cfg",
+            "target": "http://api.example.com/orders/{}",
+            "config_keys": ["ORDER_BASE_URL"],
+            "clients": ["resttemplate"],
+            "languages": ["java"],
+        }
+    )
+    assert injection.strategy.value == "url_override"
+    assert injection.property == "ORDER_BASE_URL"
+
+
 def test_injection_env_discovery_keeps_service_name_case() -> None:
     document = {
         "routes": [{"dep_id": "dep-1", "host": "helloserver"}],
@@ -316,6 +391,97 @@ def test_injection_env_discovery_keeps_invalid_spring_json() -> None:
     )
     assert env["SPRING_APPLICATION_JSON"] == "not-json"
     assert "discovery_not_supported:spring_application_json_invalid" in warnings
+
+
+def _agent_document() -> dict:
+    return {
+        "sut_id": "sut-1",
+        "endpoint": "http://127.0.0.1:9000",
+        "injections": [
+            {
+                "dep_id": "dep-1",
+                "strategy": "agent_rewrite",
+                "injected": "http://127.0.0.1:9000",
+            }
+        ],
+    }
+
+
+def test_injection_env_agent_rewrite_uses_token_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jar = tmp_path / "astsight-agent.jar"
+    jar.write_bytes(b"")
+    monkeypatch.setenv("ASTSIGHT_JAVA_AGENT_JAR", str(jar))
+    monkeypatch.delenv("JAVA_TOOL_OPTIONS", raising=False)
+    monkeypatch.delenv("ASTSIGHT_AGENT_TOKEN", raising=False)
+
+    env, keys, warnings = injection_env(
+        _agent_document(),
+        base_url="http://127.0.0.1:8080",
+        agent_token="secret-token",
+    )
+
+    javaagent = env["JAVA_TOOL_OPTIONS"]
+    assert f"-javaagent:{jar}=" in javaagent
+    assert "admin=http://127.0.0.1:9000" in javaagent
+    assert "token_env=ASTSIGHT_AGENT_TOKEN" in javaagent
+    assert "sut_id=sut-1" in javaagent
+    assert "secret-token" not in javaagent
+    assert env["ASTSIGHT_AGENT_TOKEN"] == "secret-token"
+    assert {"JAVA_TOOL_OPTIONS", "ASTSIGHT_AGENT_TOKEN"} <= set(keys)
+    assert any(
+        item.startswith("injection_agent_rewrite_applied:dep-1")
+        for item in warnings
+    )
+
+
+def test_injection_env_agent_rewrite_merges_java_tool_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jar = tmp_path / "astsight-agent.jar"
+    jar.write_bytes(b"")
+    monkeypatch.setenv("ASTSIGHT_JAVA_AGENT_JAR", str(jar))
+    monkeypatch.delenv("ASTSIGHT_AGENT_TOKEN", raising=False)
+
+    env, _keys, _warnings = injection_env(
+        _agent_document(),
+        base_url="http://127.0.0.1:8080",
+        extra_env={"JAVA_TOOL_OPTIONS": "-Xmx256m"},
+        agent_token="secret-token",
+    )
+    assert env["JAVA_TOOL_OPTIONS"].startswith("-Xmx256m ")
+    assert "-javaagent:" in env["JAVA_TOOL_OPTIONS"]
+
+
+def test_injection_env_agent_rewrite_without_token_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jar = tmp_path / "astsight-agent.jar"
+    jar.write_bytes(b"")
+    monkeypatch.setenv("ASTSIGHT_JAVA_AGENT_JAR", str(jar))
+    monkeypatch.delenv("ASTSIGHT_AGENT_TOKEN", raising=False)
+
+    env, _keys, warnings = injection_env(
+        _agent_document(), base_url="http://127.0.0.1:8080"
+    )
+    assert "JAVA_TOOL_OPTIONS" not in env
+    assert "injection_agent_unavailable:dep-1:token_missing" in warnings
+
+
+def test_injection_env_agent_rewrite_without_jar_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASTSIGHT_JAVA_AGENT_JAR", str(tmp_path / "missing.jar"))
+    monkeypatch.delenv("ASTSIGHT_AGENT_TOKEN", raising=False)
+
+    env, _keys, warnings = injection_env(
+        _agent_document(),
+        base_url="http://127.0.0.1:8080",
+        agent_token="secret-token",
+    )
+    assert "JAVA_TOOL_OPTIONS" not in env
+    assert "injection_agent_unavailable:dep-1:agent_jar_missing" in warnings
 
 
 def test_semantic_validation_rejects_fake_quote_and_dep() -> None:

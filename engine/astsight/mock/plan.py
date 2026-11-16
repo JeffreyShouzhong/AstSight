@@ -99,7 +99,9 @@ def _require(condition: bool, code: str, detail: str = "") -> None:
         raise MockPlanError(code, detail)
 
 
-def _normalize_route(route: MockPlanRoute, index: int) -> None:
+def _normalize_route(
+    route: MockPlanRoute, index: int, *, allow_https: bool = False
+) -> None:
     where = f"routes[{index}]"
     dep_id = str(route.dep_id or "").strip()
     _require(bool(dep_id), "mock_dep_id_invalid", f"{where}: 空 dep_id")
@@ -140,7 +142,9 @@ def _normalize_route(route: MockPlanRoute, index: int) -> None:
     target = route.target
     if target:
         try:
-            normalized = normalize_target_url(str(target))
+            normalized = normalize_target_url(
+                str(target), allow_https=allow_https
+            )
         except TlsNotSupportedError as exc:
             raise MockPlanError("tls_not_supported", f"{where}: {exc.detail}") from exc
         except ValueError as exc:
@@ -209,10 +213,22 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
     validation = MockPlanValidation()
     if host.lower() not in LOOPBACK_HOSTS:
         validation.warnings.append(f"mock_bind_non_loopback:{host}")
+    agent_deps = {
+        injection.dep_id
+        for injection in plan.injections
+        if injection.strategy is MockStrategy.AGENT_REWRITE
+    }
     seen_deps: set[str] = set()
     deps: list[DepIdEntry] = []
     for index, route in enumerate(plan.routes):
-        _normalize_route(route, index)
+        _normalize_route(
+            route,
+            index,
+            allow_https=(
+                route.dep_id in agent_deps
+                or route.strategy is MockStrategy.AGENT_REWRITE
+            ),
+        )
         _require(
             route.dep_id not in seen_deps,
             "mock_route_conflict",
@@ -351,6 +367,7 @@ def _injection_model(
     elif injection.strategy in (
         MockStrategy.DISCOVERY_OVERRIDE,
         MockStrategy.HTTP_PROXY,
+        MockStrategy.AGENT_REWRITE,
     ):
         injected = endpoint
     else:

@@ -139,17 +139,23 @@ def normalize_host(host: str, port: int | None = None) -> str:
     return value
 
 
-def normalize_target_url(target: str) -> NormalizedTarget:
-    """解析并规范化目标 URL；仅接受明文 HTTP。"""
+def normalize_target_url(
+    target: str, *, allow_https: bool = False
+) -> NormalizedTarget:
+    """解析并规范化目标 URL；默认仅接受明文 HTTP。
+
+    `allow_https` 仅供 `agent_rewrite` 使用：agent 会把 HTTPS 目标改写为明文
+    HTTP 的 Mock 端点，因此计划校验需要能保留原始 scheme 与 host。
+    """
     raw = str(target or "").strip()
     try:
         parts = urlsplit(raw)
     except ValueError as exc:
         raise DepIdError("invalid_target", str(exc)) from exc
     scheme = parts.scheme.lower()
-    if scheme == "https":
+    if scheme == "https" and not allow_https:
         raise TlsNotSupportedError(raw)
-    if scheme != "http":
+    if scheme not in ("http", "https"):
         raise DepIdError("unsupported_scheme", raw)
     host = (parts.hostname or "").lower()
     if not host:
@@ -158,12 +164,13 @@ def normalize_target_url(target: str) -> NormalizedTarget:
         port = parts.port
     except ValueError as exc:
         raise DepIdError("invalid_target", str(exc)) from exc
+    default_port = 443 if scheme == "https" else 80
     display_host = _bracket_ipv6(host)
-    if port and port != 80:
+    if port and port != default_port:
         display_host = f"{display_host}:{port}"
     path_key = normalize_path_key(parts.path or "/")
     return NormalizedTarget(
-        url=f"http://{display_host}{path_key}",
+        url=f"{scheme}://{display_host}{path_key}",
         host=normalize_host(host, port),
         port=port,
         path_key=path_key,

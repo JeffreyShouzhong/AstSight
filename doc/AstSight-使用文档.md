@@ -1166,10 +1166,15 @@ PYTHONPATH=. python -m astsight agent run \
   不改用例身份、规则引用或前置状态；
 - 没有 OpenAPI 时可以用代码路由，但字段格式/必填类用例无法生成；
 - 分析阶段 SUT 尚未启动，因此不能从 `--base-url` 拉取契约；
-- 启动期注入只支持环境变量形式的 `url_override` 和显式 `http_proxy`；
-- 下游自动识别覆盖 Python 的 `requests`/`httpx`/`urllib`，以及 Java/Go/Node
-  的常见 HTTP 客户端；声明式客户端（Feign、生成式 SDK）、动态代理和注册中心
-  发现的服务地址仍不识别，会明确落在 `downstream_unsupported`；
+- 启动期注入支持环境变量形式的 `url_override`、Spring Cloud 静态实例的
+  `discovery_override` 和显式 `http_proxy`；Java SUT 的 `agent_rewrite` 会通过
+  `JAVA_TOOL_OPTIONS` 自动加载 agent，支持 OkHttp、Feign（阻塞）和
+  RestTemplate，HTTPS 目标改写为明文 Mock 地址；
+- WebClient、第三方 SDK、直接 Apache HC / JDK HttpClient / `HttpURLConnection` /
+  async-http-client 不建设 adapter，计划期标 `unsupported`，不静默透传；
+- 下游自动识别覆盖 Python 的 `requests`/`httpx`/`urllib`，以及 Java（含 Feign
+  接口）、Go/Node 的常见 HTTP 客户端；生成式 SDK、动态代理和注册中心发现的
+  服务地址仍不识别，会明确落在 `downstream_unsupported`；
 - Java `@Value("${pay.base-url}")` 等 Spring 配置键会规范化为环境变量形式
   （`PAY_BASE_URL`），以便注入；无法映射的配置键只告警，不猜原值。
 

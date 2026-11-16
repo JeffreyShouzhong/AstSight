@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（v4.7，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b）
+# AstSight — 能力设计规格说明书（v4.16，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -25,6 +25,12 @@
 > **v4.6.1 HTTP 注入承诺**：v1 只承诺下游专属 `url_override` 与显式 `http_proxy`（均为明文）；
 > `discovery_override`/透明代理为条件支持，共享 base URL、同 JVM bean mock、动态 URL、
 > 请求匹配/序列/流式不支持。完整矩阵见 C3.5.5。
+> **v4.15 Java HTTP agent 改写**：新增 `agent_rewrite` 注入策略，Java agent 在出站 HTTP
+> 客户端调用前把 URL 改写为 `http://<mock>/_dep/<route_key><原路径>`；配置注入仍优先，
+> agent 仅兜底。HTTPS 仅在 agent 激活且该 dep 选 `agent_rewrite` 时解除
+> `tls_not_supported`（改写后为明文，不建 TLS、不装 CA）；未启用 agent 时维持 v4.6.1
+> 口径。首版只做 URL 改写，不做进程内响应合成。约束见 C3.5.5，决策过程见
+> [`决策记录.md`](决策记录.md) §17。
 
 ---
 
@@ -1097,9 +1103,9 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 
 > 被测接口内部的对外调用（下游依赖）是接口测试最易失真的环节。**AstSight的测试数据由数据库直插构造，上下游并未打通**——下游服务里不存在与我们造数匹配的业务上下文（账号、余额、订单状态等），因此连下游和放行都不可行，**Mock 是唯一主策略**。
 >
-> **范围（v4.6.1）**：Mock 覆盖 SUT → **明文 HTTP** 与 SUT → **Dubbo 2.7+** 下游。HTTP 在出站 HTTP 边界（URL/服务发现/HTTP 代理覆盖 + 会话），首版**不处理 HTTPS**：`https://` 目标及需要 TLS 的代理链路统一标 `mock="unsupported"`（`unsupported_reason="tls_not_supported"`），不降级、不 MITM。Dubbo 用 **agent + ByteBuddy + Filter** 拦截（见 C3.5.3）。SUT → **gRPC** 下游在 C3.5.4 落地前仍标 `mock="unsupported"`，依赖它的用例必须显式排除或标 `blocked`，不允许静默透传。
+> **范围（v4.6.1，v4.15 扩展）**：Mock 覆盖 SUT → **HTTP** 与 SUT → **Dubbo 2.7+** 下游。HTTP 在出站 HTTP 边界（URL/服务发现/HTTP 代理/agent 改写 + 会话）。未启用 agent 时只处理明文：`https://` 目标及需要 TLS 的代理链路统一标 `mock="unsupported"`（`unsupported_reason="tls_not_supported"`），不降级、不 MITM。v4.15 起，配置覆盖不到且客户端栈有 adapter 时用 **`agent_rewrite`**：把出站 URL 改写为明文 Mock 地址，HTTPS 因此可用（不建 TLS、不装 CA）。Dubbo 用 **agent + ByteBuddy + Filter** 拦截（见 C3.5.3），与 HTTP 共用 agent 外壳。SUT → **gRPC** 下游在 C3.5.4 落地前仍标 `mock="unsupported"`，依赖它的用例必须显式排除或标 `blocked`，不允许静默透传。
 >
-> **HTTP 注入的 v1 承诺**：只承诺**下游专属配置的 `url_override`** 与**显式 `http_proxy`**（均为明文）；`discovery_override` 与透明代理仅条件支持，环境不具备时 `discovery_not_supported`，不计入承诺。共享 base URL、HTTPS、同 JVM bean mock、动态 URL、请求匹配/序列/流式均不支持。完整矩阵与选择顺序见 **C3.5.5**。
+> **HTTP 注入的承诺**：下游专属配置的 `url_override` 与显式 `http_proxy` 为无条件承诺（均为明文）；`discovery_override` 与透明代理仅条件支持，环境不具备时 `discovery_not_supported`，不计入承诺；`agent_rewrite` 是条件能力（Java SUT、agent 可加载、客户端栈有 adapter）。共享 base URL 与 HTTPS 在启用 `agent_rewrite` 时可覆盖，否则不支持；同 JVM bean mock、动态 URL、请求匹配/序列/流式始终不支持。完整矩阵与选择顺序见 **C3.5.5**。
 
 **核心结论：Mock 唯一主策略**
 
@@ -1114,7 +1120,7 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 
 | 下游类型            | Mock 方式                       | 断言重点                 |
 | --------------- | ----------------------------- | -------------------- |
-| http | 内嵌 HTTP Mock 服务（仅明文），按会话返回编排响应（成功/超时/降级/异常码）；通过通用 URL/服务发现/HTTP 代理覆盖把出站调用指向该服务 | 我方调用参数 + 响应处理结果 + route_key 命中证据 |
+| http | 内嵌 HTTP Mock 服务，按会话返回编排响应（成功/超时/降级/异常码）；通过通用 URL/服务发现/HTTP 代理覆盖或 Java agent URL 改写把出站调用指向该服务（agent 改写可覆盖 HTTPS） | 我方调用参数 + 响应处理结果 + route_key 命中证据 |
 | `dubbo`（SUT→下游，2.7+） | **agent + ByteBuddy + Filter**，按会话返回语义分支；`serialization_verified=false` | 我方调用参数 + 响应处理结果 + Filter 命中证据 |
 | `grpc`（SUT→下游） | ❌ v4.3 不 Mock | 不执行真实下游：依赖它的用例显式排除或标 `blocked` |
 | mq（消息队列）        | 生产者消息拦截，断言消息内容                | 消息是否发出、内容是否正确        |
@@ -1136,7 +1142,7 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 
    > **通用机制覆盖不了就不支持**：地址在运行时动态生成、客户端不走可覆盖配置且无法经代理到达、或自定义传输实现绕过标准 HTTP 栈 → 该下游标 `mock="unsupported"`，依赖它的用例 `blocked`。不为特定客户端（含 Feign）追加专用兜底。
    >
-   > **首版明确不支持 HTTPS**：`https://` 下游不通过“改写成 http”或安装测试 CA 的方式绕过 TLS；标 `mock="unsupported"`、`unsupported_reason="tls_not_supported"`，依赖用例 `blocked` 并进入报告 `unsupported` 清单。是否在后续版本引入 MITM 由单独决策记录决定。
+   > **HTTPS（v4.15）**：未启用 agent 时不支持 HTTPS：`https://` 下游不改写、不装测试 CA，标 `mock="unsupported"`、`unsupported_reason="tls_not_supported"`，依赖用例 `blocked`。启用 `agent_rewrite` 时，agent 在连接建立前把 `https://` 改写为明文 Mock 地址，因此不需要 MITM/CA；仍不建立 TLS 隧道、不做证书信任链降级。是否引入 MITM 仍由单独决策记录决定。
 2. **响应编排**：Mock 响应按用例编排（成功/超时/降级/异常码），响应体用数据契约变量（`T{run_scope}_{case_id}_PAY`）保证用例间隔离
 3. **调用断言**：Mock 记录"是否被调用、调用几次、请求参数"，供用例断言（如"取消订单后必须发送退款消息"）
 4. **Mock 数据与 DB 造数对齐**：Mock 响应中的业务标识（如 `trans_no`）若需回写被测库，须与 DB 造数计划共享同一变量域（`T{run_scope}_{case_id}_` 前缀），保证"我方 DB 状态 ↔ Mock 返回"逻辑自洽
@@ -1171,16 +1177,16 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 - **Mock 响应与 DB 造数共享变量域**——两者必须对齐，否则会出现"Mock 返回的流水号落不了库"这类割裂
 - Mock 响应和调用断言都是确定性编排，不放 LLM
 - Cache（Redis）属特例：可用独立测试实例而非 Mock，因为它不是"未打通的下游服务"，而是可随测随建的基础设施
-- **优先用配置覆盖，而非字节码/代理劫持**：配置覆盖稳定且可审计；只有在覆盖不到（硬编码地址、自定义拦截器、动态路由）时才退回明文 HTTP 代理，并在画像里标 `mock.strategy="http_proxy"`
+- **优先用配置覆盖，而非字节码/代理劫持**：配置覆盖稳定且可审计；覆盖不到（硬编码地址、自定义拦截器、动态路由、HTTPS、共享 base URL）时，Java SUT 若有适配该客户端栈的 agent，则用 `agent_rewrite`，否则退回明文 HTTP 代理；仍不可用即 `unsupported`，不静默降级
 - **Mock 分支选择走会话，不靠“当前用例隐式上下文”**：一个命名空间单 active session，session 里显式登记 `mock_bindings`；未命中、未授权 dep、晚到调用都必须报错，不能回退到默认成功或真实下游
 - **v1 接受 mock-bound 用例串行**：正确性优先；并行需要每 worker 独立 SUT + Mock 命名空间，作为后续增强，不在 v1 假装支持
 - **超时/降级/重试必须一起测**：客户端存在 `fallback` / Sentinel / Hystrix 等降级机制时，Mock 分支至少要包含 `success`、`timeout`、`error`；只测成功路径会把"降级吞异常"当成通过（假绿）。若 Mock 响应可延迟，用延迟触发真实超时而非改代码
 - **Mock 是否生效要有证据**：每个 HTTP 下游都必须记录"Mock 被调用次数"，用例断言里同时检查"Mock 命中 + fallback 未触发"；仅凭状态码通过不算
 - **零透传只能由网络隔离强保证**：应用层看不到未到达 Mock 的请求，报告用 `egress_guard=network|none` 如实标注；`none` 时标 `degraded`，不允许宣称"已验证无透传"
 
-**异常与边界**：下游依赖无法识别（动态调用、反射、配置化 URL）→ 标记 `unidentified` 并在报告告警，交由人工补画像；全 Mock 原则下不存在"透传放行"的正常例外——任何真实出站请求都触发告警（唯一例外：Cache/Redis 等可随测随建的基础设施，不作为"下游服务"处理）；SUT → gRPC 下游仍 `mock="unsupported"`，用例显式排除或 `blocked`，报告单列，不得当作已覆盖（v4.3 口径；v4.4 决策见 C3.5.4）；Dubbo 下游若 agent 未激活或 Filter 未进入调用链 → `agent_not_active`，整批阻断，不得继续执行。HTTP 专项边界：地址在运行时动态生成、配置项不可覆盖或客户端绕过标准 HTTP 栈 → `mock="unsupported"`，不尝试专用兜底；`https://` 目标 → `unsupported`（`tls_not_supported`）；多个调用点命中同一下游端点时**合并为同一 `dep_id`**，运行时共享同一分支；若确实需要按调用点返回不同分支，HTTP 边界无法区分，标 `mock_binding_ambiguous`，不按调用点拆分 `dep_id`（避免制造重复身份）；`fallback` 吞掉异常会导致"假绿"，必须用"Mock 调用记录 + fallback 未触发"双断言识别
+**异常与边界**：下游依赖无法识别（动态调用、反射、配置化 URL）→ 标记 `unidentified` 并在报告告警，交由人工补画像；全 Mock 原则下不存在"透传放行"的正常例外——任何真实出站请求都触发告警（唯一例外：Cache/Redis 等可随测随建的基础设施，不作为"下游服务"处理）；SUT → gRPC 下游仍 `mock="unsupported"`，用例显式排除或 `blocked`，报告单列，不得当作已覆盖（v4.3 口径；v4.4 决策见 C3.5.4）；Dubbo 下游若 agent 未激活或 Filter 未进入调用链 → `agent_not_active`，整批阻断，不得继续执行。HTTP 专项边界：地址在运行时动态生成、配置项不可覆盖或客户端绕过标准 HTTP 栈 → `mock="unsupported"`，不尝试专用兜底；`https://` 目标未启用 agent 时 → `unsupported`（`tls_not_supported`），启用 `agent_rewrite` 且该栈有 adapter 时允许（改写为明文）；多个调用点命中同一下游端点时**合并为同一 `dep_id`**，运行时共享同一分支；若确实需要按调用点返回不同分支，HTTP 边界无法区分，标 `mock_binding_ambiguous`，不按调用点拆分 `dep_id`（避免制造重复身份）；`fallback` 吞掉异常会导致"假绿"，必须用"Mock 调用记录 + fallback 未触发"双断言识别
 
-**门禁**：全部 HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%（每个 `type=http|dubbo` 的 downstream_dep 必有 Mock 编排）；存在未 Mock 且未显式声明的下游 → 阻断执行；gRPC 下游必须标 `mock="unsupported"` 且依赖它的用例已显式排除或 `blocked`，否则阻断执行；Dubbo 下游必须通过 agent 自检（心跳 + Filter 激活）且有命中证据，`serialization_verified=false` 必须可见；每个 HTTP 下游必须给出 `mock.strategy`、唯一 `dep_id`、唯一 `route_key` 与实际配置键（或发现/代理覆盖证据），标注 `unsupported` 的下游必须显式声明且依赖用例 `blocked`；`https://` 下游必须标 `tls_not_supported` 且不得执行；`dep_id` 或 `route_key` 冲突、路由歧义 → 阻断画像/执行；只断言状态码、没有 Mock 命中证据的用例 → 标记 `weak_oracle` 并进入人工复核
+**门禁**：全部 HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%（每个 `type=http|dubbo` 的 downstream_dep 必有 Mock 编排）；存在未 Mock 且未显式声明的下游 → 阻断执行；gRPC 下游必须标 `mock="unsupported"` 且依赖它的用例已显式排除或 `blocked`，否则阻断执行；Dubbo 下游必须通过 agent 自检（心跳 + Filter 激活）且有命中证据，`serialization_verified=false` 必须可见；每个 HTTP 下游必须给出 `mock.strategy`、唯一 `dep_id`、唯一 `route_key` 与实际配置键（或发现/代理/agent 改写证据），标注 `unsupported` 的下游必须显式声明且依赖用例 `blocked`；`https://` 下游未选 `agent_rewrite` 时必须标 `tls_not_supported` 且不得执行，选 `agent_rewrite` 时必须有 agent 自检与 adapter 证据；`dep_id` 或 `route_key` 冲突、路由歧义 → 阻断画像/执行；只断言状态码、没有 Mock 命中证据的用例 → 标记 `weak_oracle` 并进入人工复核
 
 #### C3.5.1 Mock 语义模型（Mock 响应如何符合用例需求）
 
@@ -1327,6 +1333,8 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 
 > 落选的 Dubbo Mock 实现方式（自带 `mock` 属性、TestableMock、Byteman、jvm-sandbox-repeater、ChaosBlade）及原因见 [`决策记录.md`](决策记录.md) §3。
 
+> **与 HTTP agent 的关系（v4.15）**：C3.5.5 的 `agent_rewrite` 与本节共用同一个 `astsight-agent` 外壳（心跳、admin client、sut_id/namespace 校验、版本矩阵），但拦截适配器分离：Dubbo 走 `Filter`，HTTP 走客户端栈 adapter。实现顺序调整为 HTTP adapter 先落地，Dubbo Filter 后续接入同一 `agent-core`；v4.3 的 Filter 语义、序列化保真边界与失败子码不变。
+
 **Filter 实现约束**：
 
 - 同步与异步必须分别处理：异步调用要返回 `AsyncRpcResult`，不能直接返回裸对象；
@@ -1456,9 +1464,11 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 
 **门禁**：随包二进制版本与 sha256 校验通过、平台在承诺矩阵内才执行；Mock 服务器健康检查通过才执行；每个绑定桩必须命中 ≥1 次；未命中必须有 history 证据；不得把“没匹配上”当成通过；target 改写必须显式、可审计。
 
-#### C3.5.5 HTTP 下游 Mock：内嵌假服务器 + route_key（v4.6.1，仅明文 HTTP）
+#### C3.5.5 HTTP 下游 Mock：内嵌假服务器 + route_key（v4.6.1；v4.15 增加 agent 改写）
 
-**结论**：SUT → HTTP 下游的 Mock 由引擎**内嵌 HTTP Mock 服务**完成。每个 `sut_id` 一个实例，SUT 启动前按 `mock.strategy` 把对应出站调用指向它；用例通过 C3.5 的会话 API 选择语义分支；请求按 `route_key` 命中下游，调用记录写入 `mock_calls.jsonl` 作为证据。**首版只支持明文 HTTP**：HTTPS 目标、需要 TLS 的代理链路、TLS 证书固定/mTLS 一律 `unsupported`，不降级、不 MITM、不安装测试 CA。
+**结论**：SUT → HTTP 下游的 Mock 由引擎**内嵌 HTTP Mock 服务**完成。每个 `sut_id` 一个实例，SUT 启动前按 `mock.strategy` 把对应出站调用指向它；用例通过 C3.5 的会话 API 选择语义分支；请求按 `route_key` 命中下游，调用记录写入 `mock_calls.jsonl` 作为证据。
+
+注入策略按 **配置优先、agent 兜底** 选择：能由下游专属配置、服务发现或显式代理覆盖的，继续用 `url_override` / `discovery_override` / `http_proxy`；配置覆盖不到（HTTPS、共享 base URL、客户端忽略代理等）且 Java agent 适配器覆盖该客户端栈时，用 **`agent_rewrite`**：agent 在出站调用发出前把 URL 改写为 `http://<mock>/_dep/<route_key><原路径>`，响应仍由 Mock 服务产生。**未启用 agent 时只支持明文 HTTP**：HTTPS 目标、需要 TLS 的代理链路、TLS 证书固定/mTLS 一律 `unsupported`，不降级、不 MITM、不安装测试 CA；启用 agent 且该 dep 选 `agent_rewrite` 时，HTTPS 可改写为明文 HTTP，不建立 TLS。
 
 **运行形态**：
 
@@ -1534,25 +1544,28 @@ http:{downstream_key} {METHOD} {path_key}
 **请求路由（resolve order）**：
 
 1. `/_admin/*` → 管理面，校验 token；
-2. 路径前缀 `/_dep/<route_key>` → 直接命中对应 dep，前缀后的原路径只作证据（`url_override` 专用配置）；
-3. `Host` 头（小写，含可选端口）→ 命中 host 组，再在该组内按唯一 `(METHOD, path_key)` 命中 dep（`discovery_override` 与 `http_proxy`）；
-4. 全表唯一 `(METHOD, path_key)` 匹配 → 命中（仅当路由表内恰好一条）；
-5. 无命中 → `mock_route_unknown`；多条命中 → `mock_route_ambiguous`；**任何情况都不透传真实下游**。
+2. 路径前缀 `/_dep/<route_key>` → 直接命中对应 dep，前缀后的原路径只作证据（`url_override` 专用配置与 `agent_rewrite`）；
+3. 路径前缀 `/_agent/unmatched` → 按 `X-AstSight-Reason`（`unknown|ambiguous`）记录未命中并返回 502，供 agent 上报计划内未命中，不参与正常路由；
+4. `Host` 头（小写，含可选端口）→ 命中 host 组，再在该组内按唯一 `(METHOD, path_key)` 命中 dep（`discovery_override` 与 `http_proxy`）；
+5. 全表唯一 `(METHOD, path_key)` 匹配 → 命中（仅当路由表内恰好一条）；
+6. 无命中 → `mock_route_unknown`；多条命中 → `mock_route_ambiguous`；**任何情况都不透传真实下游**。
 
 Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调用记录；该响应对 SUT 只是普通下游错误，**不得被当作有效语义分支**，框架侧直接把用例标 `blocked`。
 
-**注入矩阵（仅明文 HTTP）**：
+**注入矩阵**：
 
 | `mock.strategy` | 适用 | 注入动作 | 路由依据 | 失败处理 |
 |---|---|---|---|---|
-| `url_override` | 有可覆盖的、且**只服务该 dep** 的 base URL / endpoint URL 配置 | 把 `mock.property` 的值改为 `http://<mock_host>:<port>/_dep/<route_key>` | 路径前缀 | 配置键缺失/不可写/值不是 http → `mock_config_not_overridable`；一个键被多个 dep 共享 → `mock_config_ambiguous`，转 `http_proxy` 或 `unsupported` |
+| `url_override` | 有可覆盖的、且**只服务该 dep** 的 base URL / endpoint URL 配置 | 把 `mock.property` 的值改为 `http://<mock_host>:<port>/_dep/<route_key>` | 路径前缀 | 配置键缺失/不可写/值不是 http → `mock_config_not_overridable`；一个键被多个 dep 共享 → `mock_config_ambiguous`，转 `http_proxy` / `agent_rewrite` / `unsupported` |
 | `discovery_override` | 客户端走服务发现，且测试环境可重定向注册中心/静态服务列表 | 测试注册中心/静态服务列表把服务名指向 Mock 主机端口；`Host` 保持服务名 | `Host` | 发现机制不可替换 → `discovery_not_supported`，下游 `unsupported`（条件能力，不计入 v1 承诺） |
 | `http_proxy` | 硬编码地址、自定义拦截器、动态 URL，且为明文 HTTP | 显式代理：`HTTP_PROXY` / `-Dhttp.proxyHost` 指向 Mock；透明代理：环境用 iptables REDIRECT 到 Mock | 显式代理读 absolute-form；透明代理读 origin-form + `Host` | 客户端忽略代理、目标为 HTTPS、需要 root 但环境不提供 → `unsupported` |
-| `unsupported` | HTTPS、动态地址无法覆盖、自定义传输 | 不注入 | — | 用例 `blocked`，报告 `unsupported` 单列 |
+| `agent_rewrite` | Java SUT，配置注入覆盖不到（HTTPS、共享 base URL、客户端忽略代理等），且 agent 适配器覆盖该客户端栈 | `-javaagent` 加载 agent；agent 在出站调用前把 URL 改写为 `http://<mock_host>:<port>/_dep/<route_key><原路径>` | 路径前缀 | agent 未激活/适配器缺失 → `agent_not_active` / `agent_adapter_missing`；改写失败 → `agent_rewrite_failed`；客户端拒绝 URL/scheme 变化 → `agent_rewrite_unsupported` |
+| `unsupported` | 未启用 agent 的 HTTPS、动态地址无法覆盖、自定义传输 | 不注入 | — | 用例 `blocked`，报告 `unsupported` 单列 |
 
 - `url_override` 必须记录 `injection.kind="base_url" | "endpoint_url"`、`original`、`injected`、`path_mode`。配置值是 base URL 时注入 `http://<mock_host>:<port>/_dep/<route_key>`，由客户端追加原路径；是完整 endpoint URL 时注入 `http://<mock_host>:<port>/_dep/<route_key><original_path>`，保留原路径仅作证据。两种都靠路径前缀路由，**不依赖路径是否被网关改写**。
 - `discovery_override` 的 Host 可能带端口或被网关改写；只接受 manifest 中登记的 `host_routes`，不做模糊匹配。Host 无法保持 → `unsupported`。
 - `http_proxy` 只处理明文。收到 `CONNECT` 直接返回 405 并记 `tls_not_supported`；不建立 TLS 隧道。
+- `agent_rewrite` 只改写目标 URL，不构造响应；原始 method/headers/body/query 保持不变，原路径与 query 挂在 `/_dep/<route_key>` 之后，由 Mock 服务剥离前缀并按 `route_match=path_prefix` 命中。agent 不写会话，会话仍由执行链路通过 `/_admin/sessions` 建立。
 - 同一 SUT 内不同下游可以混用策略；策略由 C3 按配置可用性选择，C3.5 只执行，不在运行期改选。
 
 **v1 支持矩阵（承诺边界）**：
@@ -1560,16 +1573,42 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | 能力 | v1 状态 | 条件/说明 |
 |---|---|---|
 | `url_override`（专用配置） | **承诺** | 配置键只服务一个 dep：一个下游专属 base URL，或一个完整 endpoint URL |
-| `url_override`（共享 base URL） | **不支持** | 一个配置键服务多个 dep 时无法注入多个 `route_key`；应转 `http_proxy`，否则 `unsupported`（`mock_config_ambiguous`），不猜测 |
+| `url_override`（共享 base URL） | **条件支持（agent）** | 无 agent 时一个配置键服务多个 dep，无法注入多个 `route_key`，仍 `mock_config_ambiguous`；启用 `agent_rewrite` 后可按请求计算 dep，覆盖共享 base URL |
 | `discovery_override` | **条件支持** | 仅当测试环境提供可重定向的注册中心或静态服务列表；否则 `discovery_not_supported`，不计入 v1 承诺 |
 | `http_proxy`（显式代理） | **承诺** | 仅明文 HTTP；客户端必须遵循 `HTTP_PROXY` / `-Dhttp.proxyHost` 等显式代理配置 |
 | `http_proxy`（透明代理） | **条件支持** | 需要环境提供 iptables REDIRECT 与权限；框架只输出规则，不作为 v1 承诺 |
-| HTTPS | **不支持** | `tls_not_supported`，不降级、不 MITM |
-| 同 JVM 内 mock HTTP 客户端 bean | **不支持** | 绕过编解码/拦截器/降级链，测不到真实调用路径 |
-| 动态 URL / 自定义传输 | **不支持** | 除非可经明文代理覆盖；否则 `unsupported` |
+| `agent_rewrite` | **条件支持** | Java SUT、agent 可加载、客户端栈有激活的 adapter；只做 URL 改写，不做响应合成；适配器矩阵见本节 |
+| HTTPS | **条件支持（agent）** | 未启用 agent 时 `tls_not_supported`；`agent_rewrite` 激活时把 `https://` 改写为明文 `http://<mock>/_dep/...`，不建 TLS、不装 CA、不 MITM、不降级真实链路 |
+| 同 JVM 内 mock HTTP 客户端 bean | **不支持** | 绕过编解码/拦截器/降级链，测不到真实调用路径；`agent_rewrite` 只改 URL，不属于 bean mock |
+| 动态 URL / 自定义传输 | **不支持** | 目标地址无法静态确定时 dep 身份不成立；agent 改写不改变该边界。除非可经明文代理覆盖，否则 `unsupported` |
 | 请求匹配、调用序列、h2c、WebSocket、流式 | **不支持** | v1 明确边界 |
 
-**选择规则**：C3 按 `url_override`（专用配置）> `discovery_override`（仅环境支持时）> `http_proxy`（显式）> `unsupported` 选择；一个 dep 只选一种策略，运行期不自动降级、不改选。选不出即 `unsupported`，依赖用例 `blocked`。
+**选择规则**：C3 按 `url_override`（专用配置）> `discovery_override`（仅环境支持时）> `http_proxy`（显式）> `agent_rewrite`（agent 激活且适配器覆盖）> `unsupported` 选择；一个 dep 只选一种策略，运行期不自动降级、不改选。配置能覆盖的 dep 不因 agent 可用而改选；选不出即 `unsupported`，依赖用例 `blocked`。
+
+**v4.15：`agent_rewrite` 落地约束**：
+
+- **加载形态**：`-javaagent:astsight-agent.jar=admin=<mock admin endpoint>,token=<token>,sut_id=<id>`；`agent run` 通过 `JAVA_TOOL_OPTIONS` 自动加载，并使用 `token_env=ASTSIGHT_AGENT_TOKEN` 从环境变量取 token，避免 token 出现在命令行与 JVM 启动日志中。agent 版本、adapter 激活清单写入心跳，启动自检见 C3.5.3。
+- **路由表获取**：agent 通过 `GET /_admin/agent/routes`（Bearer token）读取 route table（dep_id / route_key / method / path_key / host / target）与 Mock 端点；不读计划文件、不写会话。
+- **运行时匹配**：归一化实际 URL 的 host 与 path，按 `host + METHOD + path_key` 命中；host 不唯一或缺失时，仅当全表 `(METHOD, path_key)` 唯一才命中；仍无法唯一确定且 host/服务名属于计划内下游时，改写为保留路径 `/_agent/unmatched`（reason=`unknown|ambiguous`），由 Mock 返回 502 并留证；计划外主机放行。已是 Mock 端点或路径以 `/_dep/`、`/_agent/` 开头的请求跳过，防循环与二次改写。
+- **零透传**：计划内下游未命中必须阻断，不放行真实调用；计划外主机的真实调用必须在报告中列出，不得静默。
+- **adapter 矩阵**（范围收敛为“主流阻塞客户端”，不追求全量 HTTP 出站）：
+
+| 状态 | adapter | 织入点 | 改写方式 |
+|---|---|---|---|
+| 已实现 | OkHttp 3/4/5 | `OkHttpClient#newCall(Request)` | 入口 ASM 注入，替换 `Request` 参数（`newBuilder().url(...)`），经反射桥操作 |
+| 已实现 | Feign（阻塞） | `SynchronousMethodHandler#targetRequest(RequestTemplate)` | `ARETURN` 前反射重建 `feign.Request`；默认 / OkHttp / Apache HC 传输都经过该入口 |
+| 已实现 | Spring `RestTemplate` | `RestTemplate#doExecute(URI, HttpMethod, ...)` | 替换 URI 参数，并用动态代理包 `RequestCallback` 写证据头；覆盖所有 `RequestFactory` |
+| 不建设 | 直接 Apache HC 4/5、JDK 11 `HttpClient`、`HttpURLConnection`、async-http-client、WebClient/Reactor、第三方 SDK | — | 计划期标 `unsupported`（`client_unsupported` / `client_unknown`），依赖用例 `blocked`，不做“看起来支持、实际透传”的降级 |
+
+  三个 adapter 可同时激活，用“目标已是 Mock 地址或带 `/_dep/` 前缀”做幂等判断。每个 adapter 声明版本范围与目标类，按类可加载性与 `MANIFEST.MF` 版本判断是否激活；adapter 独立类加载器，核心只传 JDK 类型。
+
+  P0 实测约束（三个 adapter 通用）：Spring Boot fat jar 由 `LaunchedURLClassLoader` 加载应用依赖，ByteBuddy 的 Advice/AgentBuilder 在解析方法签名时会从 agent 类加载器加载 `okhttp3.Request` / `feign.Request` 并抛 `NoClassDefFoundError`。因此 adapter 统一使用裸 ASM `ClassFileTransformer`：只按方法名和 JVM 描述符匹配，注入代码只引用 JDK 类型和 adapter 自己的 bridge 类；bridge 全程用反射读写应用侧对象（OkHttp 的 `Request.Builder`、Feign 的 `Request.create` 重载、RestTemplate 的 `RequestCallback` 代理）。
+
+- **失败关闭（adapter 级）**：`AgentRuntime.isPlanned` 区分“计划内未命中/歧义/未知”与计划外 host；计划内请求若 `rewrite` 返回未改写或 bridge 抛异常，adapter 必须抛 `AgentRewriteException` 让本次调用失败，绝不返回原始请求透传到真实下游。计划外主机原样放行并计数。
+- **HTTPS**：仅该 dep 选 `agent_rewrite` 时允许 `https://` 目标；改写后为 `http://`，不建立 TLS。客户端拒绝 scheme 变化、URL 不可改或改写后仍需 TLS 的，标 `agent_rewrite_unsupported`。
+- **证据**：仍只写 `mock_calls.jsonl`；`MockCall` 增加 `adapter`、`mode="agent_rewrite"`、`original_host`。未命中由 Mock 服务的 `/_agent/unmatched` 统一记录，不新增第二份 agent 日志。
+- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定；ByteBuddy 预留给 Dubbo）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（后续 Filter 接入，共用 core）。字节码目标 JDK 8，实测矩阵 JDK 8/11/17/21；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar 与 sha256 manifest），引擎按精确版本校验，运行期不下载；缺 jar 报 `agent_unavailable`。
+- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；Dubbo Filter 后续接入同一 core；WebClient / 裸 HC / JDK HttpClient / 第三方 SDK 明确不建设 adapter。
 
 **桩响应模型**：
 
@@ -1603,6 +1642,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 |---|---|
 | `call_id/session_id/case_id` | 调用身份 |
 | `route_key/dep_id/route_match` | 命中的路由与依据（`path_prefix` / `host_path` / `method_path`） |
+| `adapter/mode/original_host` | `agent_rewrite` 时记录客户端栈 adapter、`mode="agent_rewrite"` 与改写前主机；其他策略为空 |
 | `method/original_path/query_keys` | 请求行信息；query 只记 key，不记值 |
 | `request_headers` | 允许列表：`content-type`、`accept`、`user-agent`、`x-request-id`；`authorization`/`cookie`/`token` 等一律脱敏 |
 | `body_sha256/body_bytes` | 默认只记哈希与长度；`--capture-mock-bodies` 时对 JSON/text 且 ≤64 KB 的请求体留存，仍按配置脱敏 |
@@ -1610,11 +1650,15 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | `result` | `ok` / `unknown` / `ambiguous` / `unbound` / `branch_missing` / `late` |
 | `at` | 时间戳 |
 
+agent 侧的改写异常、adapter 缺失等未到达 Mock 服务的事件，不做第二条 `mock_calls.jsonl`；由 agent 心跳的 `http_errors` / `http_stack_unsupported` 计数、SUT 日志与失败子码共同留证，报告在 `MockAgent` 块中展示。
+
 证据汇总：报告读取 `mock_calls.jsonl`，按 `result` 与 `case_id` 聚合。`unknown` / `ambiguous` / `unbound` / `branch_missing` 为阻断类；`late`（含 TTL 过期）、损坏行、无法归因调用为告警并使报告 `degraded`。`--mock-evidence` 可显式指定路径；缺省从 `GET /_admin/server` 的 `history_path` 获取。报告同时读取 `GET /_admin/sessions?run_scope=...` 的会话快照：逐会话比较 `bindings[].dep_id` 与实际调用，零命中的绑定计入 `unused_binding_count` 并作为 `mock_not_used` blocker；会话接口不可达、未配置 admin、或证据中的 `session_id` 不在历史中时标 `sessions_reason`/`sessions_missing`、报告 `degraded`，不静默跳过。
 
-**P0 落地（当前代码）**：`MockPlan`（`contracts/mock_plan.py`）描述 `sut_id`、监听地址/端口、路由、分支与注入；`astsight/mock/plan.py` 负责加载/校验并在 `run --mock-plan` 时启动内嵌服务。计划校验覆盖：`dep_id` 唯一且以 `http:` 开头、方法白名单、路径归一化、HTTPS `tls_not_supported`、`route_key` 必须等于确定性计算值、注入 `dep_id` 必须存在且不重复、`url_override` 必须有 `property/original`、`unsupported` 必须有 `reason`；计划文件上限 4 MB、1000 条 route、每条 64 个分支、1000 条 injection。服务停止由 `finally` 保证。运行产物 `run_manifest.json` 记录实际端口、route/injection 与 token 指纹，`mock_injection.json` 只含注入清单；两者都不含 token。内嵌服务未产生调用时 `mock_calls.jsonl` 可能不存在，plan 模式将其视为“零调用”并继续用会话历史做 `mock_not_used` 校验。C3 自动识别调用点、把注入写入 SUT 启动配置仍由外部启动器完成。
+**P0 落地（当前代码）**：`MockPlan`（`contracts/mock_plan.py`）描述 `sut_id`、监听地址/端口、路由、分支与注入；`astsight/mock/plan.py` 负责加载/校验并在 `run --mock-plan` 时启动内嵌服务。计划校验覆盖：`dep_id` 唯一且以 `http:` 开头、方法白名单、路径归一化、HTTPS（未选 `agent_rewrite` 时 `tls_not_supported`；选 `agent_rewrite` 时允许 `https://` target，由 agent 改写为明文）、`route_key` 必须等于确定性计算值、注入 `dep_id` 必须存在且不重复、`url_override` 必须有 `property/original`、`unsupported` 必须有 `reason`；计划文件上限 4 MB、1000 条 route、每条 64 个分支、1000 条 injection。服务停止由 `finally` 保证。运行产物 `run_manifest.json` 记录实际端口、route/injection 与 token 指纹，`mock_injection.json` 只含注入清单；两者都不含 token。内嵌服务未产生调用时 `mock_calls.jsonl` 可能不存在，plan 模式将其视为“零调用”并继续用会话历史做 `mock_not_used` 校验。C3 自动识别调用点、把注入写入 SUT 启动配置仍由外部启动器完成。
 
-**P1 落地（当前代码，Python / Java / Go / Node）**：`astsight/profile/downstream.py` 从路由 handler 出发做有界静态扫描（不执行被测代码）。Python 走 AST，识别 `requests`/`httpx` 模块函数、`Session`/`Client` 实例、`.request(...)` 与 `urllib.request.urlopen`；支持字面量 URL、环境变量/配置键拼接、f-string、`str.format`、`urljoin` 和局部变量解析，并沿本地调用与 CodeGraph `callees` 传递（上限：40 符号、深度 3、200 调用点、2000 文件/单文件 1 MB/总 32 MB）。Java/Go/Node 走 `langscan.py` 的文本扫描：Java 覆盖 RestTemplate、WebClient、Java 11 HttpClient、OkHttp、Apache HttpClient，Go 覆盖 `net/http` 与 resty，Node 覆盖 `fetch`、axios（含 `axios.create` 实例）、got、`http(s).request`；URL 支持字面量、`+` 拼接、`fmt.Sprintf`/`String.format`、模板字符串、`process.env`、Go `os.Getenv`/`viper.GetString` 与 Spring `@Value("${...}")`（键规范化为环境变量形式，如 `PAY_BASE_URL`）。无法解析的调用点写 `downstream_unsupported`（`target_dynamic`/`target_unresolved`/`tls_not_supported`/`http_method_missing`），声明式客户端（Feign、生成式 SDK）、动态代理与注册中心地址不识别。非 Python 路由由 `langroutes.py` 补充（Spring 注解、Gin/Echo/Chi/Fiber/Gorilla、Express/Fastify/Koa/Hono、NestJS），与图谱/OpenAPI 结果按 `(method, path)` 去重后合并。`dep_id` 仍统一走 `build_dep_id_plan`：目标可静态证明时用 `host:`，只有路径可证明时进入 `call:` 并标 `inferred`；`svc:` 需要服务发现证据、`cfg:` 需要配置值解析，当前不猜。`python -m astsight mock plan` 产出 `MockPlan` 草案：分支留空；有配置键但原值未知的注入标 `unsupported` + `injection_original_unknown`（不伪造 `original`），有确定目标的用 `http_proxy`。自动解析配置值、补语义分支和把注入写进 SUT 启动环境仍属后续工作。
+**P1 落地（当前代码，Python / Java / Go / Node）**：`astsight/profile/downstream.py` 从路由 handler 出发做有界静态扫描（不执行被测代码）。Python 走 AST，识别 `requests`/`httpx` 模块函数、`Session`/`Client` 实例、`.request(...)` 与 `urllib.request.urlopen`；支持字面量 URL、环境变量/配置键拼接、f-string、`str.format`、`urljoin` 和局部变量解析，并沿本地调用与 CodeGraph `callees` 传递（上限：40 符号、深度 3、200 调用点、2000 文件/单文件 1 MB/总 32 MB）。Java/Go/Node 走 `langscan.py` 的文本扫描：Java 覆盖 RestTemplate、WebClient、Java 11 HttpClient、OkHttp、Apache HttpClient 与 Feign 接口调用，Go 覆盖 `net/http` 与 resty，Node 覆盖 `fetch`、axios（含 `axios.create` 实例）、got、`http(s).request`；URL 支持字面量、`+` 拼接、`fmt.Sprintf`/`String.format`、模板字符串、`process.env`、Go `os.Getenv`/`viper.GetString` 与 Spring `@Value("${...}")`（键规范化为环境变量形式，如 `PAY_BASE_URL`）。无法解析的调用点写 `downstream_unsupported`（`target_dynamic`/`target_unresolved`/`tls_not_supported`/`http_method_missing`），生成式 SDK、动态代理与注册中心地址不识别。非 Python 路由由 `langroutes.py` 补充（Spring 注解、Gin/Echo/Chi/Fiber/Gorilla、Express/Fastify/Koa/Hono、NestJS），与图谱/OpenAPI 结果按 `(method, path)` 去重后合并。`dep_id` 仍统一走 `build_dep_id_plan`：目标可静态证明时用 `host:`，只有路径可证明时进入 `call:` 并标 `inferred`；`svc:` 需要服务发现证据、`cfg:` 需要配置值解析，当前不猜。`python -m astsight mock plan` 产出 `MockPlan` 草案：分支留空；有配置键但原值未知的注入标 `unsupported` + `injection_original_unknown`（不伪造 `original`），有确定目标的用 `http_proxy`。自动解析配置值、补语义分支和把注入写进 SUT 启动环境仍属后续工作。
+
+**P2 落地（v4.15/v4.16，已实现）**：新增 `agent_rewrite` 注入策略与 Java agent：`agent-core` 负责 agent 外壳、心跳、admin route table 拉取、URL 匹配与改写、adapter 注册表与失败关闭判定；`agent-http` 落地 OkHttp、Feign（`SynchronousMethodHandler#targetRequest`）与 RestTemplate（`doExecute`）三个 adapter，均用 ASM + 反射 bridge；HC4/HC5、JDK 11 HttpClient、WebClient、async-http-client 经 v4.16 范围收敛后不建设；`agent-dubbo` 后续接同一 core。计划/契约新增 `MockStrategy.AGENT_REWRITE`、`agent_rewrite` injection、`allow_https`；`agent run` 通过 `JAVA_TOOL_OPTIONS` 注入并以 `token_env` 读取 token；agent 以独立纯 Python wheel `astsight-java-agent` 分发并校验 sha256；证据沿用 `mock_calls.jsonl`，补 `adapter/mode/original_host`。验收以真实 Spring Boot 3.5.6 fat jar 样例（三客户端）与普通 JVM OkHttp 样例为准。
 
 **失败子码（在 C3.5.3/C3.5.4 基础上扩展）**：
 
@@ -1628,28 +1672,34 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | `mock_binding_duplicate` | 同一 case 对同一 `dep_id` 绑定多次 | 导入期阻断 |
 | `mock_binding_ambiguous` | 同一 dep 的不同调用点需要不同分支，HTTP 边界无法区分 | 阻断该 case，不拆 dep_id |
 | `mock_config_not_overridable` | 配置键不存在/不可写/值非 http | 下游 `unsupported`，依赖用例 `blocked` |
-| `mock_config_ambiguous` | 一个配置键被多个 dep 共享，无法注入多个 `route_key` | 转 `http_proxy`；不可用则 `unsupported` |
+| `mock_config_ambiguous` | 一个配置键被多个 dep 共享，无法注入多个 `route_key` | 转 `http_proxy` / `agent_rewrite`；均不可用则 `unsupported` |
 | `discovery_not_supported` | 环境没有可重定向的注册中心/静态服务列表 | 下游 `unsupported`，不计入 v1 承诺 |
-| `mock_proxy_unsupported` | 客户端绕过代理或代理链路不可用 | 下游 `unsupported` |
-| `tls_not_supported` | 目标为 HTTPS、`CONNECT` 或需要 TLS | 下游 `unsupported`，依赖用例 `blocked` |
+| `mock_proxy_unsupported` | 客户端绕过代理或代理链路不可用 | 下游 `unsupported`；可转 `agent_rewrite` |
+| `tls_not_supported` | 目标为 HTTPS、`CONNECT` 或需要 TLS，且未启用 agent 改写 | 下游 `unsupported`，依赖用例 `blocked`；启用 `agent_rewrite` 时不报此码 |
+| `agent_unavailable` | agent jar 缺失、版本/sha256 不符、启动参数缺失 | 回退配置注入；无可用策略则整批阻断 |
+| `agent_not_active` | 心跳缺失/残留/过期，或 `pid/jvm_start_time` 与本 run 不符 | 整批阻断，绝不允许继续跑 |
+| `agent_adapter_missing` | SUT 使用的客户端栈没有激活的 adapter | 画像已声明的栈缺失 → 整批阻断；单次未覆盖 → 该 dep `agent_rewrite_unsupported`，用例 `blocked` |
+| `agent_rewrite_failed` | 改写过程中抛异常 | 阻断该用例，归 `mock_error`，保留原始异常类型 |
+| `agent_rewrite_unsupported` | 客户端拒绝 URL/scheme 变化、改写点不可控或改写后仍需 TLS | 该 dep `unsupported`，依赖用例 `blocked` |
 | `mock_response_invalid` | 桩响应头/体/长度非法或超限 | 阻断，归 `mock_error` |
 | `mock_sequence_unsupported` | 需要按调用次数切换分支 | 阻断该 case |
 | `mock_not_used` | 绑定 route 命中 0 次 | 用例失败（防假绿） |
 | `mock_late_call` | 会话关闭后到达 | 报告告警；严格模式阻断 |
 
-**数据模型**：`MockServer` 扩展为 `transport(http|grpc)`、`mode(embedded|gripmock)`、`admin_endpoint`、`route_modes[](path_prefix/host_group/method_path)`、`route_count`、`routes[]`、`history_path`、`health`、`token_fingerprint`；新增 `MockRoute(route_key, dep_id, method, path_key, host, target, strategy, source, route_match)` 与 `MockCall`（字段同上表）；`ports[]` 增加 `component="http_mock"`。
+**数据模型**：`MockServer` 扩展为 `transport(http|grpc)`、`mode(embedded|gripmock)`、`admin_endpoint`、`route_modes[](path_prefix/host_group/method_path)`、`route_count`、`routes[]`、`history_path`、`health`、`token_fingerprint`；新增 `MockRoute(route_key, dep_id, method, path_key, host, target, strategy, source, route_match)` 与 `MockCall`（字段同上表，含 `adapter/mode/original_host`）；`MockAgent` 增加 `http_adapters[]`（id/version/active）、`http_hooked`、`http_rewrites`、`http_errors`、`http_stack_unsupported[]`；`ports[]` 增加 `component="http_mock"`。
 
 **5.5 归属**：HTTP Mock 与 gripmock 一样按 `sut_id` 一实例；`namespace=sut_id`；admin token 每实例独立；端口与 owner 写 `run_manifest.json`；会话请求的 namespace 必须等于当前 `sut_id`，否则 `mock_identity_mismatch`。
 
 **门禁**：
 
-- 画像期：每个 `type=http` 下游必须有 `mock.strategy`、唯一 `dep_id`、唯一 `route_key` 与 `injection` 证据；`url_override` 必须给出只服务该 dep 的 `mock.property`（共享键 → `mock_config_ambiguous`），`discovery_override`/`http_proxy` 必须给出等价的发现或代理覆盖证据；`discovery_override`/透明代理必须标注为条件能力，环境不满足时 `discovery_not_supported`；`unsupported` 必须显式声明且依赖用例 `blocked`；`https://` 必须标 `tls_not_supported`；`dep_collision` / `mock_route_conflict` 直接阻断。
-- 执行期：健康检查通过；每个绑定 route 命中 ≥1 次；未知/歧义路由、Mock 错误响应、晚到调用按上表处理，不得当作通过；任何真实出站都不得透传。
-- 报告：`mock_sessions` 增加 HTTP route 命中、未命中、`unsupported` 与 `tls_not_supported` 明细；只断言状态码且无 Mock 命中证据的用例标 `weak_oracle`。
+- 画像期：每个 `type=http` 下游必须有 `mock.strategy`、唯一 `dep_id`、唯一 `route_key` 与 `injection` 证据；`url_override` 必须给出只服务该 dep 的 `mock.property`（共享键 → `mock_config_ambiguous`），`discovery_override`/`http_proxy` 必须给出等价的发现或代理覆盖证据；`discovery_override`/透明代理必须标注为条件能力，环境不满足时 `discovery_not_supported`；`unsupported` 必须显式声明且依赖用例 `blocked`；`https://` 在未选 `agent_rewrite` 时必须标 `tls_not_supported`；选择 `agent_rewrite` 时必须声明 agent 加载方式、目标客户端栈与兼容矩阵，画像声明的栈没有 adapter → `agent_adapter_missing`；`dep_collision` / `mock_route_conflict` 直接阻断。
+- 执行期：健康检查通过；agent 心跳活跃且声明的客户端栈均有激活 adapter；每个绑定 route 命中 ≥1 次；计划内下游未命中必须阻断且不得透传，计划外主机的真实调用必须在报告中列出；未知/歧义路由、Mock 错误响应、晚到调用按上表处理，不得当作通过。
+- 报告：`mock_sessions` 增加 HTTP route 命中、未命中、`agent_rewrite`、`agent_adapter_missing`、`agent_rewrite_unsupported`、`unsupported` 与 `tls_not_supported` 明细；只断言状态码且无 Mock 命中证据的用例标 `weak_oracle`。
 
 **边界**：
 
-- 不做请求匹配、不做调用序列、不做 HTTPS/MITM、不做 h2c/WebSocket/流式、不做动态 URL 重写。
+- 不做请求匹配、不做调用序列、不做 MITM、不做 h2c/WebSocket/流式；未启用 agent 时不做 HTTPS；动态 URL（目标地址无法静态确定）仍不支持；`agent_rewrite` 只改写已识别 dep 的目标 URL，不做任意 URL 重写。
+- `agent_rewrite` 仍发生在 HTTP 边界：不 mock 客户端 bean，不绕过编解码、重试、降级与拦截器链；agent 与 Dubbo Filter 共用 `astsight-agent` 外壳，但拦截适配器分离。
 - 内嵌服务崩溃会终止引擎进程；因此启动前必须健康检查，运行期异常写 `mock_server_unavailable`，不假装用例通过。
 - 透明代理依赖环境提供 iptables REDIRECT 与相应权限；框架只输出规则/说明，不默认要求 root。拿不到就 `unsupported`。
 - 同一下游端点的多个调用点共享分支；需要按调用点区分时标 `mock_binding_ambiguous`，不通过拆 `dep_id` 制造重复身份。
@@ -2450,10 +2500,10 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | TestFile     | C6     | C7/人     | 保护段、transport、溯源头                                                  |
 | ConflictSet  | C7.1   | C7.2     | resources, group, parallel_group                              |
 | MockSemantic | C3.5.1 | C4       | http/dubbo 下游：dep_id（HTTP 为 `http:{downstream_key} {METHOD} {path}`，见 C3.5.5）, semantic_branches[], mock.strategy/property, 用例绑定；grpc 下游 v4.3 为 `mock=unsupported`，v4.4 起为 `mock.strategy="grpc_server"`（见 C3.5.4） |
-| MockAgent    | C3.5.3 | C6/C7    | mode(javaagent/classpath), version, active, sut_id, namespace, admin_endpoint, token_fingerprint, heartbeat_path, pid, jvm_start_time, filter_heartbeat, filter_instantiated, dubbo_version, supported_matrix, serialization_verified |
-| MockServer   | C3.5.4/C3.5.5 | C6/C7 | transport(http/grpc), mode(embedded/gripmock), version, sut_id, namespace, endpoint(host:port), admin_endpoint, token_fingerprint, route_modes[](path_prefix/host_group/method_path), route_count, routes[], health, history_path, started_at, pid/container_id；gRPC 另有 binary{version,sha256,platform,source}, descriptor_sha256, stub_count, serialization_verified=wire_roundtrip；HTTP 另有 injection 证据与 `tls_not_supported` 清单 |
-| MockRoute    | C3.5.5 | C6/C7    | route_key, dep_id, method, path_key, host, target, strategy, route_match, source |
-| MockCall     | C3.5.5 | C7/报告   | call_id, session_id, case_id, route_key, dep_id, route_match, method, original_path, query_keys, request_headers(脱敏), body_sha256, body_bytes, branch, response_status, delay_ms, drop_mode, result(ok/unknown/ambiguous/unbound/branch_missing/late), at |
+| MockAgent    | C3.5.3 | C6/C7    | mode(javaagent/classpath), version, active, sut_id, namespace, admin_endpoint, token_fingerprint, heartbeat_path, pid, jvm_start_time, filter_heartbeat, filter_instantiated, dubbo_version, supported_matrix, serialization_verified；v4.15 增加 http_adapters[](id/version/active), http_hooked, http_rewrites, http_errors, http_stack_unsupported[] |
+| MockServer   | C3.5.4/C3.5.5 | C6/C7 | transport(http/grpc), mode(embedded/gripmock), version, sut_id, namespace, endpoint(host:port), admin_endpoint, token_fingerprint, route_modes[](path_prefix/host_group/method_path), route_count, routes[], health, history_path, started_at, pid/container_id；gRPC 另有 binary{version,sha256,platform,source}, descriptor_sha256, stub_count, serialization_verified=wire_roundtrip；HTTP 另有 injection 证据、`tls_not_supported` 清单与 agent 改写证据 |
+| MockRoute    | C3.5.5 | C6/C7    | route_key, dep_id, method, path_key, host, target, strategy(url_override/discovery_override/http_proxy/agent_rewrite/unsupported), route_match, source |
+| MockCall     | C3.5.5 | C7/报告   | call_id, session_id, case_id, route_key, dep_id, route_match, adapter, mode(agent_rewrite/…), original_host, method, original_path, query_keys, request_headers(脱敏), body_sha256, body_bytes, branch, response_status, delay_ms, drop_mode, result(ok/unknown/ambiguous/unbound/branch_missing/late), at |
 | MockSession  | C6     | C7/报告   | session_id, sut_id, namespace, case_id, bindings[{dep_id,branch,binding_source,mock_mode}], status(open/closed/expired), opened_at, closed_at, ttl_ms, hits[], late_calls[], reason |
 | SutInstance  | 5.5    | C3.5/C5/C7/报告 | sut_id, run_id, namespace, ports[{component,endpoint,owner}], heartbeat_path, admin_token_fingerprint, locks{codegraph,case_store}, isolation{port_allocation,namespace,db_scope,degraded} |
 | Attempt      | C7.3   | C7.4     | n, status, reason, action, action_target(user/framework), error_envelope, transport_fallback |
@@ -2597,7 +2647,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | C3.5.3 | agent 自检通过（版本匹配 + 心跳文件 `pid/jvm_start_time` 匹配且新鲜 + `filter_instantiated>0`）；`No provider available` 报 `env_error` 不兜底；`serialization_verified=false` 可见；绑定 dep 命中 0 次报 `mock_not_used` | 启动自检 + 执行证据 |
 | 5.5 多 SUT 隔离 | 并发 ≥2 个 `sut_id` 时：端口全部原子分配并写入 manifest；`namespace=sut_id`；心跳 `sut_id/namespace/admin_endpoint/pid/jvm_start_time` 匹配；DB fixture 前缀含 `run_scope`；用例库写操作持锁 | 启动自检 + run manifest 审计 |
 | C3.5.4 | 随包二进制版本/sha256 校验通过；平台在 `linux/amd64`、`linux/arm64` 矩阵内；target 改写显式；每个绑定桩命中 ≥1 次且有 history 证据；未匹配不得当通过 | wheel 审计 + 启动自检 + history |
-| C3.5.5 | 每个 `type=http` 下游有 `mock.strategy`、唯一 `dep_id`、唯一 `route_key` 与注入证据；绑定 route 命中 ≥1 次且有 `mock_calls.jsonl` 证据；未知/歧义路由、Mock 错误响应、晚到调用不得当通过；HTTPS 下游必须 `tls_not_supported` 且用例 `blocked`；`dep_collision`/`mock_route_conflict` 画像期阻断 | 画像审计 + 启动自检 + 调用证据 |
+| C3.5.5 | 每个 `type=http` 下游有 `mock.strategy`、唯一 `dep_id`、唯一 `route_key` 与注入证据；绑定 route 命中 ≥1 次且有 `mock_calls.jsonl` 证据；未知/歧义路由、Mock 错误响应、晚到调用不得当通过；HTTPS 未选 `agent_rewrite` 时必须 `tls_not_supported` 且用例 `blocked`；选 `agent_rewrite` 时 agent 自检活跃、画像声明的客户端栈均有 adapter、计划内未命中不透传；`dep_collision`/`mock_route_conflict` 画像期阻断 | 画像审计 + 启动自检 + 调用证据 |
 | C5     | 造数成功率 ≥99%，闭包完整率 100%                 | 执行验证           |
 | C4     | 仅 approved 用例进入 C6；每 transport 原生状态断言非空率 100%；两级 `rule_refs` 有效；`mock_bindings` 可解析且分支存在；`mock="unsupported"` 下游不被绑定；无 `change_without_oracle` 静默；规则/需求/契约漂移可见；`coverage_role` 与画像一致；alias 至少一条成功冒烟且不计入业务覆盖；`transport_alias_skipped` 显式出报 | case store / proposal 审计 |
 | C6     | 可运行率 ≥95%；三 transport fixture smoke 通过；调用 SUT 的生成物不含 `Attach`/`javaagent`；Dubbo 下游 Mock 的启动 fixture 显式引用 agent 并校验心跳 | pytest 收集+执行   |
@@ -2640,13 +2690,13 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | 并发 run 共用 DB 造数键 / 用例库并发批准 | 高 | 5.5：fixture 前缀含 `run_scope`，teardown 只清本前缀；固定种子标 `shared=true` 并串行；`cases import/approve` 持 `flock`，超时报 `case_store_locked` |
 | Mock 语义失真导致假绿          | 高  | C3.5.1 语义模型：契约+业务知识+用例意图三层定语义，分支覆盖率门禁 100%     |
 | 下游语义信息缺失（无文档无源码）       | 中  | C3.5.2 三档渐进：档1文档先行跑通，档2补源码跑准；缺口显式标记不假装完整       |
-| 下游 HTTP 地址在运行时拼接（SpEL、配置中心、服务发现动态注册） | 高 | 画像标 `target=inferred`；明文 HTTP 可走 `http_proxy` 兜底，HTTPS 或代理不可用则标 `unsupported`；不猜地址，不允许静默透传 |
+| 下游 HTTP 地址在运行时拼接（SpEL、配置中心、服务发现动态注册） | 高 | 画像标 `target=inferred`；明文 HTTP 可走 `http_proxy` 兜底；HTTPS 且配置/代理不可用时，若客户端栈有 adapter 可尝试 `agent_rewrite`，否则标 `unsupported`；不猜地址，不允许静默透传 |
 | 不同下游共用同一 `METHOD + path`（如都暴露 `GET /api/v1/status`） | 高 | C3.5.5：`dep_id` 含 `downstream_key`（服务名/配置键/主机），路径占位符归一；同端点多调用点合并；归一后仍撞则 `dep_collision` 阻断，不产生重复 id |
 | `route_key` 路由未知或歧义 | 高 | 路径前缀优先、`Host` 次之、唯一 `METHOD+path` 兜底；无命中 `mock_route_unknown`、多命中 `mock_route_ambiguous`，直接阻断，绝不透传或默认 200 |
-| HTTPS 下游暂不支持 | 高 | 统一 `mock="unsupported"` / `tls_not_supported`，依赖用例 `blocked`，不降级为 http、不装测试 CA、不做 MITM；报告单列 |
+| HTTPS 下游（未启用 agent 时）不支持 | 高 | 未选 `agent_rewrite` 时统一 `mock="unsupported"` / `tls_not_supported`，依赖用例 `blocked`，不装测试 CA、不做 MITM；选 `agent_rewrite` 时在连接前改写为明文 Mock 地址，不建 TLS；报告单列两种状态 |
 | 内嵌 HTTP Mock 进程异常 | 中 | 启动前健康检查，运行期异常写 `mock_server_unavailable` 并阻断；不把异常响应当作用例通过 |
-| 硬编码地址或自定义拦截器绕过配置覆盖 | 中 | 画像阶段检出并标 `mock.strategy="http_proxy"`（仅明文）；无法覆盖或目标为 HTTPS 时显式 `unsupported`（`tls_not_supported`）并降级 |
-| 一个 base URL 配置键服务多个下游 | 高 | `url_override` 无法为同一键注入多个 `route_key`：标 `mock_config_ambiguous`，转 `http_proxy`；代理也不可用则 `unsupported`，依赖用例 `blocked`，不猜测路由 |
+| 硬编码地址或自定义拦截器绕过配置覆盖 | 中 | 画像阶段检出并标 `mock.strategy="http_proxy"`（仅明文）；无法覆盖或目标为 HTTPS 时，有 agent adapter 则转 `agent_rewrite`，否则显式 `unsupported` 并降级 |
+| 一个 base URL 配置键服务多个下游 | 高 | `url_override` 无法为同一键注入多个 `route_key`：标 `mock_config_ambiguous`，转 `http_proxy`；代理也不可用时，有 agent adapter 则转 `agent_rewrite`，否则 `unsupported`，依赖用例 `blocked`，不猜测路由 |
 | 客户端 `fallback`/Sentinel 吞异常造成假绿 | 高 | 用例同时断言“Mock 命中次数 + fallback 未触发”；只断言状态码的标 `weak_oracle` |
 | 多个调用点共用同一 `dep_id` 但语义不同 | 中 | 合并为同一 dep，HTTP 边界无法区分调用点；标 `mock_binding_ambiguous` 并阻断该 case，不按调用点拆 `dep_id`；审核文件必须展示 |
 | 客户端忽略 `HTTP_PROXY` 或代理链路不可用 | 中 | 画像阶段做兼容性 spike；不可用即 `mock_proxy_unsupported`，下游 `unsupported`，不假装已 Mock |
@@ -2687,11 +2737,12 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M2.11 | **多 SUT 并发隔离（5.5）**：`--sut-id` 与 `namespace=sut_id`、端口 `bind(:0)` 原子分配 + `run_manifest`、心跳身份字段、每实例 token、DB `run_scope` 前缀、用例库 `flock`、报告 `instance` 块 | 同环境并发 ≥2 个 SUT 时无端口/命名空间冲突；心跳与 manifest 身份一致；DB 清理只影响本 run；并发 approve 不会丢更新 |
 | M2.12 | **gRPC 下游 Mock（C3.5.4）**：gripmock 随包二进制（平台专用 wheel，`linux/amd64` + `linux/arm64`）、每命名空间进程、stub API、history 取证、target 改写、已知缺陷规避、失败子码 | 安装 `astsight[grpc-mock]` 即用，不要求用户单独下载；版本/sha256 校验通过；矩阵外显式 `mock_binary_missing`；绑定桩命中 ≥1 次 |
 | M2.13 | **HTTP 下游 Mock（C3.5.5，仅明文）**：内嵌 FastAPI/uvicorn、每 `sut_id` 实例、`bind(:0)` + manifest、`dep_id` 唯一性算法、`route_key`、v1 承诺的下游专属 `url_override` 与显式 `http_proxy`（`discovery_override`/透明代理条件支持）、会话分支、`mock_calls.jsonl` 证据、HTTPS `tls_not_supported` | 两个服务同路径不撞 `dep_id`；同端点多调用点只生成一个 dep；未知/歧义路由阻断；共享 base URL 报 `mock_config_ambiguous`；绑定 route 命中 ≥1；HTTPS 显式 `unsupported` 且用例 `blocked` |
+| M2.14 | **HTTP agent 改写（C3.5.5 v4.15）**：`agent_rewrite` 策略、`astsight-agent` 共用外壳、OkHttp/HC4/Feign/RestTemplate 等 adapter、URL 改写与零透传、HTTPS 条件放开、心跳与能力矩阵、独立 wheel 分发 | P0 真实 Spring Boot 样例跑通；配置能覆盖的 dep 仍走配置；计划内未命中不透传；HTTPS 仅在 agent 时可用；adapter 缺失/改写失败显式出报；未实测栈不写入矩阵 |
 | M3 | C5 数据准备（外键闭包 + SQL 造数） | 订单场景 3 表闭包造数成功 |
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full`/`replay` + C2 召回率基准 | 20 个真实分支人工标注；replay 可重放 |
 
-> 本说明书为设计基线 **v4.7**；v4.7 明确 A4 由规则驱动（不再走“语义分析 → 用例草案”），C5 拆为 C5a 数据目录 / C5b 逐用例计划，且 C5 的 LLM 只提供语义候选、不产出 SQL；**v4.6 取消 Feign 特殊支持**（Feign 按普通 HTTP 客户端处理，覆盖不了即 `unsupported`，见文首 v4.6 决策）；**v4.6.1 收紧 HTTP Mock 范围**（仅明文 HTTP，HTTPS 标 `tls_not_supported`；`dep_id` 唯一性规则见 C3.5.5）；**v4.4 的 gRPC Mock 决策已记录（C3.5.4），但尚未实现**；v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。落地时在 [`决策记录.md`](决策记录.md) §8 的版本变更记录中升版。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书为设计基线 **v4.15**；v4.7 明确 A4 由规则驱动（不再走“语义分析 → 用例草案”），C5 拆为 C5a 数据目录 / C5b 逐用例计划，且 C5 的 LLM 只提供语义候选、不产出 SQL；**v4.6 取消 Feign 特殊支持**（Feign 按普通 HTTP 客户端处理，覆盖不了即 `unsupported`，见文首 v4.6 决策）；**v4.6.1 收紧 HTTP Mock 范围**（仅明文 HTTP，HTTPS 标 `tls_not_supported`；`dep_id` 唯一性规则见 C3.5.5）；**v4.15 新增 `agent_rewrite`**（配置注入优先、agent 兜底；HTTPS 仅在 agent 时放开；只做 URL 改写，见 C3.5.5 与 [`决策记录.md`](决策记录.md) §17）；**v4.4 的 gRPC Mock 决策已记录（C3.5.4），但尚未实现**；v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。落地时在 [`决策记录.md`](决策记录.md) §8 的版本变更记录中升版。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
 > Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo 走 Java sidecar

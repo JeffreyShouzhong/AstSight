@@ -106,6 +106,44 @@ class MockCall(BaseModel):
     drop_mode: str | None = Field(default=None, description="reset / timeout")
     result: MockCallResult = MockCallResult.OK
     error: str | None = None
+    adapter: str | None = Field(
+        default=None, description="agent 改写时命中的客户端适配器"
+    )
+    mode: str | None = Field(
+        default=None, description="agent_rewrite；配置注入路径为空"
+    )
+    original_host: str | None = Field(
+        default=None, description="agent 改写前的目标 Host（含端口）"
+    )
+    at: str
+
+
+class MockHttpAdapter(BaseModel):
+    """Agent 心跳中的一个 HTTP 适配器。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    version: str | None = None
+    active: bool = False
+
+
+class MockAgent(BaseModel):
+    """`POST /_admin/agent/heartbeat` 的持久化形态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sut_id: str
+    agent_version: str
+    pid: int = Field(ge=0)
+    jvm_start_time_ms: int = Field(ge=0)
+    http_adapters: list[MockHttpAdapter] = Field(default_factory=list)
+    http_hooked: int = Field(default=0, ge=0)
+    http_rewrites: int = Field(default=0, ge=0)
+    http_errors: int = Field(default=0, ge=0)
+    http_stack_unsupported: list[str] = Field(default_factory=list)
+    http_passthrough: int = Field(default=0, ge=0)
+    passthrough_hosts: dict[str, int] = Field(default_factory=dict)
     at: str
 
 

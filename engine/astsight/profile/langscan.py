@@ -1347,6 +1347,7 @@ def scan_language_file(
                 service_name=hit.service_name,
                 client=hit.client,
                 response_type=hit.response_type,
+                language=language,
             )
         )
     return result

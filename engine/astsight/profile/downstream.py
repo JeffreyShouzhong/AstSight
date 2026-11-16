@@ -1504,6 +1504,20 @@ class DownstreamScanner:
                         if site is not None and site.config_key
                     }
                 ),
+                "clients": sorted(
+                    {
+                        str(site.client)
+                        for site in details
+                        if site is not None and site.client
+                    }
+                ),
+                "languages": sorted(
+                    {
+                        str(site.language)
+                        for site in details
+                        if site is not None and site.language
+                    }
+                ),
             }
             if dep.evidence == "svc":
                 # dep_id 里的服务名被归一化为小写；服务发现按注册名精确匹配，

@@ -20,6 +20,10 @@ data_plan.json
 # CodeGraph generated index
 .codegraph/
 
+# Java build output
+java/**/target/
+java/samples/build/
+
 # Editor / OS
 .DS_Store
 Thumbs.db

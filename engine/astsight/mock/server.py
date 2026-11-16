@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 import httpx
 import uvicorn
@@ -26,6 +27,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from contracts import (
+    MockAgent,
     MockCall,
     MockCallResult,
     MockDrainResult,
@@ -224,6 +226,7 @@ class MockHttpServer:
         self._semaphore: asyncio.Semaphore | None = None
         self._inflight = 0
         self._inflight_lock = threading.Lock()
+        self._agent: MockAgent | None = None
 
     # ------------------------------------------------------------- 路由注册
 
@@ -414,6 +417,51 @@ class MockHttpServer:
         async def _server_info():
             return self.server_model().model_dump(mode="json")
 
+        @app.get("/_admin/agent/routes")
+        async def _agent_routes():
+            """Agent 启动时拉取的只读路由表；不包含分支响应体。"""
+            return {
+                "schema_version": 1,
+                "sut_id": self.sut_id,
+                "namespace": self.namespace,
+                "endpoint": self.endpoint,
+                "routes": [
+                    {
+                        "route_key": entry.route.route_key,
+                        "dep_id": entry.route.dep_id,
+                        "method": entry.route.method,
+                        "path_key": entry.route.path_key,
+                        "host": entry.route.host,
+                        "target": entry.route.target,
+                        "strategy": entry.route.strategy.value,
+                    }
+                    for entry in self.route_table.entries
+                ],
+            }
+
+        @app.post("/_admin/agent/heartbeat")
+        async def _agent_heartbeat(request: Request):
+            try:
+                payload = await request.json()
+            except ValueError:
+                return _error_response(400, "invalid_json")
+            if not isinstance(payload, dict):
+                return _error_response(400, "invalid_json")
+            if payload.get("sut_id") != self.sut_id:
+                return _error_response(400, "agent_sut_mismatch")
+            try:
+                agent = MockAgent.model_validate({**payload, "at": _now_iso()})
+            except ValueError as exc:
+                return _error_response(400, "agent_heartbeat_invalid", dep_id=str(exc)[:300])
+            self._agent = agent
+            return agent.model_dump(mode="json")
+
+        @app.get("/_admin/agent/heartbeat")
+        async def _get_agent_heartbeat():
+            if self._agent is None:
+                return _error_response(404, "agent_not_active")
+            return self._agent.model_dump(mode="json")
+
         @app.get("/_admin/sessions")
         async def _list_sessions(request: Request):
             run_scope = request.query_params.get("run_scope") or None
@@ -491,6 +539,33 @@ class MockHttpServer:
             except SessionError as exc:
                 return _error_response(exc.status, exc.code, dep_id=exc.detail or None)
             return session.model_dump()
+
+        @app.api_route("/_agent/unmatched", methods=_DATA_METHODS)
+        async def _agent_unmatched(request: Request):
+            """计划内下游未命中路由：记录证据并返回 502，绝不放行真实下游。"""
+            reason = request.query_params.get("reason", "unknown")
+            error = (
+                "mock_route_ambiguous"
+                if reason == "ambiguous"
+                else "mock_route_unknown"
+            )
+            result = (
+                MockCallResult.AMBIGUOUS
+                if reason == "ambiguous"
+                else MockCallResult.UNKNOWN
+            )
+            body = await request.body()
+            self._record(
+                request,
+                None,
+                self.sessions.current(),
+                None,
+                502,
+                body=body,
+                result=result,
+                error=error,
+            )
+            return _error_response(502, error)
 
         @app.api_route("/_dep/{rest:path}", methods=_DATA_METHODS)
         async def _direct(rest: str, request: Request):
@@ -763,6 +838,25 @@ class MockHttpServer:
             if self.capture_bodies
             else None
         )
+        original_path = request.headers.get("x-astsight-original-path")
+        raw_original_query = request.headers.get("x-astsight-original-query")
+        mode = request.headers.get("x-astsight-mode")
+        original_host = request.headers.get("x-astsight-original-host")
+        if not original_path and request.url.path.startswith("/_dep/"):
+            # agent_rewrite 把原始路径拼在 /_dep/<route_key> 之后；客户端
+            # 未带证据头时从这里还原，避免把 Mock 前缀记成下游路径。
+            tail = request.url.path[len("/_dep/"):].partition("/")[2]
+            original_path = f"/{tail}" if tail else "/"
+            if mode is None:
+                mode = "agent_rewrite"
+        if not original_host and entry is not None:
+            original_host = entry.route.host
+        if raw_original_query is None:
+            query_keys = sorted(set(request.query_params.keys()))
+        else:
+            query_keys = sorted(
+                {key for key, _ in parse_qsl(raw_original_query, keep_blank_values=True)}
+            )
         call = MockCall(
             call_id=secrets.token_hex(16),
             session_id=session.session_id if session else None,
@@ -771,8 +865,8 @@ class MockHttpServer:
             dep_id=entry.route.dep_id if entry else None,
             route_match=resolution.route_match if resolution else None,
             method=request.method.upper(),
-            original_path=request.url.path,
-            query_keys=sorted(set(request.query_params.keys())),
+            original_path=original_path or request.url.path,
+            query_keys=query_keys,
             request_headers=_safe_headers(request.headers),
             body_sha256=hashlib.sha256(body).hexdigest(),
             body_bytes=len(body),
@@ -783,6 +877,9 @@ class MockHttpServer:
             drop_mode=drop_mode,
             result=result,
             error=error,
+            adapter=request.headers.get("x-astsight-adapter"),
+            mode=mode,
+            original_host=original_host,
             at=_now_iso(),
         )
         self.evidence.write(call)

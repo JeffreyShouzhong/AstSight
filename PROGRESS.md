@@ -1,9 +1,14 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-16
-> 分支：`feat/postgres-mysql-data`（已推送，最近提交 `638ec0f`）
+> 分支：`feat/postgres-mysql-data`（本地领先远端 2 个提交，最近提交 `4fe6310`；
+> Java HTTP agent P0/P1 已提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
-> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；全量 363 passed, 2 skipped
+> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
+> `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate + HTTPS + 心跳 + 证据，
+> SUT 启动可用 `JAVA_TOOL_OPTIONS` 自动注入 agent；普通 JVM 与 Spring Boot
+> 3.5.6 fat jar 均联调通过；全量 376 passed, 6 skipped（Java 真实联调默认跳过；
+> agent e2e 启用时 3 passed）
 
 ## 当前状态
 
@@ -32,8 +37,47 @@
 | A5/A6 诊断修复 | ✅ 2026-11-12 | A5/A6 合并为单次 LLM 调用（`schema_version=2`）；默认最多 3 轮；用例补丁以 `astsight-agent:repair` 自动批准；断言不得删除/降强；Mock 结构失配可修并热更新路由表 |
 | 多语言下游 Mock | ✅ 2026-11-12 | Java/Go/Node 下游 HTTP 调用点扫描（`profile/langscan.py`）与非 Python 路由扫描（`profile/langroutes.py`）；Spring/Gin/Echo/Chi/Fiber/Express/Fastify/Koa/NestJS；路由 `line` 贯通画像，内联回调按行定位 |
 | Java 下游契约 | ✅ 2026-11-13 | `langscan` 抽取 RestTemplate/WebClient 响应类型并识别 Feign 字段调用；`javadeps`/`javaclass`/`javatypes` 读 pom/gradle、本地 jar、class 与泛型签名；画像 dep 增加 `response_types` / `response_contract`，Mock `success` body 按响应类型生成，用例绑定校验会对照契约告警字段漂移；DTO 继承链的父类字段递归合并；服务发现型下游改用 `discovery_override`（Spring Cloud 静态实例），已在真实 `spring-cloud-samples/feign-eureka` 工程跑通端到端 |
+| Java HTTP Mock 方案 | ✅ 设计已确认 | 决策记录 §17 / 能力设计 C3.5.5：新增 `agent_rewrite`（配置注入优先、agent 兜底）；agent 只改写 URL 到 `/_dep/<route_key>`，复用内嵌 Mock 的会话/分支/证据；计划内主机未命中一律 502、零透传；HTTPS 仅在 agent 激活时放开；首版不做进程内响应合成 |
+| Java HTTP agent P1 | ✅ 三客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp 与 Spring Boot 3.5.6 fat jar 三客户端联调均通过（3 passed） |
 
-## 本轮完成（Java 下游契约提取，2026-11-13 ~ 2026-11-16）
+## 本轮完成（Java HTTP agent P1：Feign / RestTemplate，2026-11-16）
+
+1. **范围收敛**：只支持主流阻塞客户端 OkHttp / Feign / RestTemplate；WebClient、
+   第三方 SDK、直接 Apache HC / JDK HttpClient / HttpURLConnection /
+   async-http-client 不建 adapter，计划期标 `unsupported`，避免“看起来支持、
+   实际漏流量”。
+2. **计划选择**（`agent/mockplan.py`）：画像 dep 新增 `clients` / `languages`；
+   Java 下游 HTTPS 只允许 `agent_rewrite`；配置键优先 `url_override`，服务名
+   走 `discovery_override`，其余可识别客户端用 `agent_rewrite`；WebClient/未知
+   客户端 `unsupported`（`client_unsupported` / `client_unknown`），每个注入
+   dep 都带 `mock_injection_agent_rewrite:*` 告警。
+3. **Feign adapter**：ASM 在 `SynchronousMethodHandler#targetRequest` 的
+   `ARETURN` 注入，反射重建 `feign.Request`（按 Feign 10–13 的
+   `Request.create` 重载动态选签名），统一覆盖默认 / OkHttp / Apache HC 传输；
+   `X-AstSight-*` 证据头随请求发出。
+4. **RestTemplate adapter**：ASM 织入 `RestTemplate#doExecute`（Spring 5 四参、
+   Spring 6.2 五参均覆盖），替换 URI，并用动态代理包 `RequestCallback` 写入
+   证据头；与底层 JDK / Apache / OkHttp RequestFactory 无关。
+5. **失败关闭**：新增 `AgentRewriteException` 与 `AgentRuntime.isPlanned`；
+   计划内请求改写失败时抛异常让本次调用失败，绝不返回原始请求透传到真实下游；
+   计划外 host 原样放行。
+6. **启动注入**（`agent/sut.py`）：`agent_rewrite` 通过 `JAVA_TOOL_OPTIONS`
+   加载 jar；token 只走 `ASTSIGHT_AGENT_TOKEN` 环境变量（agent 选项
+   `token_env`），不进入命令行；jar 路径取 `ASTSIGHT_JAVA_AGENT_JAR` 或仓库
+   默认构建产物，缺失 / 无 token / 路径含空格都显式告警
+   `injection_agent_unavailable:*`。
+7. **证据兜底**（`mock/server.py`）：缺少证据头时从 `/_dep/<route_key>` 还原
+   `original_path`，并补 `mode=agent_rewrite` 与 route host，避免证据把 Mock
+   前缀记成下游路径。
+8. **联调**：Spring Boot 3.5.6 fat jar 样例新增 `/feign/{id}`、`/rest/{id}`，
+   与 `/call` 一起在 `LaunchedURLClassLoader` 下改写 HTTPS 到 Mock；e2e 不再
+   手工拼 `-javaagent`，改为经 `start_sut` 走真实启动注入
+   （`JAVA_TOOL_OPTIONS` + `token_env`），并断言 SUT 日志不含明文 token；
+   三个 adapter 的 `http_adapters` 集合、`http_rewrites>=3`、三条证据的
+   adapter/mode/host 均通过。普通 JVM OkHttp e2e 仍通过。全量
+   **376 passed, 6 skipped**；启用两个 agent e2e 后 **3 passed**。
+
+## 上一轮完成（Java 下游契约提取，2026-11-13 ~ 2026-11-16）
 
 1. **响应类型抽取**（`profile/langscan.py`、`profile/callsite.py`）：RestTemplate 的
    `getForObject/getForEntity/postForObject/postForEntity/patchForObject/exchange`
@@ -122,6 +166,14 @@
     Enum/Record` 不参与合并。真实 DTO 继承 `BaseEntity`/`PageResult` 时，
     `id`、`createdAt` 等父类字段不再从 Mock `success` body 中漏掉，绑定漂移
     告警的误报随之减少。
+14. **真实联调固化为集成测试**（`tests/integration/test_java_feign_e2e.py`）：
+    默认跳过，`ASTSIGHT_JAVA_E2E=1` 启用；样例路径 `ASTSIGHT_JAVA_E2E_PROJECT`，
+    java 依次取 `ASTSIGHT_JAVA_E2E_JAVA` / PATH / `JAVA_HOME`，client 未构建时
+    skip 并提示 Maven 命令。用例走真实 `build_mock_plan → start_mock_plan →
+    injection_document → start_sut`：扫描 Feign 调用点、按用例创建 Mock 会话、
+    启动 Spring Boot、再请求 `/`，断言返回 Mock body 且 `mock_calls.jsonl` 记录
+    `route_match=method_path`、`branch=success`；反证把服务名改小写后 SUT 返回
+    500 且 Mock 零调用。启用时 2 条约 16s，默认全量 363 passed, 4 skipped。
 
 ## 上一轮完成（示例服务 V1.1 与 C6/C7 执行）
 
@@ -252,6 +304,23 @@
 
 ## 下一步
 
+已完成（Java HTTP Mock P0 spike，设计见 `doc/决策记录.md` §17）：
+
+- 新增 `java/astsight-agent-core` / `astsight-agent-http` / `astsight-agent` Maven 模块，字节码目标 JDK 8；
+- OkHttp `newCall(Request)` 改写已打通，`https://api.example.com/orders/42` 命中 Mock 并留证；
+- Spring Boot 3.5.6 fat jar（`LaunchedURLClassLoader`）下改写通过：OkHttp adapter 改为裸 ASM
+  注入 + 反射 bridge，规避 ByteBuddy 解析 `okhttp3.Request` 时的 `NoClassDefFoundError`；
+- agent 拉取 `GET /_admin/agent/routes`，心跳上报 `http_adapters` / `http_hooked` / `http_rewrites` / `http_errors` / `http_passthrough`；
+- Mock 新增 `/_agent/unmatched`（502 + `mock_route_unknown`/`mock_route_ambiguous`），证据补 `adapter` / `mode` / `original_host`；
+- `normalize_target_url(allow_https=True)` 仅在 `agent_rewrite` 计划下允许 HTTPS，其他策略仍 `tls_not_supported`；
+- 两个可选 agent e2e（普通 OkHttp、Spring Boot fat jar）启用时 2 passed。
+
+下一步（P1）：
+
+- Apache HttpClient 4、Feign `Client.Default`、Spring `RestTemplate` 适配器（沿用 ASM + 反射 bridge 原则）；
+- `build_mock_plan` / `injection_env` 接入 `agent_rewrite` 选择与 `-javaagent` 启动参数，缺 jar 报 `agent_unavailable`；
+- JDK 8/11/17/21 版本矩阵与 OkHttp 3/4/5 实测。
+
 已完成（本轮）：
 
 ```bash
@@ -345,6 +414,37 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-16**：Java HTTP Mock P0 落地（OkHttp + HTTPS + 心跳 + 证据）：
+  - 新增 `java/` Maven 工程：`astsight-agent-core`（premain、路由匹配、admin client、
+    心跳、适配器注册表）、`astsight-agent-http`（OkHttp 3/4/5 `newCall`）、
+    `astsight-agent`（shaded jar）；字节码目标 JDK 8；
+  - Mock 服务新增 `GET /_admin/agent/routes`、`POST/GET /_admin/agent/heartbeat`、
+    `/_agent/unmatched`（502，`mock_route_unknown`/`mock_route_ambiguous`）；
+  - `MockStrategy.AGENT_REWRITE`、`MockAgent`/`MockHttpAdapter` 契约；
+    `MockCall` 增加 `adapter`/`mode`/`original_host`，原始 path/query 从
+    `X-AstSight-*` 头恢复；
+  - `normalize_target_url(..., allow_https=)` 与 `validate_mock_plan` 按
+    `agent_rewrite` 放开 HTTPS，其他策略仍 `tls_not_supported`；
+  - OkHttp adapter 从 ByteBuddy Advice 改为裸 ASM 注入 + 反射 bridge：Spring Boot
+    fat jar 的 `LaunchedURLClassLoader` 下 ByteBuddy 会因无法解析 `okhttp3.Request`
+    抛 `NoClassDefFoundError`；
+  - 新增两个可选集成测试：`test_java_agent_okhttp_e2e.py`
+    （`ASTSIGHT_JAVA_AGENT_E2E=1`）与 `test_java_agent_spring_boot_e2e.py`
+    （`ASTSIGHT_JAVA_AGENT_SPRING_E2E=1`，Spring Boot 3.5.6 fat jar），验证 HTTPS
+    改写命中 Mock、证据字段与心跳计数；启用时 2 passed，全量 **367 passed, 6 skipped**；
+  - 已知未完成：HC4/Feign/RestTemplate 适配器、`build_mock_plan` 策略选择与
+    `agent run` 启动参数、JDK 8/11/17/21 矩阵。
+- **2026-11-16**：确认 Java HTTP Mock 方案并写回设计（未实现）：
+  - 新增 `agent_rewrite` 策略，选择顺序 `url_override > discovery_override >
+    http_proxy > agent_rewrite > unsupported`：配置注入优先，agent 兜底；
+  - agent 只做 URL 改写，复用内嵌 Mock 的路由/分支/会话/证据，不做进程内响应合成；
+  - 计划内主机零透传：未命中转 `/_agent/unmatched`，返回 502 并记
+    `mock_route_unknown` / `mock_route_ambiguous`；计划外主机允许真实调用，但报告
+    必须列出；
+  - HTTPS 仅在 agent 激活时放开；改写后 scheme 为 http，不建 TLS、不装 CA、不 MITM；
+  - 写入 `doc/决策记录.md` §17、`doc/framework-capability-design.md`
+    C3.5.5/C3.5.3、`doc/agent-architecture.md`，含 adapter 矩阵、失败子码、
+    `MockCall` 证据字段与 P0-P3 阶段。
 - **2026-11-16**：提交并推送 Java 下游契约与 Feign 服务发现注入（`a3a20ec`，
   `origin/feat/postgres-mysql-data`，20 个文件 / +3470 −36）：
   - 新增 `javaclass` / `javadeps` / `javatypes`，`langscan` 接入响应类型与 Feign
@@ -362,6 +462,11 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
   限深 6 层并防继承环，`java.lang.Object/Enum/Record` 跳过。新增 5 条测试
   （源码同包/跨包 import/泛型边界不误判/jar 继承/画像端到端），全量
   **363 passed, 2 skipped**。
+- **2026-11-16**：真实 Spring Cloud 联调固化为可选集成测试
+  `engine/tests/integration/test_java_feign_e2e.py`：`ASTSIGHT_JAVA_E2E=1` 启用，
+  默认跳过；覆盖 Feign 扫描 → MockPlan → 静态实例注入 → SUT 启动 → Mock 命中
+  → 证据留证，以及服务名大小写反证。启用时 2 passed / 16s；默认全量
+  **363 passed, 4 skipped**。`engine/README.md` 补充运行方式与前置构建命令。
 - **2026-11-13**：Java 下游契约从 A 侧提取：
   - `langscan` 抽取 RestTemplate（按参数位）与 WebClient（`bodyToMono` 等）的响应
     类型，写入 `HttpCallSite.response_type`；变量名不当作类型。

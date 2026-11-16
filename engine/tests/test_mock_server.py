@@ -115,6 +115,85 @@ def test_host_route_uses_session_branch_and_renders_variables(tmp_path: Path) ->
     assert call.body_bytes == 14
 
 
+def test_agent_routes_and_heartbeat_are_admin_only(tmp_path: Path) -> None:
+    server, dep_id, route_key = _server(tmp_path)
+    heartbeat = {
+        "sut_id": "sut1",
+        "agent_version": "0.1.0",
+        "pid": 123,
+        "jvm_start_time_ms": 1,
+        "http_adapters": [{"id": "okhttp", "version": "3.14.9", "active": True}],
+        "http_hooked": 3,
+        "http_rewrites": 2,
+        "http_errors": 0,
+        "http_stack_unsupported": [],
+        "http_passthrough": 1,
+        "passthrough_hosts": {"example.com": 1},
+    }
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            unauthorized = await client.get("/_admin/agent/routes")
+            assert unauthorized.status_code == 401
+            routes = await client.get("/_admin/agent/routes", headers=ADMIN)
+            assert routes.status_code == 200
+            payload = routes.json()
+            assert payload["endpoint"] == server.endpoint
+            assert payload["routes"][0]["dep_id"] == dep_id
+            assert payload["routes"][0]["route_key"] == route_key
+            assert payload["routes"][0]["host"] == "pay-service"
+
+            posted = await client.post(
+                "/_admin/agent/heartbeat", headers=ADMIN, json=heartbeat
+            )
+            assert posted.status_code == 200
+            assert posted.json()["http_rewrites"] == 2
+            stored = await client.get("/_admin/agent/heartbeat", headers=ADMIN)
+            assert stored.status_code == 200
+            assert stored.json()["http_adapters"][0]["id"] == "okhttp"
+
+    _run(scenario())
+
+
+def test_agent_unmatched_records_evidence_and_returns_502(tmp_path: Path) -> None:
+    server, dep_id, _ = _server(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            await _call(
+                client, "POST", "/_admin/sessions", headers=ADMIN, json=_session_body(dep_id)
+            )
+            response = await _call(
+                client,
+                "POST",
+                "/_agent/unmatched?reason=unknown&host=pay-service",
+                headers={
+                    "X-AstSight-Adapter": "okhttp",
+                    "X-AstSight-Mode": "agent_rewrite",
+                    "X-AstSight-Original-Host": "pay-service",
+                    "X-AstSight-Original-Path": "/gateway/pay/other",
+                    "X-AstSight-Original-Query": "trace=1",
+                    "Content-Type": "application/json",
+                },
+                content=b'{"amount": 10}',
+            )
+            assert response.status_code == 502
+            assert response.json()["error"] == "mock_route_unknown"
+
+    _run(scenario())
+    call = server.evidence.records[-1]
+    assert call.error == "mock_route_unknown"
+    assert call.result == "unknown"
+    assert call.session_id == "s1"
+    assert call.adapter == "okhttp"
+    assert call.mode == "agent_rewrite"
+    assert call.original_host == "pay-service"
+    assert call.original_path == "/gateway/pay/other"
+    assert call.query_keys == ["trace"]
+
+
 def test_direct_route_key_wins_and_second_case_switches_branch(tmp_path: Path) -> None:
     server, dep_id, route_key = _server(tmp_path)
 

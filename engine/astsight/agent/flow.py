@@ -979,6 +979,7 @@ def run_flow(
                 log_path=run_dir.path / "sut.log",
                 injection_document=injection_document,
                 extra_env=config.sut_env,
+                agent_token=runtime.token if runtime is not None else None,
                 ready_url=config.sut_ready_url,
                 timeout=config.sut_timeout,
                 cwd=project,

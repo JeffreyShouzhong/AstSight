@@ -1,7 +1,8 @@
 """被测系统（SUT）启动/就绪/停止，以及从 Mock 注入清单生成环境变量。
 
-支持 SUT 启动期注入：环境变量形式的 URL override、明文 HTTP 代理，以及
-Spring Cloud 静态服务列表（`discovery_override`，写入 `SPRING_APPLICATION_JSON`）。
+支持 SUT 启动期注入：环境变量形式的 URL override、明文 HTTP 代理、
+Spring Cloud 静态服务列表（`discovery_override`，写入 `SPRING_APPLICATION_JSON`），
+以及 Java agent 改写（`agent_rewrite`，通过 `JAVA_TOOL_OPTIONS` 加载）。
 配置文件、DNS 改写不在本模块能力内，遇到就显式告警，不假装成功。
 """
 from __future__ import annotations
@@ -19,6 +20,15 @@ import httpx
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _URL_KEYS = {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+_AGENT_JAR_ENV = "ASTSIGHT_JAVA_AGENT_JAR"
+_AGENT_TOKEN_ENV = "ASTSIGHT_AGENT_TOKEN"
+_AGENT_JAR_DEFAULT = (
+    Path(__file__).resolve().parents[3]
+    / "java"
+    / "astsight-agent"
+    / "target"
+    / "astsight-agent.jar"
+)
 
 
 @dataclass
@@ -45,12 +55,19 @@ def injection_env(
     *,
     base_url: str,
     extra_env: dict[str, str] | None = None,
+    agent_token: str | None = None,
 ) -> tuple[dict[str, str], list[str], list[str]]:
-    """返回 (env, env_keys, warnings)。不把 admin token 传给 SUT。"""
+    """返回 (env, env_keys, warnings)。
+
+    admin token 默认不进入环境；仅当存在 `agent_rewrite` 注入时，才通过
+    独立环境变量交给进程内的 Java agent（避免出现在命令行/日志里）。
+    """
     env: dict[str, str] = dict(extra_env or {})
     keys: list[str] = sorted(env)
     warnings: list[str] = []
     discovery: dict[str, list[dict[str, str]]] = {}
+    agent_rewrite: list[str] = []
+    agent_endpoint = ""
     dep_hosts = {
         str(route.get("dep_id") or ""): str(route.get("host") or "")
         for route in document.get("routes") or []
@@ -107,6 +124,14 @@ def injection_env(
                 warnings.append(f"discovery_not_supported:{dep_id}")
                 continue
             discovery[service] = [{"uri": injected}]
+        elif strategy == "agent_rewrite":
+            dep_id = str(injection.get("dep_id") or "")
+            if not injected:
+                warnings.append(f"injection_missing_url:{dep_id}")
+                continue
+            if not agent_endpoint:
+                agent_endpoint = injected
+            agent_rewrite.append(dep_id)
         elif strategy == "unsupported":
             warnings.append(
                 f"injection_unsupported:{injection.get('dep_id')}:"
@@ -116,7 +141,86 @@ def injection_env(
             warnings.append(f"injection_strategy_unknown:{strategy}")
     if discovery:
         env, keys, warnings = _merge_discovery_env(env, keys, warnings, discovery)
+    if agent_rewrite:
+        env, keys, warnings = _merge_agent_env(
+            env,
+            keys,
+            warnings,
+            agent_rewrite,
+            endpoint=str(document.get("endpoint") or "") or agent_endpoint,
+            sut_id=str(document.get("sut_id") or ""),
+            token=agent_token,
+        )
     return env, sorted(set(keys)), warnings
+
+
+def _agent_jar() -> Path | None:
+    configured = os.environ.get(_AGENT_JAR_ENV, "").strip()
+    if configured:
+        path = Path(configured)
+        return path if path.is_file() else None
+    return _AGENT_JAR_DEFAULT if _AGENT_JAR_DEFAULT.is_file() else None
+
+
+def _merge_agent_env(
+    env: dict[str, str],
+    keys: list[str],
+    warnings: list[str],
+    dep_ids: list[str],
+    *,
+    endpoint: str,
+    sut_id: str,
+    token: str | None,
+) -> tuple[dict[str, str], list[str], list[str]]:
+    """把 `agent_rewrite` 注入落成 `JAVA_TOOL_OPTIONS` + token 环境变量。
+
+    token 只走环境变量（agent 的 `token_env` 选项），不写进 javaagent 参数，
+    避免出现在进程命令行和 JVM 的 `Picked up JAVA_TOOL_OPTIONS` 日志中。
+    """
+    jar = _agent_jar()
+    if jar is None:
+        for dep_id in dep_ids:
+            warnings.append(
+                f"injection_agent_unavailable:{dep_id}:agent_jar_missing"
+            )
+        return env, keys, warnings
+    if not endpoint:
+        for dep_id in dep_ids:
+            warnings.append(f"injection_agent_unavailable:{dep_id}:endpoint_missing")
+        return env, keys, warnings
+    secret = (token or os.environ.get(_AGENT_TOKEN_ENV) or "").strip()
+    if not secret:
+        for dep_id in dep_ids:
+            warnings.append(
+                f"injection_agent_unavailable:{dep_id}:token_missing"
+            )
+        return env, keys, warnings
+    if any(char.isspace() for char in str(jar)):
+        for dep_id in dep_ids:
+            warnings.append(
+                f"injection_agent_unavailable:{dep_id}:agent_jar_path_has_space"
+            )
+        return env, keys, warnings
+
+    options = [f"admin={endpoint}", f"token_env={_AGENT_TOKEN_ENV}"]
+    if sut_id:
+        options.append(f"sut_id={sut_id}")
+    javaagent = f"-javaagent:{jar}=" + ",".join(options)
+    existing = (
+        env.get("JAVA_TOOL_OPTIONS")
+        or os.environ.get("JAVA_TOOL_OPTIONS")
+        or ""
+    ).strip()
+    env["JAVA_TOOL_OPTIONS"] = (
+        f"{existing} {javaagent}".strip() if existing else javaagent
+    )
+    env[_AGENT_TOKEN_ENV] = secret
+    keys.extend(["JAVA_TOOL_OPTIONS", _AGENT_TOKEN_ENV])
+    for dep_id in dep_ids:
+        warnings.append(
+            f"injection_agent_rewrite_applied:{dep_id}:requires_java_agent"
+        )
+    return env, keys, warnings
 
 
 def _merge_discovery_env(
@@ -169,6 +273,7 @@ def start_sut(
     log_path: str | Path,
     injection_document: dict[str, Any],
     extra_env: dict[str, str] | None = None,
+    agent_token: str | None = None,
     ready_url: str | None = None,
     timeout: float = 60.0,
     cwd: str | Path | None = None,
@@ -176,7 +281,10 @@ def start_sut(
     if not argv:
         raise ValueError("SUT 启动命令为空")
     env, keys, warnings = injection_env(
-        injection_document, base_url=base_url, extra_env=extra_env
+        injection_document,
+        base_url=base_url,
+        extra_env=extra_env,
+        agent_token=agent_token,
     )
     full_env = {**os.environ, **env}
     path = Path(log_path)

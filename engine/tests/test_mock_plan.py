@@ -97,6 +97,29 @@ def test_load_mock_plan_normalizes_route_and_computes_route_key(
     assert route.strategy.value == "url_override"
 
 
+def test_agent_rewrite_allows_https_target(tmp_path: Path) -> None:
+    payload = _plan_payload()
+    payload["routes"][0]["target"] = "https://pay-service/gateway/pay"
+    payload["injections"][0] = {
+        "dep_id": DEP_ID,
+        "strategy": "agent_rewrite",
+        "kind": "base_url",
+    }
+    plan = load_mock_plan(_write_plan(tmp_path, payload))
+
+    assert plan.routes[0].target == "https://pay-service/gateway/pay"
+    assert plan.injections[0].strategy.value == "agent_rewrite"
+    assert plan.routes[0].strategy.value == "agent_rewrite"
+
+
+def test_https_remains_rejected_without_agent_rewrite(tmp_path: Path) -> None:
+    payload = _plan_payload()
+    payload["routes"][0]["target"] = "https://pay-service/gateway/pay"
+    with pytest.raises(MockPlanError) as error:
+        load_mock_plan(_write_plan(tmp_path, payload))
+    assert error.value.code == "tls_not_supported"
+
+
 @pytest.mark.parametrize(
     ("mutate", "code"),
     [
