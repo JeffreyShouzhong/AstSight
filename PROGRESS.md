@@ -1,8 +1,9 @@
 # AstSight 项目进度
 
-> 最后更新：2026-11-13
-> 分支：`feat/postgres-mysql-data`
-> 当前阶段：C6/C7 完成（`caseset.json` v4，38 条已批准用例 38/38 通过，门禁 PASS）
+> 最后更新：2026-11-16
+> 分支：`feat/postgres-mysql-data`（已推送，最近提交 `a3a20ec`）
+> 当前阶段：Java 下游契约提取与 Feign/服务发现注入完成；真实
+> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；全量 355 passed, 2 skipped
 
 ## 当前状态
 
@@ -32,7 +33,7 @@
 | 多语言下游 Mock | ✅ 2026-11-12 | Java/Go/Node 下游 HTTP 调用点扫描（`profile/langscan.py`）与非 Python 路由扫描（`profile/langroutes.py`）；Spring/Gin/Echo/Chi/Fiber/Express/Fastify/Koa/NestJS；路由 `line` 贯通画像，内联回调按行定位 |
 | Java 下游契约 | ✅ 2026-11-13 | `langscan` 抽取 RestTemplate/WebClient 响应类型并识别 Feign 字段调用；`javadeps`/`javaclass`/`javatypes` 读 pom/gradle、本地 jar、class 与泛型签名；画像 dep 增加 `response_types` / `response_contract`，Mock `success` body 按响应类型生成，用例绑定校验会对照契约告警字段漂移；服务发现型下游改用 `discovery_override`（Spring Cloud 静态实例），已在真实 `spring-cloud-samples/feign-eureka` 工程跑通端到端 |
 
-## 本轮完成（Java 下游契约提取，2026-11-13）
+## 本轮完成（Java 下游契约提取，2026-11-13 ~ 2026-11-16）
 
 1. **响应类型抽取**（`profile/langscan.py`、`profile/callsite.py`）：RestTemplate 的
    `getForObject/getForEntity/postForObject/postForEntity/patchForObject/exchange`
@@ -327,6 +328,15 @@ PYTHONPATH=. python -m astsight run --project examples/partner_onboarding \
 
 ## 更新记录
 
+- **2026-11-16**：提交并推送 Java 下游契约与 Feign 服务发现注入（`a3a20ec`，
+  `origin/feat/postgres-mysql-data`，20 个文件 / +3470 −36）：
+  - 新增 `javaclass` / `javadeps` / `javatypes`，`langscan` 接入响应类型与 Feign
+    调用点，画像增加 `response_types` / `response_contract`；
+  - Mock `success` body 按契约生成，用例绑定校验告警字段漂移；
+  - `discovery_override` 运行时（Spring Cloud 静态实例），注入保留服务名大小写；
+  - 用真实 Spring Cloud 工程联调，修复 `injection_document` 缺路由、
+    `@RequestMapping` 静态导入方法解析等问题；
+  - 全量 **355 passed, 2 skipped**。
 - **2026-11-13**：Java 下游契约从 A 侧提取：
   - `langscan` 抽取 RestTemplate（按参数位）与 WebClient（`bodyToMono` 等）的响应
     类型，写入 `HttpCallSite.response_type`；变量名不当作类型。
