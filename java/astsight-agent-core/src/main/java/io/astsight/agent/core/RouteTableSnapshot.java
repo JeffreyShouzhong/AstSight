@@ -110,10 +110,17 @@ final class RouteTableSnapshot {
 
     private final String endpoint;
     private final List<Route> routes;
+    private final Set<String> dubboDeps;
 
     RouteTableSnapshot(String endpoint, List<Route> routes) {
+        this(endpoint, routes, Collections.<String>emptySet());
+    }
+
+    RouteTableSnapshot(String endpoint, List<Route> routes, Set<String> dubboDeps) {
         this.endpoint = endpoint;
         this.routes = Collections.unmodifiableList(new ArrayList<Route>(routes));
+        this.dubboDeps = Collections.unmodifiableSet(
+                new LinkedHashSet<String>(dubboDeps == null ? Collections.<String>emptySet() : dubboDeps));
     }
 
     String endpoint() {
@@ -144,7 +151,21 @@ final class RouteTableSnapshot {
                                 text(item, "target")));
             }
         }
-        return new RouteTableSnapshot(trimSlash(endpoint), parsed);
+        Set<String> dubbo = new LinkedHashSet<String>();
+        JsonNode dubboItems = root.get("dubbo_deps");
+        if (dubboItems != null && dubboItems.isArray()) {
+            for (JsonNode item : dubboItems) {
+                String depId = item.asText();
+                if (depId != null && !depId.isEmpty()) {
+                    dubbo.add(depId);
+                }
+            }
+        }
+        return new RouteTableSnapshot(trimSlash(endpoint), parsed, dubbo);
+    }
+
+    boolean isDubboPlanned(String depId) {
+        return depId != null && dubboDeps.contains(depId);
     }
 
     Match resolve(String method, String hostHeader, String rawPath) {

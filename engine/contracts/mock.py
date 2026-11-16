@@ -128,6 +128,24 @@ class MockHttpAdapter(BaseModel):
     active: bool = False
 
 
+class MockDubboAgent(BaseModel):
+    """Agent 心跳里的 Dubbo Filter 状态（C3.5.3）。
+
+    `serialization_verified=false` 表示桩响应在进程内构造、跳过 Hessian2
+    链路，序列化保真度不能算已验证。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    installed: bool = False
+    version: str | None = Field(default=None, description="被测 JVM 里的 Dubbo 版本")
+    filter_instantiated: int = Field(default=0, ge=0)
+    filter_hits: int = Field(default=0, ge=0)
+    passthrough: int = Field(default=0, ge=0)
+    errors: int = Field(default=0, ge=0)
+    serialization_verified: bool = False
+
+
 class MockAgent(BaseModel):
     """`POST /_admin/agent/heartbeat` 的持久化形态。"""
 
@@ -144,6 +162,7 @@ class MockAgent(BaseModel):
     http_stack_unsupported: list[str] = Field(default_factory=list)
     http_passthrough: int = Field(default=0, ge=0)
     passthrough_hosts: dict[str, int] = Field(default_factory=dict)
+    dubbo: MockDubboAgent | None = None
     at: str
 
 

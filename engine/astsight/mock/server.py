@@ -41,7 +41,7 @@ from contracts import (
 )
 
 from .evidence import MockEvidenceWriter
-from .identity import DepIdEntry
+from .identity import DepIdEntry, DepIdError, route_key_for
 from .routes import RouteEntry, RouteResolution, RouteTable
 from .sessions import MAX_SESSION_HISTORY, SessionError, SessionManager
 
@@ -83,6 +83,18 @@ class MockResponseError(ValueError):
         self.code = code
         self.detail = detail
         super().__init__(f"{code}: {detail}" if detail else code)
+
+
+@dataclass
+class DubboRouteEntry:
+    """一个 Dubbo 下游端点及其语义分支（C3.5.3）。"""
+
+    dep_id: str
+    route_key: str
+    branches: dict[str, MockStub]
+
+    def branch(self, name: str) -> MockStub | None:
+        return self.branches.get(name)
 
 
 def _now_iso() -> str:
@@ -216,6 +228,7 @@ class MockHttpServer:
         self.limits = limits or MockLimits()
         self.capture_bodies = capture_bodies
         self.route_table = RouteTable()
+        self.dubbo_deps: dict[str, DubboRouteEntry] = {}
         self.sessions = SessionManager(sut_id=self.sut_id, namespace=self.namespace)
         self.evidence = MockEvidenceWriter(history_path)
         self._app: FastAPI | None = None
@@ -255,6 +268,47 @@ class MockHttpServer:
             source=source,
             branches=branches,
         )
+
+    def add_dubbo_dep(
+        self,
+        dep_id: str,
+        *,
+        route_key: str | None = None,
+        branches: dict[str, MockStub] | None = None,
+    ) -> DubboRouteEntry:
+        """登记一个 Dubbo 下游端点；`dep_id` 形如
+        `dubbo:com.acme.OrderService#create?group=order&version=1.0.0`。
+
+        Dubbo 调用不经过 HTTP 路由匹配，按 `dep_id` 精确命中；分支与会话
+        绑定复用同一套 `mock_bindings`。
+        """
+        if self._server is not None:
+            raise RuntimeError("cannot add route after server start")
+        if not dep_id.startswith("dubbo:") or "#" not in dep_id:
+            raise DepIdError("mock_dep_id_invalid", dep_id)
+        if dep_id in self.dubbo_deps:
+            raise DepIdError("mock_route_conflict", f"dep_id={dep_id}")
+        if route_key is None:
+            for length in (12, 16, 20):
+                candidate = route_key_for(dep_id, length)
+                if (
+                    candidate not in self.dubbo_deps
+                    and self.route_table.get_by_key(candidate) is None
+                    and all(item.route_key != candidate for item in self.dubbo_deps.values())
+                ):
+                    route_key = candidate
+                    break
+            if route_key is None:
+                raise DepIdError("mock_route_conflict", "route_key collision")
+        elif self.route_table.get_by_key(route_key) is not None or any(
+            item.route_key == route_key for item in self.dubbo_deps.values()
+        ):
+            raise DepIdError("mock_route_conflict", f"route_key={route_key}")
+        entry = DubboRouteEntry(
+            dep_id=dep_id, route_key=route_key, branches=dict(branches or {})
+        )
+        self.dubbo_deps[dep_id] = entry
+        return entry
 
     # ------------------------------------------------------------- 生命周期
 
@@ -437,6 +491,7 @@ class MockHttpServer:
                     }
                     for entry in self.route_table.entries
                 ],
+                "dubbo_deps": sorted(self.dubbo_deps),
             }
 
         @app.post("/_admin/agent/heartbeat")
@@ -539,6 +594,186 @@ class MockHttpServer:
             except SessionError as exc:
                 return _error_response(exc.status, exc.code, dep_id=exc.detail or None)
             return session.model_dump()
+
+        @app.post("/_admin/dubbo/invoke")
+        async def _dubbo_invoke(request: Request):
+            """Dubbo Filter 的取桩入口（C3.5.3）。
+
+            按 `dep_id` 精确命中，不经过 HTTP 路由表；命中返回分支与响应体，
+            错误一律显式出报，绝不返回“继续调真实 provider”。
+            """
+            raw = await request.body()
+            try:
+                payload = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                return _error_response(400, "invalid_json")
+            if not isinstance(payload, dict):
+                return _error_response(400, "invalid_json")
+            dep_id = str(payload.get("dep_id") or "")
+            service = str(payload.get("service") or "")
+            method = str(payload.get("method") or "")
+            entry = self.dubbo_deps.get(dep_id)
+            if entry is None:
+                self._record_dubbo(
+                    dep_id=dep_id,
+                    service=service,
+                    method=method,
+                    session=self.sessions.current(),
+                    entry=None,
+                    branch=None,
+                    response_status=404,
+                    result=MockCallResult.UNKNOWN,
+                    error="mock_dep_unplanned",
+                    raw=raw,
+                )
+                return _error_response(404, "mock_dep_unplanned", dep_id=dep_id)
+
+            session, session_error = self.sessions.for_request()
+            if session_error:
+                result = (
+                    MockCallResult.LATE
+                    if session_error in ("mock_late_call", "mock_session_expired")
+                    else MockCallResult.UNBOUND
+                )
+                closed = (
+                    self.sessions.last_closed()
+                    if result is MockCallResult.LATE
+                    else None
+                )
+                self._record_dubbo(
+                    dep_id=dep_id,
+                    service=service,
+                    method=method,
+                    session=closed,
+                    entry=entry,
+                    branch=None,
+                    response_status=502,
+                    result=result,
+                    error=session_error,
+                    raw=raw,
+                )
+                return _error_response(
+                    502, session_error, route_key=entry.route_key, dep_id=dep_id
+                )
+            assert session is not None
+
+            branch = self.sessions.binding_map(session).get(dep_id)
+            if branch is None:
+                self._record_dubbo(
+                    dep_id=dep_id,
+                    service=service,
+                    method=method,
+                    session=session,
+                    entry=entry,
+                    branch=None,
+                    response_status=502,
+                    result=MockCallResult.UNBOUND,
+                    error="mock_unexpected_dep",
+                    raw=raw,
+                )
+                return _error_response(
+                    502, "mock_unexpected_dep", route_key=entry.route_key, dep_id=dep_id
+                )
+
+            stub = entry.branch(branch)
+            if stub is None:
+                self._record_dubbo(
+                    dep_id=dep_id,
+                    service=service,
+                    method=method,
+                    session=session,
+                    entry=entry,
+                    branch=branch,
+                    response_status=502,
+                    result=MockCallResult.BRANCH_MISSING,
+                    error="mock_branch_not_found",
+                    raw=raw,
+                )
+                return _error_response(
+                    502, "mock_branch_not_found", route_key=entry.route_key, dep_id=dep_id
+                )
+
+            body = stub.body
+            if isinstance(body, dict) and set(body) == {"raw_base64"}:
+                # Dubbo 桩必须是 JSON 可转成返回类型的值；二进制透传不支持。
+                self._record_dubbo(
+                    dep_id=dep_id,
+                    service=service,
+                    method=method,
+                    session=session,
+                    entry=entry,
+                    branch=branch,
+                    response_status=502,
+                    result=MockCallResult.UNBOUND,
+                    error="mock_response_invalid",
+                    raw=raw,
+                )
+                return _error_response(
+                    502, "mock_response_invalid", route_key=entry.route_key, dep_id=dep_id
+                )
+            rendered = _render(
+                body, run_scope=session.run_scope, case_id=session.case_id
+            )
+            try:
+                json.dumps(rendered, ensure_ascii=False)
+            except (TypeError, ValueError):
+                self._record_dubbo(
+                    dep_id=dep_id,
+                    service=service,
+                    method=method,
+                    session=session,
+                    entry=entry,
+                    branch=branch,
+                    response_status=502,
+                    result=MockCallResult.UNBOUND,
+                    error="mock_response_invalid",
+                    raw=raw,
+                )
+                return _error_response(
+                    502, "mock_response_invalid", route_key=entry.route_key, dep_id=dep_id
+                )
+
+            if stub.delay_ms:
+                await asyncio.sleep(stub.delay_ms / 1000)
+            if stub.drop_connection:
+                await asyncio.sleep(self.limits.drop_timeout_ms / 1000)
+                self._record_dubbo(
+                    dep_id=dep_id,
+                    service=service,
+                    method=method,
+                    session=session,
+                    entry=entry,
+                    branch=branch,
+                    response_status=502,
+                    result=MockCallResult.OK,
+                    error="mock_connection_dropped",
+                    delay_ms=stub.delay_ms,
+                    raw=raw,
+                )
+                return _error_response(
+                    502, "mock_connection_dropped", route_key=entry.route_key, dep_id=dep_id
+                )
+
+            self._record_dubbo(
+                dep_id=dep_id,
+                service=service,
+                method=method,
+                session=session,
+                entry=entry,
+                branch=branch,
+                response_status=200,
+                result=MockCallResult.OK,
+                delay_ms=stub.delay_ms,
+                raw=raw,
+            )
+            return {
+                "schema_version": 1,
+                "route_key": entry.route_key,
+                "dep_id": dep_id,
+                "branch": branch,
+                "body": rendered,
+                "delay_ms": stub.delay_ms,
+            }
 
         @app.api_route("/_agent/unmatched", methods=_DATA_METHODS)
         async def _agent_unmatched(request: Request):
@@ -793,6 +1028,51 @@ class MockHttpServer:
         return response
 
     # ------------------------------------------------------------- 证据
+
+    def _record_dubbo(
+        self,
+        *,
+        dep_id: str,
+        service: str,
+        method: str,
+        session,
+        entry: DubboRouteEntry | None,
+        branch: str | None,
+        response_status: int,
+        result: MockCallResult,
+        error: str | None = None,
+        delay_ms: int = 0,
+        raw: bytes = b"",
+    ) -> None:
+        """Dubbo 调用的证据行；取值为 RPC 方法名，路径用 `dubbo:服务#方法`。"""
+        service_name = service or (entry.dep_id[6:].split("#", 1)[0] if entry else "")
+        path = f"dubbo:{service_name}#{method}"
+        call = MockCall(
+            call_id=secrets.token_hex(16),
+            session_id=session.session_id if session else None,
+            case_id=session.case_id if session else None,
+            route_key=entry.route_key if entry else None,
+            dep_id=dep_id or None,
+            route_match=None,
+            method=method or "unknown",
+            original_path=path,
+            query_keys=[],
+            request_headers={},
+            body_sha256=hashlib.sha256(raw).hexdigest(),
+            body_bytes=len(raw),
+            request_body=None,
+            branch=branch,
+            response_status=response_status,
+            delay_ms=delay_ms,
+            drop_mode=None,
+            result=result,
+            error=error,
+            adapter="dubbo-filter",
+            mode="agent_filter",
+            original_host=None,
+            at=_now_iso(),
+        )
+        self.evidence.write(call)
 
     def _record_error(
         self,

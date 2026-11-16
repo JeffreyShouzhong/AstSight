@@ -1,7 +1,13 @@
 # AstSight Java Agent
 
-Java agent 在出站 HTTP 客户端调用前改写 URL，把请求定向到引擎内嵌的 Mock 服务。
-它只做 URL 改写：响应、分支、会话和证据仍由 `engine/astsight/mock/` 产生。
+Java agent 有两条接入路径：
+
+1. **HTTP 客户端改写**：在出站 HTTP 调用前改写 URL，把请求定向到引擎内嵌的
+   Mock 服务。它只做 URL 改写，响应、分支、会话和证据仍由
+   `engine/astsight/mock/` 产生。
+2. **Dubbo 消费端 Filter**：把 Filter 注入 Dubbo 的 `reference.filter` 链，
+   计划内调用直接向 Mock 取桩并返回，不发起真实 RPC。首版只支持
+   `-javaagent` 形态（v4.21）。
 
 ## 模块
 
@@ -9,12 +15,13 @@ Java agent 在出站 HTTP 客户端调用前改写 URL，把请求定向到引�
 |---|---|
 | `astsight-agent-core` | `premain`、admin 路由表拉取、路由匹配、心跳、适配器注册表、失败关闭判定 |
 | `astsight-agent-http` | OkHttp / Feign / RestTemplate / Apache HttpClient 4/5 适配器（ASM 织入 + 反射 bridge） |
+| `astsight-agent-dubbo` | Dubbo 消费端 Filter、`DubboBridge`、Filter 注入器（`defineClass` 进应用类加载器） |
 | `astsight-agent` | 最终 shaded jar，入口 `io.astsight.agent.core.AstSightAgent` |
 
-字节码目标为 JDK 8；构建使用 JDK 8+（当前在 JDK 26 上验证，实测运行矩阵
-仍待补 JDK 8/11/17/21）。ASM、ByteBuddy（预留给 Dubbo 等后续 adapter）与
-Jackson 打进 shaded jar；OkHttp、Feign、Spring 均为 `provided`，不随 agent
-分发。
+字节码目标为 JDK 8；构建使用 JDK 8+。HTTP adapter 的运行矩阵已在
+JDK 8/11/17/21/26 上实测；Dubbo 目前只在 JDK 26 + Dubbo 2.7.22 上验证。
+ASM、ByteBuddy 与 Jackson 打进 shaded jar；OkHttp、Feign、Spring、Dubbo
+均为 `provided`，不随 agent 分发。
 
 所有 adapter 都使用裸 ASM 而非 ByteBuddy Advice：Spring Boot fat jar 由
 `LaunchedURLClassLoader` 加载应用依赖时，ByteBuddy 解析方法签名会尝试从
@@ -134,8 +141,7 @@ Mock，不建立 TLS、不安装测试 CA、不做 MITM。
 明确的非目标：WebClient/Reactor、使用自有传输或 shaded/relocated HTTP
 客户端的第三方 SDK、JDK 11 `HttpClient`、`HttpURLConnection`、
 async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 HTTP
-边界统一改写，计划期标 `unsupported`，不会“看起来支持、实际透传”。Dubbo
-仍按原方案走 Filter + ByteBuddy。
+边界统一改写，计划期标 `unsupported`，不会“看起来支持、实际透传”。
 
 可选端到端测试（默认跳过）：
 
@@ -152,9 +158,63 @@ async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 
 - `engine/tests/integration/test_java_agent_h2_prior_knowledge_e2e.py`：h2c 负例。
   OkHttp `Protocol.H2_PRIOR_KNOWLEDGE` 直连 Mock，断言改写发生、SUT 显式失败、
   真实下游 0 连接（零透传）。
+- `engine/tests/integration/test_java_agent_dubbo_e2e.py`：Dubbo 消费端 Filter，
+  验证取桩返回 DTO、未绑定失败关闭、计划外放行（详见下一节）。
 
-以上均已实测通过；版本矩阵在 JDK 8/11/17/21/26 上共 80 个 JDK×客户端组合
-全部通过，Spring Boot 样例在 JDK 17/21/26 通过。
+以上 HTTP 相关用例均已实测通过；版本矩阵在 JDK 8/11/17/21/26 上共 80 个
+JDK×客户端组合全部通过，Spring Boot 样例在 JDK 17/21/26 通过。Dubbo e2e
+在 Dubbo 2.7.22 + JDK 26 通过。
+
+## Dubbo 消费端 Filter
+
+`astsight-agent-dubbo` 把 `AstSightDubboFilter` 注册为 Dubbo 消费端 Filter
+（SPI 名 `astSightMock`，`@Activate(group = "consumer")`）。agent jar 在系统
+类加载器，Filter 必须在应用类加载器里才认得 Dubbo 类型，所以注入方式是：
+监听 `org/apache/dubbo/common/extension/ExtensionLoader` 的加载，反射调用该
+加载器的 `ClassLoader#defineClass` 定义 Filter 字节（JDK 9+ 先
+`Instrumentation.redefineModule` 打开 `java.lang`）。不增强 Dubbo 内部类，
+也不使用 `URLClassLoader#addURL` 或动态代理。
+
+它注册在 `astsight-agent` 的分发 jar 里，随 `-javaagent` 一起生效。注入的
+Filter 只引用 Dubbo 类型和系统类加载器里的 `DubboBridge`；bridge 对
+`Invoker`/`Invocation`/`URL`/`Result`/`AsyncRpcResult` 全走反射。
+
+调用路径：
+
+- `dep_id` 形如 `dubbo:<接口>#<方法>?group=<g>&version=<v>`（空参数省略）；
+  泛化调用从 `args[0]`/`args[1]` 取接口和方法名，并读取 `interface` attachment。
+- 计划内调用向 `POST /_admin/dubbo/invoke` 取桩，Mock 按会话绑定返回
+  `{route_key, dep_id, branch, body, delay_ms}`；返回体按接口方法的
+  `getGenericReturnType()` 用 Jackson 构造，void 返回 null。
+- 计划内取桩失败、未绑定、分支缺失、admin 不可达：抛 `RpcException`（消息带
+  `mock_*` 子码），真实调用 0 次。
+- 路由快照已加载且该 dep 不在计划内：调用下一个 Invoker 放行，不产生证据。
+- agent 未激活：`agent_not_active`，同样失败关闭，不静默透传。
+
+证据写入 `mock_calls.jsonl`：`adapter=dubbo-filter`、`mode=agent_filter`、
+`original_path=dubbo:<接口>#<方法>`。心跳的 `dubbo` 块上报
+`installed / version / filter_instantiated / filter_hits / passthrough /
+errors / serialization_verified`，其中 `serialization_verified` 固定为
+`false`（首版不校验序列化保真）。
+
+**首版范围**：只支持 `-javaagent` 形态、同步调用、typed DTO；实测组合只有
+Dubbo 2.7.22 + JDK 26。classpath + `dubbo.consumer.filter` 形态、本地心跳
+文件、异步/oneway、真实泛化调用、JDK 8/11/17/21 与 Dubbo 3.x 均未实现或未
+验证，画像期按 `unsupported` 处理。
+
+端到端测试默认跳过，启用方式：
+
+```bash
+cd java
+mvn -pl astsight-agent -am -DskipTests clean package
+# 生成 target/dubbo-classpath.txt（2.7.22 及其依赖）
+cd ../engine
+ASTSIGHT_JAVA_AGENT_E2E=1 python -m pytest tests/integration/test_java_agent_dubbo_e2e.py -q
+```
+
+样例 `java/samples/DubboFilterSample.java` 不启动注册中心与 provider：它经
+Dubbo SPI 取出 Filter，对计数假 Invoker 调用，分别验证取桩成功、未绑定失败
+关闭与计划外放行。
 
 ## 已知边界
 
@@ -168,3 +228,6 @@ async-http-client、Apache HttpClient 4.0–4.2 与 HC5 async。它们无法在 
 - HTTP/2 prior-knowledge（h2c）不支持：Mock 只讲 HTTP/1.1，改写后的 h2c
   请求会显式失败；负例 e2e 验证此时真实下游 0 连接，不会悄悄回落。
 - 签名、pinning、连接池复用、重定向与异步链路的副作用尚未验证。
+- Dubbo Filter 首版只覆盖 `-javaagent` 形态、同步调用与 typed DTO，实测组合
+  仅 Dubbo 2.7.22 + JDK 26；`serialization_verified` 固定为 `false`，不宣称
+  序列化保真。classpath 形态、异步/oneway、泛化调用与 Dubbo 3.x 未验证。

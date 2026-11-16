@@ -28,7 +28,7 @@ from .plan import (
     validate_mock_plan,
 )
 from .routes import RouteEntry, RouteResolution, RouteTable
-from .server import MockHttpServer, MockLimits, MockResponseError
+from .server import DubboRouteEntry, MockHttpServer, MockLimits, MockResponseError
 from .sessions import SessionError, SessionManager
 
 __all__ = [
@@ -37,6 +37,7 @@ __all__ = [
     "DepIdEntry",
     "DepIdError",
     "DepIdPlan",
+    "DubboRouteEntry",
     "MockEvidenceWriter",
     "MockHttpServer",
     "MockLimits",

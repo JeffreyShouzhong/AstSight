@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（v4.20，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例）
+# AstSight — 能力设计规格说明书（v4.21，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例、v4.21 Dubbo 消费端 Filter 首版）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -1289,6 +1289,11 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 #### C3.5.3 Dubbo 下游 Mock：agent + ByteBuddy + Filter（v4.3）
 
 > 本节把 v4.2 的“SUT → Dubbo 下游不支持 Mock”改为支持。注入方式是 **Java agent + ByteBuddy（Attach / classloader 注入）+ Dubbo `Filter` SPI**，不部署 Mock Provider、不做注册中心替身。
+>
+> **实现注记（v4.21）**：首版实际未用 ByteBuddy，而是监听 `ExtensionLoader`
+> 加载后用 `ClassLoader#defineClass` 把 Filter 定义进应用类加载器（见下文
+> “v4.21 实现状态”）；上面的 ByteBuddy 表述保留为早期设计口径，运行期 attach
+> 也未实现。
 
 **边界（先划清）**：
 
@@ -1348,7 +1353,27 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 | 形态 | 做法 | 适用 |
 |---|---|---|
 | `-javaagent`（主推） | SUT 启动参数加 agent，框架自行控制 | AstSight 拉起 SUT 的常规场景 |
-| classpath + 配置 | agent jar 进 classpath，配 `dubbo.consumer.filter=astSightMock` + `-Dastsight.mock.heartbeat=<abs path>`（缺则 `agent_not_active`，不猜路径） | 禁止 agent 或已有固定启动脚本的环境 |
+| classpath + 配置 | agent jar 进 classpath，配 `dubbo.consumer.filter=astSightMock` + `-Dastsight.mock.heartbeat=<abs path>`（缺则 `agent_not_active`，不猜路径） | 禁止 agent 或已有固定启动脚本的环境；**v4.21 预留，尚未实现** |
+
+> **v4.21 实现状态（2026-11-16）**：
+>
+> - 只支持 `-javaagent` 形态。Filter 类在 `ExtensionLoader` 首次加载时由 agent
+>   通过 `ClassLoader#defineClass` 定义进应用类加载器（JDK 9+ 先用
+>   `Instrumentation.redefineModule` 打开 `java.lang`），不增强 Dubbo 内部类。
+> - 取桩走 `POST /_admin/dubbo/invoke`：按 `dep_id`
+>   （`dubbo:接口#方法?group=&version=`）精确命中，复用会话绑定；返回
+>   `{route_key, dep_id, branch, body, delay_ms}`。失败子码与本节一致。
+> - 证据行写进 `mock_calls.jsonl`：`adapter=dubbo-filter`、`mode=agent_filter`、
+>   `method` 为 RPC 方法名、`original_path=dubbo:接口#方法`。
+> - 心跳在 `MockAgent.dubbo` 块上报
+>   `installed / version / filter_instantiated / filter_hits / passthrough /
+>   errors / serialization_verified`；`serialization_verified` 固定为 `false`。
+> - 放行边界：路由快照已加载且 dep 不在计划内才调用下一个 Invoker；计划内
+>   取桩失败抛 `RpcException`，真实调用 0 次；agent 未安装则失败关闭
+>   （`agent_not_active`），不静默透传。
+> - classpath 形态、本地心跳文件、异步/oneway 专门用例、泛化调用实测、JDK
+>   8/11/17/21 与 Dubbo 3.x 兼容矩阵：**未实现或未验证**，按 `unsupported`
+>   处理。当前唯一实测格子：Dubbo 2.7.22 + JDK 26（本机）。
 
 **失败子码**：
 
@@ -1382,6 +1407,7 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 | DTO 形态 | typed DTO / 泛化调用（`GenericService`）/ 重载方法 |
 
 - **判定口径**：“在 2.7+ 范围内”≠“已验证”：只有矩阵内且实测通过的组合才允许绑定；矩阵外组合在 A4.5/C4 阶段就标 `unsupported`，不生成 Mock 绑定，也不在运行期试探。新增组合先补实测再写进矩阵。
+- **v4.21 已实测**：Dubbo 2.7.22 + JDK 26 + 同步调用 + typed DTO（`verified`）。其余格子尚未实测，不得当作已支持。
 
 **`agent_not_active` 探测：本地心跳文件（定稿）**
 
@@ -1610,7 +1636,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 - **失败关闭（adapter 级）**：`AgentRuntime.isPlanned` 区分“计划内未命中/歧义/未知”与计划外 host；计划内请求若 `rewrite` 返回未改写或 bridge 抛异常，adapter 必须抛 `AgentRewriteException` 让本次调用失败，绝不返回原始请求透传到真实下游。计划外主机原样放行并计数。
 - **HTTPS**：仅该 dep 选 `agent_rewrite` 时允许 `https://` 目标；改写后为 `http://`，不建立 TLS。客户端拒绝 scheme 变化、URL 不可改或改写后仍需 TLS 的，标 `agent_rewrite_unsupported`。
 - **证据**：仍只写 `mock_calls.jsonl`；`MockCall` 增加 `adapter`、`mode="agent_rewrite"`、`original_host`。未命中由 Mock 服务的 `/_agent/unmatched` 统一记录，不新增第二份 agent 日志。
-- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定；ByteBuddy 预留给 Dubbo）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate / Apache HC 4/5，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（后续 Filter 接入，共用 core）。字节码目标 JDK 8，实测 JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar、`manifest.json`（版本/协议号/sha256/大小）与 RECORD），由 `tools/build_agent_wheel.py` 可复现构建，运行期不下载；引擎按 环境变量 → wheel → 仓库 顺序解析并精确校验，缺 jar/校验和/版本不符报 `injection_agent_unavailable:<dep>:<reason>`。
+- **分发与实现**：`java/astsight-agent-core`（premain、心跳、admin client、route 匹配、adapter 注册表、失败关闭判定）、`java/astsight-agent-http`（OkHttp / Feign / RestTemplate / Apache HC 4/5，ASM + 反射 bridge）、`java/astsight-agent-dubbo`（消费端 Filter、`DubboBridge`、`defineClass` 注入器，`dubbo-rpc-api` 为 `provided`）。HTTP 部分字节码目标 JDK 8，实测 JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；Dubbo 首版实测仅 2.7.22 + JDK 26；jar 以独立纯 Python wheel `astsight-java-agent` 分发（含 jar、`manifest.json`（版本/协议号/sha256/大小）与 RECORD），由 `tools/build_agent_wheel.py` 可复现构建，运行期不下载；引擎按 环境变量 → wheel → 仓库 顺序解析并精确校验，缺 jar/校验和/版本不符报 `injection_agent_unavailable:<dep>:<reason>`。
 - **画像前提（v4.18）**：Java 的 OkHttp / Feign / RestTemplate / Apache HC 调用点在 HTTPS 下仍要保留为 dep（`build_dep_id_plan(https_call_sites=...)`），否则计划层看不到而 `agent_rewrite` 不可达；其余语言与 WebClient / JDK HttpClient 继续 `tls_not_supported`。OkHttp `Request.Builder` 未写方法时按 GET 记录。
 - **HTTP/2 prior-knowledge（v4.20）**：Mock 与 agent 只处理 HTTP/1.1，h2c 不建设。
   agent 的 URL 改写与客户端协议无关，h2c 请求同样改写为 `/_dep/<route_key>`；
@@ -1618,7 +1644,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
   退出）且真实下游 0 连接，不允许悄悄回落或把该失败当用例通过；负例 e2e
   `test_java_agent_h2_prior_knowledge_e2e.py` 固定这一行为。
 - **匹配边界（v4.19）**：同一 host + method 下字面量路径优先于 `{}` 模板（`/orders/7` 命中字面量路由，`/orders/8` 才落到 `/orders/{}`）；两个字面量或两个模板同时命中时仍是 `mock_route_ambiguous` → `/_agent/unmatched` 502，零透传，要求画像消歧；不做更细的模板特异性排序。
-- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo Filter 后续接入同一 core；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；剩余项（Dubbo P3）见 `doc/决策记录.md` §17「后续工作」。
+- **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo 消费端 Filter 首版已接入同一 core（`-javaagent` + 会话取桩 + 零真实调用 e2e，2026-11-16；版本矩阵与 classpath 形态待补）；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；Dubbo 剩余项（JDK/Dubbo 版本矩阵、异步/oneway/泛化、classpath 形态）见 `doc/决策记录.md` §3「首版实现」与 §17「后续工作」。
 
 **桩响应模型**：
 

@@ -509,7 +509,7 @@ State（全局共享状态）：
 | 造数器 | C5b | 否 | catalog 校验、fixtures → 按方言参数化 SQL、SQLite/PostgreSQL/MySQL apply/teardown |
 | C5 语义适配器 | C5a/C5b | 是 | 字段业务语义、候选业务态/取值；只能引用 catalog 中的表/列/枚举，不输出 SQL |
 | Mock 编排器 | C3.5 | 否 | 语义模板、Mock 会话（session）与出站隔离 |
-| Mock Agent | C3.5.3/C3.5.5 | 否 | agent 加载（HTTP 用 ASM 织入 + 反射 bridge，Dubbo 用 ByteBuddy + Filter）、心跳自检；只拦截 SUT 出站调用 |
+| Mock Agent | C3.5.3/C3.5.5 | 否 | agent 加载（HTTP 用 ASM 织入 + 反射 bridge，Dubbo 用消费端 Filter + defineClass 注入）、心跳自检；只拦截 SUT 出站调用 |
 | 执行器 | C7 | 否 | 执行编排子图（状态机+单用例管道+Mock 会话租约），详见 5.1 |
 | 报告器 | C7.4 | 否 | 归因合并、门禁判定 |
 
@@ -652,16 +652,16 @@ drain（默认 200ms）→ DELETE /_admin/sessions/{id} → 释放 lease
    └─ 超过 ttl_ms → mock_session_expired（告警）
 ```
 
-**Dubbo 下游（agent + ByteBuddy + Filter）**：
+**Dubbo 下游（agent + Filter）**：
 
 ```
 SUT 启动（AstSight 拉起）
-   │  -javaagent:astsight-agent.jar（或 classpath + dubbo.consumer.filter）
+   │  -javaagent:astsight-agent.jar（classpath + dubbo.consumer.filter 未实现）
    ▼
-agent：ByteBuddy Agent 加载 → filter jar 追加进 classloader
+agent：ExtensionLoader 加载时反射 defineClass，把 Filter 定义进应用类加载器
    │  Filter 经 Dubbo SPI @Activate(group=CONSUMER) 进入消费端调用链
    ▼
-启动自检：读本地心跳文件（sut_id/namespace/admin_endpoint/pid/jvm_start_time 与本 run 一致、心跳新鲜、Filter 已实例化）+ 版本匹配
+启动自检：首版读 admin 心跳的 dubbo 块（installed/version/filter_instantiated）；本地心跳文件未实现 + 版本匹配
    │  缺失/残留/过期 → agent_not_active；身份不符 → mock_identity_mismatch，整批阻断
    ▼
 用例执行：SUT 调下游 → Directory 选中 provider → Filter 命中会话

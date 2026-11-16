@@ -40,6 +40,12 @@ public final class AgentRuntime {
     private final Map<String, Long> passthroughHosts = new ConcurrentHashMap<String, Long>();
     private final Map<String, AdapterState> adapters = new ConcurrentHashMap<String, AdapterState>();
     private final Set<String> unsupported = ConcurrentHashMap.newKeySet();
+    private final AtomicLong dubboFilterInstantiated = new AtomicLong();
+    private final AtomicLong dubboFilterHits = new AtomicLong();
+    private final AtomicLong dubboPassthrough = new AtomicLong();
+    private final AtomicLong dubboErrors = new AtomicLong();
+    private volatile boolean dubboInstalled;
+    private volatile String dubboVersion;
     private volatile RouteTableSnapshot routes;
     private volatile String lastError;
 
@@ -203,6 +209,53 @@ public final class AgentRuntime {
         note("rewrite failed [" + adapterId + "]: " + failure);
     }
 
+    // ----------------------------------------------------------- Dubbo Filter
+
+    public String adminUrl() {
+        return options.adminUrl();
+    }
+
+    public String token() {
+        return options.token();
+    }
+
+    public String sutId() {
+        return options.sutId();
+    }
+
+    public boolean isDubboPlanned(String depId) {
+        RouteTableSnapshot snapshot = routes;
+        return snapshot != null && snapshot.isDubboPlanned(depId);
+    }
+
+    public boolean dubboRoutesReady() {
+        return routes != null;
+    }
+
+    public void dubboModuleInstalled() {
+        dubboInstalled = true;
+    }
+
+    public void dubboFilterInstantiated(String version) {
+        dubboFilterInstantiated.incrementAndGet();
+        if (version != null && !version.isEmpty()) {
+            dubboVersion = version;
+        }
+    }
+
+    public void dubboFilterHit() {
+        dubboFilterHits.incrementAndGet();
+    }
+
+    public void dubboPassthrough() {
+        dubboPassthrough.incrementAndGet();
+    }
+
+    public void dubboError(String message) {
+        dubboErrors.incrementAndGet();
+        note("dubbo: " + message);
+    }
+
     void startBackground() {
         if (!backgroundStarted.compareAndSet(false, true)) {
             return;
@@ -280,6 +333,22 @@ public final class AgentRuntime {
         ObjectNode hosts = node.putObject("passthrough_hosts");
         for (Map.Entry<String, Long> entry : passthroughHosts.entrySet()) {
             hosts.put(entry.getKey(), entry.getValue());
+        }
+        if (dubboInstalled) {
+            ObjectNode dubbo = node.putObject("dubbo");
+            dubbo.put("installed", true);
+            String version = dubboVersion;
+            if (version == null) {
+                dubbo.putNull("version");
+            } else {
+                dubbo.put("version", version);
+            }
+            dubbo.put("filter_instantiated", dubboFilterInstantiated.get());
+            dubbo.put("filter_hits", dubboFilterHits.get());
+            dubbo.put("passthrough", dubboPassthrough.get());
+            dubbo.put("errors", dubboErrors.get());
+            // Filter 在进程内构造响应对象，跳过 Hessian2 链路。
+            dubbo.put("serialization_verified", false);
         }
         return node.toString();
     }

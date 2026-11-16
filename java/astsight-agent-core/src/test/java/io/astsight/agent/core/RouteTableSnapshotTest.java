@@ -5,7 +5,9 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 路由快照匹配优先级：host+method+path > 字面量路径优先 > 唯一 method+path > 歧义/未命中。
@@ -86,5 +88,18 @@ final class RouteTableSnapshotTest {
         RouteTableSnapshot.Match match = table.resolve("GET", "other", "/orders/7x");
 
         assertEquals(RouteTableSnapshot.Kind.PASSTHROUGH, match.kind());
+    }
+
+    @Test
+    void dubboDepsAreParsedForPlannedChecks() throws Exception {
+        RouteTableSnapshot table = RouteTableSnapshot.parse(
+                "{\"endpoint\":\"http://127.0.0.1:9\","
+                        + "\"routes\":[],"
+                        + "\"dubbo_deps\":[\"dubbo:com.acme.OrderService#create?group=order\"]}",
+                "http://127.0.0.1:9");
+
+        assertTrue(table.isDubboPlanned("dubbo:com.acme.OrderService#create?group=order"));
+        assertFalse(table.isDubboPlanned("dubbo:com.acme.OrderService#cancel"));
+        assertFalse(table.isDubboPlanned(null));
     }
 }

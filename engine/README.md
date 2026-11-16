@@ -44,9 +44,9 @@ v4.2 的形态范围：HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+，走独立
 Thrift 不考虑。C2 只感知被测仓库的**提供方**端点（HTTP 客户端/`@DubboReference`/gRPC stub
 属消费方），并做 base/target 契约 diff 覆盖纯契约变更；同一实现多协议暴露时保留全部端点，
 默认 primary 全量 + alias 契约冒烟。`unsupported` 端点显式列出，不静默降级；调用 SUT 不使用
-Java agent；v4.3 起 Mock 覆盖 SUT → HTTP 与 Dubbo 2.7+ 下游（Dubbo 走 agent + ByteBuddy +
-Filter，定位为低侵入；SUT → gRPC 下游 v4.3 仍 `mock="unsupported"`，v4.4 决策为 gripmock
-假服务器 + target 重定向，尚未实现）。v4.6 起删除 Feign 特殊支持：HTTP 客户端（含 Feign）
+Java agent；v4.3 起 Mock 覆盖 SUT → HTTP 与 Dubbo 2.7+ 下游（Dubbo 走 agent 注入消费端
+Filter，定位为低侵入；v4.21 首版已落地 `-javaagent` 形态，SUT → gRPC 下游 v4.3 仍
+`mock="unsupported"`，v4.4 决策为 gripmock 假服务器 + target 重定向，尚未实现）。v4.6 起删除 Feign 特殊支持：HTTP 客户端（含 Feign）
 一律按普通出站调用处理，通用机制覆盖不了的下游直接标 `mock="unsupported"` / `unidentified`。
 v4.6.1 起 HTTP Mock 首版只做明文 HTTP，HTTPS 标 `tls_not_supported`；v4.15 起仅在
 Java agent 激活且该 dep 选 `agent_rewrite` 时放开 HTTPS（改写为明文 Mock 端点），
@@ -82,7 +82,7 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
 | `astsight/execute/` C7 | ✅ | JUnit XML、确定性归因、只对环境抖动做有界重试 |
 | `astsight/report/` C7.4 | ✅ | JSON + Markdown；用例库版本、待审、需求覆盖、drift 单列 |
 | `astsight/mock/` C3.5.5 | ◐ 核心+执行链路+语义+计划+启动注入 | `dep_id` 唯一性/`route_key`、Host/路径路由、会话分支、drain、晚到调用归因、会话历史、`mock_not_used`、`mock_calls.jsonl`、内嵌 uvicorn；`mock semantics` 生成契约 `success` + 规则分支（可选 `--draft`/`--llm` 候选）；`run --mock-plan` 管理生命周期、写 `run_manifest.json`/`mock_injection.json`；`mock plan` 从 C3 调用点生成计划草案；`agent run` 用注入清单启动 SUT |
-| `java/`（agent） | ✅ OkHttp/Feign/RestTemplate/直连 HC4+HC5 | `astsight-agent-core` + `astsight-agent-http`：premain、admin 路由表拉取、心跳、ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、HC4/HC5 `InternalHttpClient#doExecute` 的 URL 改写、`/_agent/unmatched` 零透传、HTTPS 改写为明文；计划内改写失败失败关闭；普通 JVM（OkHttp、HC4+HC5）与 Spring Boot 3.5.6 fat jar 均已联调通过；WebClient/自有传输 SDK/JDK HttpClient 明确不支持 |
+| `java/`（agent） | ✅ HTTP 五客户端 + Dubbo Filter 首版 | `astsight-agent-core` + `astsight-agent-http` + `astsight-agent-dubbo`：premain、admin 路由表拉取、心跳、ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、HC4/HC5 `InternalHttpClient#doExecute` 的 URL 改写、`/_agent/unmatched` 零透传、HTTPS 改写为明文；Dubbo 消费端 Filter 在 `ExtensionLoader` 加载时 `defineClass` 注入应用类加载器，按会话向 `/_admin/dubbo/invoke` 取桩；计划内失败关闭；普通 JVM（OkHttp、HC4+HC5）、Spring Boot 3.5.6 fat jar 与 Dubbo 2.7.22 样例均已联调通过；WebClient/自有传输 SDK/JDK HttpClient 明确不支持 |
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
 | `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
@@ -586,6 +586,48 @@ ASTSIGHT_JAVA_AGENT_FLOW_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK17+> \
 矩阵已实测 JDK 8/11/17/21/26 × 16 个客户端版本（OkHttp 3.14.9 / 4.12.0 /
 5.5.1；Feign 10.12 / 11.10 / 12.5 / 13.5；HC4 4.3.6 / 4.4.1 / 4.5.14；
 HC5 5.0 / 5.1 / 5.2.3 / 5.3.1 / 5.4.1 / 5.6.5）共 80 个组合全部通过。
+
+### Dubbo 消费端 Filter（v4.21 首版）
+
+`java/astsight-agent-dubbo` 把 Filter 注入 Dubbo 的 `reference.filter` 链。agent
+jar 在系统类加载器，Filter 必须在应用类加载器里才认得 Dubbo 类型，因此 agent
+监听 `org/apache/dubbo/common/extension/ExtensionLoader` 的加载，反射调用该
+加载器的 `ClassLoader#defineClass` 定义 Filter 字节（JDK 9+ 先
+`Instrumentation.redefineModule` 打开 `java.lang`）；不增强 Dubbo 内部类。
+
+- 路由表：`GET /_admin/agent/routes` 的响应新增 `dubbo_deps`（计划内
+  `dep_id` 列表），agent 用它判断某个 RPC 是否计划内。
+- 取桩：计划内调用 `POST /_admin/dubbo/invoke`，请求
+  `{sut_id, dep_id, service, method, parameter_types, generic}`，Mock 按会话
+  绑定返回 `{schema_version, route_key, dep_id, branch, body, delay_ms}`。
+  `dep_id` 形如 `dubbo:<接口>#<方法>?group=<g>&version=<v>`（空参数省略）。
+- 失败关闭：未绑定、分支缺失、返回体不可构造、会话缺失/过期、admin 不可达
+  都抛 `RpcException`，真实调用 0 次；错误子码复用 `mock_unexpected_dep`、
+  `mock_branch_not_found`、`mock_session_missing/expired/late_call`、
+  `mock_response_invalid`、`agent_not_active`。
+- 放行：路由快照已加载且该 dep 不在 `dubbo_deps` 中，才调用下一个 Invoker
+  （无 Mock 证据）；`mock_dep_unplanned` 同样放行。
+- 证据：`adapter=dubbo-filter`、`mode=agent_filter`、`method` 为 RPC 方法名、
+  `original_path=dubbo:<接口>#<方法>`。
+- 心跳：`MockAgent.dubbo` 块上报 `installed / version / filter_instantiated /
+  filter_hits / passthrough / errors / serialization_verified`；
+  `serialization_verified` 固定 `false`。
+
+```bash
+# 先构建 agent 与 Dubbo classpath（package 阶段生成 dubbo-classpath.txt）
+cd java && mvn -pl astsight-agent -am -DskipTests clean package
+
+cd ../engine
+ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_dubbo_e2e.py -q
+# 单元测试：Mock 取桩入口
+PYTHONPATH=. python -m pytest tests/test_mock_dubbo.py -q
+```
+
+首版范围：只支持 `-javaagent` 形态、同步调用与 typed DTO；实测组合只有
+Dubbo 2.7.22 + JDK 26。classpath + `dubbo.consumer.filter` 形态、本地心跳
+文件、异步/oneway、真实泛化调用、JDK 8/11/17/21 与 Dubbo 3.x 未实现或未
+验证，计划期按 `unsupported` 处理。
 
 ### 下游调用点识别与计划草案（P1）
 
