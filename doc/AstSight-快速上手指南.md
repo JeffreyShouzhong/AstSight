@@ -277,12 +277,13 @@ PYTHONPATH=. python -m astsight cases approve \
 
 ```bash
 # 6.1 数据目录（DDL → 表/字段/状态）
-# --ruleset 折叠规则常量，--code 扫描 Java/Python/TS 枚举，都是可选的确定性增强
+# 以下三项都是可选的确定性增强：规则常量、代码枚举/常量组、跨表状态骨架
 PYTHONPATH=. python -m astsight data catalog \
   --project /path/to/your-project \
   --ddl /path/to/your-project/schema.sql \
   --ruleset /path/to/your-project/ruleset.json \
-  --code /path/to/your-project/src
+  --code /path/to/your-project/src \
+  --rule-states
 
 # 6.2 逐用例造数计划
 PYTHONPATH=. python -m astsight data plan \

@@ -48,6 +48,7 @@ from .reflect import ReflectError, Reflection, reflect_database
 from .render import RenderError, quote_identifier, render_inserts, render_plan, render_teardown
 from .seed import SeedData, SeedError, load_seed
 from .semantics import SemanticApplyResult, SemanticDraft, apply_semantics
+from .states import StateProposal, propose_rule_states
 from .validate import (
     check_type,
     validate_catalog,
@@ -83,6 +84,7 @@ __all__ = [
     "SeedError",
     "SemanticApplyResult",
     "SemanticDraft",
+    "StateProposal",
     "apply_bundle",
     "apply_plan",
     "apply_semantics",
@@ -102,6 +104,7 @@ __all__ = [
     "parse_ddl",
     "parse_enum_values",
     "parse_sqlite_url",
+    "propose_rule_states",
     "reflect_database",
     "scan_code_enums",
     "semantic_hint",

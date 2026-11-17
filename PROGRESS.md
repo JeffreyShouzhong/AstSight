@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（前四轮已提交；本轮代码常量组在工作区）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近六个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -23,7 +23,8 @@
 > 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射，
 > 并会从注释、DBML Enum note、规则常量、Java/Python/Go/TS 枚举与
 > Java `static final`/Go `const`/TS `as const` 常量组确定性地给出取值语义候选
-> （每条带 `source`）。公式抽取已有 20 条离线评估集与脚本，v10 基线
+> （每条带 `source`）。`--rule-states` 还能把同一条件下的多表规则约束组合成
+> 跨表状态骨架，占位值逐条写入 gaps。公式抽取已有 20 条离线评估集与脚本，v10 基线
 > 14/14 严格命中、P/R/表达式准确率均为 1.00；下一步用评估结果决定哪些公式值得
 > 进规则层。
 
@@ -77,6 +78,26 @@
 | 数据目录语义候选 | ✅ 2026-11-17 | `data/annotations.py`：注释关键词补 `semantic_type`；注释「值=含义」、DBML Enum note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量进入 `value_semantics`；表注释写入 `purpose`；冲突候选丢弃并告警；`data catalog --ruleset` |
 | 代码枚举常量 | ✅ 2026-11-17 | `data/codeconst.py`：静态扫描 Java/Python/TS 枚举（Python 用 ast，不执行代码）；按数据库枚举值、注释点名、表名+状态/类型命名三种路径映射；`ValueSemantics.source` 记录来源；`data catalog --code`；冲突/多候选/类型不符均告警，不猜 |
 | 非枚举常量组 | ✅ 2026-11-17 | 同一扫描器新增 Java `static final`（含 interface 隐式常量）、Go `const`（含 `iota`/简单 `iota` 运算）与 TS `as const` 对象；常量组要求组名以状态/类型/编码等后缀结尾；重复定义取值一致时稳定选一份；`.go` 纳入扫描；测试 473 passed / 37 skipped |
+| 跨表状态候选 | ✅ 2026-11-17 | `data/states.py`：同一条件下覆盖 ≥2 张表的 `eq/in` 约束 → `DataState` 骨架；主键/外键/父表/NOT NULL 用确定性占位值补齐，逐条写 `state_placeholder` gap；复用 `validate_plan_fixtures`，不合法候选丢弃并告警；`data catalog --rule-states`；测试 479 passed / 37 skipped |
+
+## 本轮完成（跨表状态候选，2026-11-17）
+
+1. **候选生成**：新增 `data/states.py`。按 `(规则, condition)` 分组 `eq/in` 约束；
+   字段必须唯一映射到目录列，且同组覆盖至少两张表才生成 `DataState`。
+   `in` 只展开第一个值，其余写入 `state_value_choice` gap。
+2. **确定性补全**：单列主键自动生成（整数 1、文本 `ast_<table>_1`）；单列外键从
+   父表行取值，父表不在状态中且外键非空时自动补父表行；其余 NOT NULL 列按类型/
+   数据库枚举补占位值。所有占位值逐条写 `state_placeholder` gap，明确不是业务事实。
+3. **失败关闭**：复合主键/外键、循环依赖、字段歧义、枚举不符、类型不符、FK 闭包
+   不完整都丢弃候选并写 `rule_state_invalid` / 对应 warning，不把不合法状态写进目录。
+4. **接入**：`build_catalog` 新增 `rule_states` 参数；CLI `data catalog --rule-states`
+   （必须同时给 `--ruleset`）；输出 `rule_states` 计数，目录 `sources.rule_states`
+   记录候选数与占位数；C5a 提示词说明 `rule_*` 状态是骨架，占位值不是业务事实。
+5. **验证**：新增 6 条测试（跨表状态与 FK 闭包、单表不生成、字段歧义、枚举不符、
+   非法候选可见、CLI）；全量 Python **479 passed, 37 skipped**（上轮 473/37，
+   新增 6 条通过）。
+6. **边界**：不做状态机路径、多行组合、跨状态转移；同一条件只生成一条候选；
+   只支持单列主键/外键；占位值必须人工确认或替换。
 
 ## 本轮完成（非枚举常量组，2026-11-17）
 

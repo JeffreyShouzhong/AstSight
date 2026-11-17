@@ -172,7 +172,8 @@ PYTHONPATH=. python -m astsight cases approve \
 PYTHONPATH=. python -m astsight data catalog --project /path/to/project \
   --ddl /path/to/project/schema.sql \
   --ruleset /path/to/project/ruleset.json \
-  --code /path/to/project/src               # 可选：扫描代码枚举/常量组
+  --code /path/to/project/src \
+  --rule-states                              # 后两项可选：代码常量/跨表状态骨架
 PYTHONPATH=. python -m astsight data plan --project /path/to/project \
   --catalog /path/to/project/.astsight/data/data_catalog.json \
   --cases /path/to/project/caseset.json \

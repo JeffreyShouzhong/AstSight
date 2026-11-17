@@ -451,7 +451,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="PATH",
-        help="扫描 Java/Python/TS 枚举常量的目录或文件（可重复）",
+        help="扫描 Java/Python/Go/TS 枚举与常量组的目录或文件（可重复）",
+    )
+    data_catalog.add_argument(
+        "--rule-states",
+        action="store_true",
+        help="按规则跨表约束生成候选 DataState 骨架（需要 --ruleset）",
     )
     data_catalog.add_argument(
         "--out", default=None, help="输出文件或目录（默认 .astsight/data）"
@@ -1264,6 +1269,8 @@ def _data_catalog(args) -> int:
         ruleset = _load_optional_ruleset(project, args.ruleset)
         if args.ruleset and ruleset is None:
             raise ValueError(f"规则库不存在: {args.ruleset}")
+        if args.rule_states and ruleset is None:
+            raise ValueError("--rule-states 需要 --ruleset")
         scan = None
         if args.code:
             from .data import scan_code_enums
@@ -1278,6 +1285,7 @@ def _data_catalog(args) -> int:
             sources=sources,
             ruleset=ruleset,
             code_enums=list(scan.enums) if scan else None,
+            rule_states=args.rule_states,
         )
         if scan and scan.warnings:
             catalog.warnings.extend(scan.warnings)
@@ -1309,6 +1317,11 @@ def _data_catalog(args) -> int:
                 ),
                 "code_enums": len(scan.enums) if scan else 0,
                 "code_files": len(scan.files) if scan else 0,
+                "rule_states": sum(
+                    1
+                    for state in catalog.states
+                    if state.state_key.startswith("rule_")
+                ),
                 "gaps": len(catalog.gaps),
                 "warnings": catalog.warnings,
             },

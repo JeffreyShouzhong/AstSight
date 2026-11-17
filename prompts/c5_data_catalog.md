@@ -15,7 +15,9 @@
     `llm`/`code:<路径>`），带 `rule_keys` 的项说明有规则依据；
   - `purpose` 是表注释，`semantic_type` 已由命名/类型/注释预填。
 - `catalog.foreign_keys[]`：外键关系；
-- `catalog.seed_states[]`：seed 已提供的初始数据状态；
+- `catalog.seed_states[]`：seed 已提供的初始数据状态；`rule_*` 开头的状态是框架
+  从规则跨表约束生成的骨架，`gaps` 里的 `state_placeholder` 值只是占位，不是业务事实，
+  可以修正或补全，但不要当成已确认数据；
 - `rules[]`：已导入的业务规则（含 `rule_key` / `rule_id` / `text`）；
 - `documents[]`：需求原文 section；
 - `schema`：输出 JSON Schema。

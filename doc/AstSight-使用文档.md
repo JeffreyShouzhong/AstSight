@@ -827,7 +827,11 @@ PYTHONPATH=. python -m astsight data catalog \
   取值候选（`rule_keys` 保留依据）；同名列表跨表出现时放弃折叠并告警，不猜表；
 - `--code`：扫描 Java / Python / Go / TypeScript 枚举与常量组的目录或文件（可重复）。
   枚举之外还读 Java `static final`、Go `const` 块和 TS `as const` 对象；默认跳过
-  `node_modules`、`target`、`build`、`dist`、`.venv`、`__pycache__` 等目录。
+  `node_modules`、`target`、`build`、`dist`、`.venv`、`__pycache__` 等目录；
+- `--rule-states`：需要同时给 `--ruleset`。把同一条件下、覆盖两张及以上表的
+  `eq/in` 约束组合成候选 `DataState` 骨架，写入目录的 `states`。主键、外键和
+  其它 NOT NULL 列会用确定性占位值补足，并在 `gaps` 中逐条标记，明确哪些值不是
+  业务事实。
 
 即使不调用模型，目录也会先做一轮确定性语义候选：
 
@@ -851,6 +855,17 @@ PYTHONPATH=. python -m astsight data catalog \
 `code_enum_ambiguous`，不猜。每条候选的 `source` 记录来源，如 `comment`、`dbml`、
 `rule`、`enum`、`llm` 或 `code:src/order_status.ts`。这些候选的证据一律是
 `inferred`；业务含义仍以需求原文与人工审核为准。
+
+跨表状态候选（`--rule-states`）的边界：
+
+- 只处理 `eq/in` 约束；`in` 只展开第一个值，其余写 `state_value_choice` gap；
+- 约束字段必须唯一映射到某张表的某一列，同名跨表出现时写
+  `rule_state_field_ambiguous` 并放弃；
+- 只支持单列主键和单列外键；复合主键/外键、循环依赖会写 `rule_state_invalid`；
+- 主键、外键和被外键牵连的父表由框架补确定性占位值；其它 NOT NULL 列用类型占位，
+  每条都写 `state_placeholder` gap；
+- 生成后逐条跑 `validate_plan_fixtures`（类型、枚举、FK 闭包），不通过就丢弃并告警；
+- 占位值只是“能落库的骨架”，不是业务上正确的数据，必须人工确认或替换。
 
 反射只读 `pg_catalog` / `information_schema` / `sqlite_master`，不导出数据。
 PostgreSQL 需要 `psycopg`，MySQL 需要 `PyMySQL`；成功反射的表会带上主键、唯一约束、

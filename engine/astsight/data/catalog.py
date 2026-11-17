@@ -32,6 +32,7 @@ from .annotations import (
 from .codeconst import CodeEnum, fold_code_enums
 from .ddl import ParsedColumn, ParsedDDL, ParsedTable
 from .seed import SeedData
+from .states import StateProposal, propose_rule_states
 
 CATALOG_SCHEMA_VERSION = 1
 MAX_TABLES = 500
@@ -259,6 +260,7 @@ def build_catalog(
     questions: list[dict[str, Any]] | None = None,
     ruleset: RuleSet | None = None,
     code_enums: list[CodeEnum] | None = None,
+    rule_states: bool = False,
 ) -> DataCatalog:
     warnings = list(ddl.warnings)
     seed = seed or SeedData()
@@ -271,6 +273,10 @@ def build_catalog(
     warnings.extend(fold_rule_constants(tables, ruleset))
     code_fold = fold_code_enums(tables, code_enums or [])
     warnings.extend(code_fold.warnings)
+    state_proposal = (
+        propose_rule_states(tables, ruleset) if rule_states else StateProposal()
+    )
+    warnings.extend(state_proposal.warnings)
     if len(tables) > MAX_TABLES:
         raise ValueError(f"表数量超过上限 {MAX_TABLES}")
     table_index = {table.name: table for table in tables}
@@ -280,6 +286,7 @@ def build_catalog(
     order = _topological_order(table_index, foreign_keys, warnings)
 
     gaps_out = list(gaps or [])
+    gaps_out.extend(state_proposal.gaps)
     for table in tables:
         if not table.primary_key:
             gaps_out.append(
@@ -318,12 +325,25 @@ def build_catalog(
 
     states_out: list[DataState] = []
     seen_states: set[str] = set()
-    for state in [*(states or []), *_seed_states(seed)]:
+    for state in [
+        *(states or []),
+        *state_proposal.states,
+        *_seed_states(seed),
+    ]:
         if state.state_key in seen_states:
             continue
         seen_states.add(state.state_key)
         states_out.append(state)
     sources_out = dict(sources or {})
+    if rule_states:
+        sources_out["rule_states"] = {
+            "proposed": len(state_proposal.states),
+            "placeholders": sum(
+                1
+                for gap in state_proposal.gaps
+                if gap.get("kind") == "state_placeholder"
+            ),
+        }
     if code_enums:
         sources_out["code_enums"] = {
             "files": sorted({enum.path for enum in code_enums}),

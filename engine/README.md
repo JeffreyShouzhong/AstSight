@@ -139,6 +139,9 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
   只能产出 `inferred` 候选；`source` 记录
   `comment/dbml/enum/rule/llm/code:<路径>`。代码枚举/常量组只在数据库值匹配、
   注释点名或「表名+状态/类型」唯一对应时映射，多候选并列时放弃并告警，不猜。
+- **跨表状态只是骨架**：`data catalog --rule-states` 把同一条件下的多表 `eq/in`
+  约束组合成 `DataState`，主键/外键/NOT NULL 用确定性占位值补齐，`gaps` 逐条标记
+  `state_placeholder`；校验不过就丢弃，不把不合法状态写进目录。
 - **Java/Spring 变更感知输出到 API 级**：CodeGraph 原生识别 Spring 路由与方法行区间，
   AstSight 做「diff 行 ∩ 符号区间 → 反向闭包 ∩ 路由」。方法只是中间证据，不是输出单位。
   Java 路由没有源码侧第二来源，证据等级只到 `inferred`；Spring 路由覆盖缺口会进

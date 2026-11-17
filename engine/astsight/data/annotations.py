@@ -257,11 +257,6 @@ def fold_rule_constants(
     if ruleset is None:
         return []
     table_list = list(tables)
-    targets: dict[str, list[tuple[TableCatalog, ColumnCatalog]]] = {}
-    for table in table_list:
-        for column in table.columns:
-            targets.setdefault(column.name.lower(), []).append((table, column))
-    table_index = {table.name: table for table in table_list}
     warnings: list[str] = []
     for rule in ruleset.rules:
         for constraint in rule.constraints:
@@ -269,7 +264,7 @@ def fold_rule_constants(
                 continue
             if not constraint.values:
                 continue
-            matches = _resolve_field(constraint.field, targets, table_index)
+            matches = resolve_field_targets(table_list, constraint.field)
             if not matches:
                 continue
             if len(matches) > 1:
@@ -284,7 +279,7 @@ def fold_rule_constants(
                     continue
                 if len(text) > MAX_VALUE_CHARS:
                     continue
-                value = _coerce_constant(text, column)
+                value = coerce_constant(text, column)
                 if column.enum_values and not any(
                     str(item) == str(value) for item in column.enum_values
                 ):
@@ -300,11 +295,24 @@ def fold_rule_constants(
     return list(dict.fromkeys(warnings))
 
 
-def _resolve_field(
+def column_targets(
+    tables: Iterable[TableCatalog],
+) -> dict[str, list[tuple[TableCatalog, ColumnCatalog]]]:
+    targets: dict[str, list[tuple[TableCatalog, ColumnCatalog]]] = {}
+    for table in tables:
+        for column in table.columns:
+            targets.setdefault(column.name.lower(), []).append((table, column))
+    return targets
+
+
+def resolve_field_targets(
+    tables: Iterable[TableCatalog],
     field: str,
-    targets: dict[str, list[tuple[TableCatalog, ColumnCatalog]]],
-    table_index: dict[str, TableCatalog],
 ) -> list[tuple[TableCatalog, ColumnCatalog]]:
+    """把规则字段解析为目录列；`table.column` 优先，否则按叶子名唯一匹配。"""
+    table_list = list(tables)
+    targets = column_targets(table_list)
+    table_index = {table.name: table for table in table_list}
     raw = (field or "").strip()
     if not raw:
         return []
@@ -321,7 +329,7 @@ def _resolve_field(
     return list(targets.get(leaf.lower(), []))
 
 
-def _coerce_constant(text: str, column: ColumnCatalog) -> Any:
+def coerce_constant(text: str, column: ColumnCatalog) -> Any:
     upper_type = (column.type or "").upper()
     if _INT_RE.match(text) and any(
         token in upper_type for token in ("INT", "SERIAL")
@@ -398,9 +406,12 @@ def merge_value(
 
 __all__ = [
     "MAX_VALUES_PER_COLUMN",
+    "coerce_constant",
+    "column_targets",
     "comment_value_pairs",
     "fold_rule_constants",
     "merge_value",
+    "resolve_field_targets",
     "semantic_hint",
     "value_semantics_for",
 ]
