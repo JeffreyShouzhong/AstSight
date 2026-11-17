@@ -16,6 +16,7 @@ from contracts import (
     CaseLevel,
     CaseStep,
     DataCatalog,
+    DubboCall,
     MockSemantic,
     RequirementDoc,
     RuleAuthority,
@@ -527,7 +528,47 @@ def _check_assert(
         "header": {"exists", "eq", "contains"},
         "body_schema": {"matches"},
         "db_row": {"exists", "absent", "eq", "ne", "gte", "lte", "count_eq"},
+        "rpc_status": {"eq", "ne", "in"},
+        "result_present": {"exists", "absent"},
+        "result_field": {"exists", "eq", "ne", "in", "gte", "lte", "contains"},
+        "error_code": {"eq", "ne", "in", "contains"},
+        "exception_type": {"eq", "ne", "contains"},
+        "error_message": {"eq", "contains"},
     }
+    is_dubbo = str(profile.get("transport") or "http").lower() == "dubbo"
+    http_only = {"status_code", "body_field", "header", "body_schema"}
+    dubbo_only = {
+        "rpc_status",
+        "result_present",
+        "result_field",
+        "error_code",
+        "exception_type",
+        "error_message",
+    }
+    if is_dubbo and assertion.kind in http_only:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.transport_mismatch",
+                f"Dubbo 用例不能使用 HTTP 断言类型: {assertion.kind}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    if not is_dubbo and assertion.kind in dubbo_only:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.transport_mismatch",
+                f"HTTP 用例不能使用 Dubbo 断言类型: {assertion.kind}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
     if assertion.kind not in matrix:
         result.errors.append(
             _issue(
@@ -591,6 +632,15 @@ def _check_assert(
         _check_db_assert(
             assertion,
             data_catalog=data_catalog,
+            case_key=case_key,
+            endpoint=endpoint,
+            path=path,
+            result=result,
+        )
+        return
+    if assertion.kind in dubbo_only:
+        _check_dubbo_assert(
+            assertion,
             case_key=case_key,
             endpoint=endpoint,
             path=path,
@@ -730,6 +780,115 @@ def _check_assert(
                         path=path,
                     )
                 )
+
+
+_DUBBO_RPC_STATUSES = {
+    "OK",
+    "TIMEOUT",
+    "SERIALIZATION",
+    "NETWORK",
+    "FORBIDDEN",
+    "NO_PROVIDER",
+    "RPC_EXCEPTION",
+    "BAD_REQUEST",
+}
+
+
+def _check_dubbo_assert(
+    assertion: Any,
+    *,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    kind = assertion.kind
+    op = assertion.op
+    expect = assertion.expect
+    if kind == "rpc_status":
+        if assertion.target:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.rpc_status_target",
+                    "rpc_status 断言不接受 target",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        values = expect if isinstance(expect, list) else [expect]
+        if not values or not all(isinstance(item, str) for item in values):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.rpc_status_expect",
+                    "rpc_status 的 expect 必须是字符串或字符串数组",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        unknown = [item for item in values if item not in _DUBBO_RPC_STATUSES]
+        if unknown:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.rpc_status_unknown",
+                    f"未知 rpc_status: {unknown}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        return
+    if kind == "result_present":
+        if assertion.target:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.result_present_target",
+                    "result_present 断言不接受 target",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if expect is not None:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.result_present_expect",
+                    "result_present 不需要 expect",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        return
+    if kind == "result_field":
+        if not assertion.target:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.target_missing",
+                    "result_field 断言缺少 target",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    if op != "exists" and expect is None:
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.expect_missing",
+                f"{kind}/{op} 缺少 expect",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
 
 
 def _check_schema_assert(
@@ -1388,6 +1547,157 @@ def _check_assert_strength(
         )
 
 
+def _hydrate_dubbo_call(
+    draft_case: DraftCase,
+    *,
+    profile: dict[str, Any],
+) -> DraftCase:
+    """接口/方法/参数类型以画像为准；草案只保留取值与附件。"""
+    call = draft_case.dubbo.model_copy(deep=True) if draft_case.dubbo else DubboCall()
+    updates: dict[str, Any] = {}
+    if not call.interface:
+        updates["interface"] = str(profile.get("service") or "")
+    if not call.method:
+        updates["method"] = str(profile.get("method") or "")
+    if not call.parameter_types:
+        updates["parameter_types"] = list(profile.get("parameter_types") or [])
+    if call.group is None:
+        updates["group"] = profile.get("group") or None
+    if call.version is None:
+        updates["version"] = profile.get("version") or None
+    if not call.url:
+        updates["url"] = profile.get("direct_url")
+    if call.target_port is None:
+        updates["target_port"] = profile.get("protocol_port")
+    if updates:
+        call = call.model_copy(update=updates)
+    return draft_case.model_copy(update={"dubbo": call})
+
+
+def _check_dubbo_call(
+    draft_case: DraftCase,
+    *,
+    profile: dict[str, Any],
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    call = draft_case.dubbo
+    if call is None:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.call_missing",
+                "transport=dubbo 的用例必须提供 dubbo 调用参数",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+        return
+    expected_service = str(profile.get("service") or "")
+    expected_method = str(profile.get("method") or "")
+    expected_types = list(profile.get("parameter_types") or [])
+    if expected_service and call.interface != expected_service:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.interface_mismatch",
+                f"dubbo.interface={call.interface!r} 与画像 {expected_service!r} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if expected_method and call.method != expected_method:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.method_mismatch",
+                f"dubbo.method={call.method!r} 与画像 {expected_method!r} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if expected_types and call.parameter_types != expected_types:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.parameter_types_mismatch",
+                f"dubbo.parameter_types={call.parameter_types!r} 与画像 "
+                f"{expected_types!r} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    expected_group = str(profile.get("group") or "")
+    expected_version = str(profile.get("version") or "")
+    if (call.group or "") != expected_group:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.group_mismatch",
+                f"dubbo.group={call.group!r} 与画像 {expected_group!r} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if (call.version or "") != expected_version:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.version_mismatch",
+                f"dubbo.version={call.version!r} 与画像 {expected_version!r} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if len(call.arguments) != len(call.parameter_types):
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.arguments_count",
+                f"arguments 数量 {len(call.arguments)} 与参数类型数量 "
+                f"{len(call.parameter_types)} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if (
+        draft_case.path_params
+        or draft_case.query
+        or draft_case.body is not None
+        or draft_case.headers
+    ):
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.http_fields_present",
+                "transport=dubbo 的用例不能带 path_params/query/headers/body",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if draft_case.steps:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.steps_unsupported",
+                "Dubbo 多步骤用例尚未支持",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+
+
 def _check_profile_alignment(
     draft_case: DraftCase,
     *,
@@ -1398,12 +1708,12 @@ def _check_profile_alignment(
     result: ValidationResult,
 ) -> None:
     profile_transport = str(profile.get("transport") or Transport.HTTP.value).lower()
-    if draft_case.transport is not Transport.HTTP:
+    if draft_case.transport not in {Transport.HTTP, Transport.DUBBO}:
         result.errors.append(
             _issue(
                 "error",
                 "transport.unsupported",
-                f"v1 只支持 http transport，草案为 {draft_case.transport.value}",
+                f"只支持 http/dubbo transport，草案为 {draft_case.transport.value}",
                 case_key=case_key,
                 endpoint=endpoint,
                 path=path,
@@ -1420,6 +1730,15 @@ def _check_profile_alignment(
                 endpoint=endpoint,
                 path=path,
             )
+        )
+    if draft_case.transport is Transport.DUBBO:
+        _check_dubbo_call(
+            draft_case,
+            profile=profile,
+            case_key=case_key,
+            endpoint=endpoint,
+            path=path,
+            result=result,
         )
     profile_role = str(profile.get("coverage_role") or "primary").lower()
     if profile_role != draft_case.coverage_role.value:
@@ -2001,19 +2320,36 @@ def validate_draft(
                     path=pseudo_path,
                 )
             )
-        parsed = parse_endpoint(canonical_endpoint)
-        if parsed is None or not profile.get("method") or not profile.get("path"):
-            result.errors.append(
-                _issue(
-                    "error",
-                    "endpoint.invalid_context",
-                    f"context profile 缺少 method/path: {canonical_endpoint!r}",
-                    case_key=key,
-                    endpoint=canonical_endpoint,
-                    path=pseudo_path,
+        is_dubbo_profile = (
+            str(profile.get("transport") or "http").lower() == "dubbo"
+        )
+        if is_dubbo_profile:
+            if not profile.get("service") or not profile.get("method"):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "endpoint.invalid_context",
+                        f"Dubbo profile 缺少 service/method: {canonical_endpoint!r}",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
                 )
-            )
-            continue
+                continue
+        else:
+            parsed = parse_endpoint(canonical_endpoint)
+            if parsed is None or not profile.get("method") or not profile.get("path"):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "endpoint.invalid_context",
+                        f"context profile 缺少 method/path: {canonical_endpoint!r}",
+                        case_key=key,
+                        endpoint=canonical_endpoint,
+                        path=pseudo_path,
+                    )
+                )
+                continue
 
         anchor = (canonical_endpoint, key)
         if anchor in seen_anchors:
@@ -2032,6 +2368,10 @@ def validate_draft(
         canonical_draft = draft_case.model_copy(
             update={"endpoint": canonical_endpoint}
         )
+        if canonical_draft.transport is Transport.DUBBO:
+            canonical_draft = _hydrate_dubbo_call(
+                canonical_draft, profile=profile
+            )
         _check_profile_alignment(
             canonical_draft,
             profile=profile,
@@ -2046,7 +2386,7 @@ def validate_draft(
             if dep.get("dep_id")
         }
         resolved_steps: list[tuple[CaseStep, dict[str, Any]]] = []
-        if canonical_draft.steps:
+        if canonical_draft.steps and canonical_draft.transport is not Transport.DUBBO:
             if len(canonical_draft.steps) < 2:
                 result.errors.append(
                     _issue(
@@ -2246,15 +2586,16 @@ def validate_draft(
                         path=pseudo_path,
                     )
                 )
-            _check_request(
-                case,
-                category=canonical_draft.category,
-                case_key=key,
-                endpoint=canonical_endpoint,
-                profile=profile,
-                path=pseudo_path,
-                result=result,
-            )
+            if case.transport is not Transport.DUBBO:
+                _check_request(
+                    case,
+                    category=canonical_draft.category,
+                    case_key=key,
+                    endpoint=canonical_endpoint,
+                    profile=profile,
+                    path=pseudo_path,
+                    result=result,
+                )
             if not case.asserts:
                 result.errors.append(
                     _issue(
@@ -2266,14 +2607,27 @@ def validate_draft(
                         path=pseudo_path,
                     )
                 )
+            required_kind = (
+                "rpc_status"
+                if case.transport is Transport.DUBBO
+                else "status_code"
+            )
             if not any(
-                assertion.kind == "status_code" for assertion in case.asserts
+                assertion.kind == required_kind for assertion in case.asserts
             ):
                 result.errors.append(
                     _issue(
                         "error",
-                        "assertion.status_missing",
-                        "用例至少需要一条 status_code 断言",
+                        (
+                            "assertion.rpc_status_missing"
+                            if required_kind == "rpc_status"
+                            else "assertion.status_missing"
+                        ),
+                        (
+                            "Dubbo 用例至少需要一条 rpc_status 断言"
+                            if required_kind == "rpc_status"
+                            else "用例至少需要一条 status_code 断言"
+                        ),
                         case_key=key,
                         endpoint=canonical_endpoint,
                         path=pseudo_path,

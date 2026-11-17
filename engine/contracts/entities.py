@@ -190,9 +190,12 @@ class Precondition(BaseModel):
 class Assertion(BaseModel):
     """一条可执行断言（C4 产出，C6 编码，C7 判定）。
 
-    支持 status_code / body_field / header / body_schema / db_row：
+    HTTP：status_code / body_field / header / body_schema / db_row；
+    Dubbo：rpc_status / result_present / result_field / error_code /
+    exception_type / error_message。
     - `body_schema`：按 OpenAPI 响应 JSON Schema 校验 body，target=状态码；
     - `db_row`：查询数据库验证落库状态，target=`table` 或 `table.column`；
+    - `result_field`：按点号路径取 Dubbo 返回值里的字段；
     - `where` 仅用于 db_row，值可以是 `$ref`，执行时解析。
     """
 
@@ -237,6 +240,31 @@ class CaseStep(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     body: Any = Field(default=None, description="请求体（JSON）")
     asserts: list[Assertion] = Field(default_factory=list)
+
+
+class DubboCall(BaseModel):
+    """`transport=dubbo` 用例的原生调用参数；HTTP 字段不参与。
+
+    `interface/method/parameter_types` 由框架从画像回填，草案只需给
+    `arguments` 与可选 attachments。`target_port` 来自 provider 配置；
+    `url` 为空时执行期按 `ASTSIGHT_DUBBO_URL` / host+port 解析，解析不了
+    就 blocked，不回退成 HTTP。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    interface: str = ""
+    method: str = ""
+    parameter_types: list[str] = Field(default_factory=list)
+    arguments: list[Any] = Field(default_factory=list)
+    url: str | None = Field(default=None, description="直连 dubbo://host:port")
+    group: str | None = None
+    version: str | None = None
+    target_port: int | None = Field(
+        default=None, ge=1, le=65535, description="画像从 Dubbo 配置解析出的端口"
+    )
+    attachments: dict[str, str] = Field(default_factory=dict)
+    timeout_ms: int = Field(default=5_000, ge=1, le=600_000)
 
 
 class TestCase(BaseModel):
@@ -286,6 +314,10 @@ class TestCase(BaseModel):
     mock_bindings: dict[str, str] = Field(
         default_factory=dict,
         description="用例级 Mock 分支绑定：dep_id → branch（C3.5.5 会话）",
+    )
+    dubbo: DubboCall | None = Field(
+        default=None,
+        description="transport=dubbo 时的原生调用；HTTP 用例为空",
     )
 
 

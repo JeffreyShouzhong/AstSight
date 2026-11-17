@@ -1,19 +1,26 @@
-"""Java 源码里的 Dubbo 消费端识别（C3.5.3，不执行被测代码）。
+"""Java 源码里的 Dubbo 识别（C3.5.3，不执行被测代码）。
 
-只识别能静态证明的标准形态：
+消费端（下游 Mock 用）：
 
 - `@DubboReference` / Dubbo 的 `@Reference` 注解字段；
 - 接口源码在同一仓库（`interface` 声明），参数类型能解析到 JVM 名；
 - 字段上的方法调用能与接口方法签名唯一匹配。
 
+提供方（被测 Dubbo 入口画像用）：
+
+- `@DubboService`、2.7 的 `org.apache.dubbo...@Service`、XML `<dubbo:service>`；
+- 实现类的 `implements` 或 `interfaceName`/`interfaceClass` 能定位接口源码；
+- 每个接口方法生成一个 `dubbo:{interface}#{method}({param_types})?...` 端点。
+
 不猜：
 
-- 接口只在依赖 jar、参数类型解析不了、同名重载无法区分 → `unsupported`；
-- `ReferenceConfig` 编程式引用、XML `<dubbo:reference>` 暂不支持，显式告警；
+- 接口只在依赖 jar、参数/返回类型解析不了、多接口无 override → `unsupported`；
+- 2.6 注解、Kotlin 提供方、`ReferenceConfig` 编程式引用显式告警；
+- Spring `@Service` 不按简单名误判；
 - 动态代理 / 反射 / `getBean` 拿到的引用不在文本扫描范围内。
 
-`dep_id` 统一由 `astsight.mock.identity.build_dubbo_dep_id` 计算，参数签名
-用于区分重载。
+`dep_id` / `endpoint` 统一由 `astsight.mock.identity.build_dubbo_dep_id`
+计算，参数签名用于区分重载。
 """
 from __future__ import annotations
 
@@ -21,6 +28,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+import yaml
 
 from ..mock.identity import DepIdError, build_dubbo_dep_id
 from .langscan import _call_args, _line_of, _mask_comments, _matching_brace
@@ -91,9 +100,45 @@ _CALL = re.compile(r"\b([A-Za-z_$]\w*)\s*\.\s*([A-Za-z_$]\w*)\s*\(")
 _XML_REFERENCE = re.compile(
     r"<dubbo:reference\b[^>]*>|<dubbo:reference\b[^>]*/>", re.S
 )
+_XML_SERVICE = re.compile(
+    r"<dubbo:service\b[^>]*>|<dubbo:service\b[^>]*/>", re.S
+)
 _XML_INTERFACE = re.compile(r'\binterface\s*=\s*"([^"]+)"')
+_XML_REF = re.compile(r'\bref\s*=\s*"([^"]+)"')
 _XML_GROUP = re.compile(r'\bgroup\s*=\s*"([^"]+)"')
 _XML_VERSION = re.compile(r'\bversion\s*=\s*"([^"]+)"')
+
+# 只认全限定或已导入的 Dubbo 注解；不按简单名猜，避免与 Spring @Service 冲突。
+_PROVIDER_ANNOTATION = re.compile(
+    r"@(?P<annotation>"
+    r"(?:org\.apache\.dubbo\.config\.annotation\.|com\.alibaba\.dubbo\.config\.annotation\.)?"
+    r"(?P<name>DubboService|Service))\b"
+    r"\s*(?:\((?P<args>[^)]*)\))?",
+    re.S,
+)
+_CLASS_DECL = re.compile(
+    r"\bclass\s+([A-Za-z_$][\w$]*)(?P<rest>[^{]*)\{",
+    re.S,
+)
+_IMPLEMENTS = re.compile(r"\bimplements\s+([^{]+)", re.S)
+_DUBBO_PROVIDER_IMPORTS = {
+    "org.apache.dubbo.config.annotation.DubboService",
+    "org.apache.dubbo.config.annotation.Service",
+}
+_DUBBO_2_6_PROVIDER = "com.alibaba.dubbo.config.annotation.Service"
+_DUBBO_ANNOTATION_PACKAGES = (
+    "org.apache.dubbo.config.annotation",
+    "com.alibaba.dubbo.config.annotation",
+)
+_KOTLIN_PROVIDER = re.compile(r"@(?:[\w.]*\.)?(?:DubboService)\b")
+_KOTLIN_DUBBO_IMPORT = re.compile(
+    r"(?m)^\s*import\s+(?:org\.apache|com\.alibaba)\.dubbo\b"
+)
+_PROPERTY_PORT = re.compile(
+    r"(?m)^\s*dubbo\.protocols?\.[A-Za-z0-9_.-]*port\s*=\s*(\d+)\s*$"
+)
+_XML_PROTOCOL = re.compile(r"<dubbo:protocol\b[^>]*>", re.S)
+_XML_PORT = re.compile(r'\bport\s*=\s*"(\d+)"')
 
 
 @dataclass(frozen=True)
@@ -103,12 +148,20 @@ class _TypeDecl:
     package: str
 
 
+@dataclass(frozen=True)
+class _MethodDecl:
+    params: list[str]
+    line: int
+    return_type: str | None
+    declared_return_type: str
+
+
 @dataclass
 class _Interface:
     fqn: str
     package: str
     imports: dict[str, str]
-    methods: dict[tuple[str, int], list[tuple[list[str], int]]] = field(
+    methods: dict[tuple[str, int], list[_MethodDecl]] = field(
         default_factory=dict
     )
 
@@ -116,6 +169,7 @@ class _Interface:
 @dataclass
 class DubboScanResult:
     deps: list[dict[str, Any]] = field(default_factory=list)
+    providers: list[dict[str, Any]] = field(default_factory=list)
     unsupported: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     checked: bool = False
@@ -241,11 +295,13 @@ def _parameter_types(
 def _interface_methods(
     body: str,
     *,
+    text: str,
+    body_start: int,
     package: str,
     imports: dict[str, str],
     classes: dict[str, str],
-) -> dict[tuple[str, int], list[tuple[list[str], int]]]:
-    methods: dict[tuple[str, int], list[tuple[list[str], int]]] = {}
+) -> dict[tuple[str, int], list[_MethodDecl]]:
+    methods: dict[tuple[str, int], list[_MethodDecl]] = {}
     for match in _METHOD_DECL.finditer(body):
         name = match.group(2)
         if name in {"if", "for", "while", "switch", "catch", "return", "new"}:
@@ -258,8 +314,22 @@ def _interface_methods(
         )
         if params is None:
             continue
-        line = _line_of(body, match.start())
-        methods.setdefault((name, len(params)), []).append((params, line))
+        declared_return = _strip_annotations(match.group(1)).strip()
+        return_type = _resolve_type(
+            declared_return,
+            package=package,
+            imports=imports,
+            classes=classes,
+        )
+        line = _line_of(text, body_start + match.start())
+        methods.setdefault((name, len(params)), []).append(
+            _MethodDecl(
+                params=params,
+                line=line,
+                return_type=return_type,
+                declared_return_type=declared_return,
+            )
+        )
     return methods
 
 
@@ -319,6 +389,304 @@ def _dep_record(
     }
 
 
+def _split_type_list(raw: str) -> list[str]:
+    """按顶层逗号切分 `implements A, B<C>`，忽略泛型内逗号。"""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(raw):
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(raw[start:index])
+            start = index + 1
+    parts.append(raw[start:])
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _clean_group_version(value: str) -> str:
+    """`${dubbo.group}` 这类占位符无法静态求值，按未设置处理。"""
+    return re.sub(r"^\$\{[^}]*\}$", "", value or "")
+
+
+def _dubbo_protocol_ports(raw: str, suffix: str) -> set[int]:
+    """从 properties / yaml / XML 里读取 Dubbo 协议端口；读不到不猜。"""
+    ports: set[int] = set()
+    if suffix == ".properties":
+        for match in _PROPERTY_PORT.finditer(raw):
+            ports.add(int(match.group(1)))
+        return ports
+    if suffix in {".yml", ".yaml"}:
+        try:
+            payload = yaml.safe_load(raw)
+        except yaml.YAMLError:
+            return ports
+        if not isinstance(payload, dict):
+            return ports
+        dubbo = payload.get("dubbo")
+        if not isinstance(dubbo, dict):
+            return ports
+        protocol = dubbo.get("protocol")
+        if isinstance(protocol, dict) and protocol.get("port") is not None:
+            try:
+                ports.add(int(protocol["port"]))
+            except (TypeError, ValueError):
+                pass
+        protocols = dubbo.get("protocols")
+        if isinstance(protocols, dict):
+            for value in protocols.values():
+                if not isinstance(value, dict) or value.get("port") is None:
+                    continue
+                try:
+                    ports.add(int(value["port"]))
+                except (TypeError, ValueError):
+                    pass
+        return ports
+    if suffix == ".xml":
+        for match in _XML_PROTOCOL.finditer(raw):
+            port = _XML_PORT.search(match.group(0))
+            if port is not None:
+                ports.add(int(port.group(1)))
+    return ports
+
+
+def _provider_kind(
+    simple: str,
+    qualified: str | None,
+    imports: dict[str, str],
+) -> tuple[str | None, bool]:
+    """返回 (注解全限定名, 是否 2.6)；无法确认属于 Dubbo 时返回 (None, False)。"""
+    if qualified:
+        fqn: str | None = qualified
+    else:
+        fqn = imports.get(simple)
+        if fqn is None:
+            wildcard = imports.get("*") or ""
+            for package in _DUBBO_ANNOTATION_PACKAGES:
+                if wildcard.startswith(package + "."):
+                    fqn = f"{package}.{simple}"
+                    break
+    if fqn == _DUBBO_2_6_PROVIDER:
+        return fqn, True
+    if fqn in _DUBBO_PROVIDER_IMPORTS:
+        return fqn, False
+    return None, False
+
+
+def _provider_records(
+    *,
+    service: str,
+    impl: str,
+    iface: _Interface,
+    group: str,
+    version: str,
+    direct_url: str | None,
+    protocol_port: int | None,
+    file: str,
+    line: int,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for (method_name, _count), declarations in iface.methods.items():
+        for declaration in declarations:
+            try:
+                endpoint = build_dubbo_dep_id(
+                    service,
+                    method_name,
+                    declaration.params,
+                    group=group or None,
+                    version=version or None,
+                )
+            except DepIdError:
+                continue
+            records.append(
+                {
+                    "endpoint": endpoint,
+                    "transport": "dubbo",
+                    "service": service,
+                    "method": method_name,
+                    "parameter_types": list(declaration.params),
+                    "return_type": declaration.return_type,
+                    "return_type_declared": declaration.declared_return_type,
+                    "group": group,
+                    "version": version,
+                    "direct_url": direct_url,
+                    "protocol_port": protocol_port,
+                    "url_source": (
+                        "annotation"
+                        if direct_url
+                        else ("protocol_port" if protocol_port else "unresolved")
+                    ),
+                    "impl_class": impl,
+                    "business_key": (
+                        f"{impl}#{method_name}" if impl else f"{service}#{method_name}"
+                    ),
+                    "handler": method_name,
+                    "file": file,
+                    "line": line,
+                    "method_line": declaration.line,
+                    "confidence": "verified",
+                    "contract_incomplete": declaration.return_type is None,
+                    "contract_incomplete_reason": (
+                        "dubbo_return_type_unresolved"
+                        if declaration.return_type is None
+                        else None
+                    ),
+                    "source": "dubbo_service",
+                }
+            )
+    return records
+
+
+def _add_provider(
+    providers: dict[str, dict[str, Any]],
+    record: dict[str, Any],
+    result: DubboScanResult,
+) -> None:
+    endpoint = record["endpoint"]
+    if endpoint in providers:
+        result.warnings.append(f"dubbo_provider_duplicate:{endpoint}")
+        return
+    providers[endpoint] = record
+
+
+def _scan_provider_annotations(
+    *,
+    rel: str,
+    text: str,
+    interfaces: dict[str, _Interface],
+    classes: dict[str, str],
+    providers: dict[str, dict[str, Any]],
+    protocol_port: int | None,
+    result: DubboScanResult,
+) -> None:
+    package, imports = _package_and_imports(text)
+    for match in _PROVIDER_ANNOTATION.finditer(text):
+        annotation = match.group("annotation")
+        simple = match.group("name")
+        qualified = annotation if "." in annotation else None
+        fqn, is_2_6 = _provider_kind(simple, qualified, imports)
+        if fqn is None:
+            continue
+        line = _line_of(text, match.start())
+        if is_2_6:
+            result.unsupported.append(
+                {
+                    "file": rel,
+                    "line": line,
+                    "reason": "dubbo_2_6_unsupported",
+                    "kind": "provider",
+                    "detail": fqn,
+                }
+            )
+            continue
+
+        # 注解必须直接落在 class 上；字段/方法上的同名注解不算提供方。
+        window = text[match.end() : match.end() + 4_000]
+        class_match = _CLASS_DECL.search(window)
+        if class_match is None:
+            result.warnings.append(f"dubbo_provider_unparsed:{rel}")
+            continue
+        between = window[: class_match.start()]
+        if ";" in between or "{" in between:
+            continue
+
+        impl_name = class_match.group(1)
+        impl_fqn = f"{package}.{impl_name}" if package else impl_name
+        impl_interfaces: list[str] = []
+        unresolved_interfaces: list[str] = []
+        implements = _IMPLEMENTS.search(class_match.group("rest") or "")
+        if implements is not None:
+            for item in _split_type_list(implements.group(1)):
+                resolved = _resolve_type(
+                    item, package=package, imports=imports, classes=classes
+                )
+                if resolved:
+                    impl_interfaces.append(resolved)
+                else:
+                    unresolved_interfaces.append(item)
+        args = _annotation_args(match.group("args") or "")
+        explicit = None
+        if args.get("interfaceClass"):
+            explicit = _resolve_type(
+                args["interfaceClass"],
+                package=package,
+                imports=imports,
+                classes=classes,
+            )
+        elif args.get("interfaceName"):
+            explicit = args["interfaceName"]
+        if explicit:
+            service = explicit.split("<", 1)[0]
+        elif len(impl_interfaces) == 1:
+            service = impl_interfaces[0]
+        elif not impl_interfaces:
+            if unresolved_interfaces:
+                # 实现了接口但源码不在仓库：与消费端一样标 `interface_in_jar`，
+                # 不把“解析不了”说成“没实现接口”。
+                result.unsupported.append(
+                    {
+                        "file": rel,
+                        "line": line,
+                        "reason": "dubbo_interface_in_jar",
+                        "kind": "provider",
+                        "detail": ",".join(unresolved_interfaces),
+                    }
+                )
+            else:
+                result.unsupported.append(
+                    {
+                        "file": rel,
+                        "line": line,
+                        "reason": "dubbo_provider_interface_missing",
+                        "kind": "provider",
+                        "detail": impl_fqn,
+                    }
+                )
+            continue
+        else:
+            result.unsupported.append(
+                {
+                    "file": rel,
+                    "line": line,
+                    "reason": "dubbo_provider_ambiguous",
+                    "kind": "provider",
+                    "detail": ",".join(impl_interfaces),
+                }
+            )
+            continue
+
+        iface = interfaces.get(service)
+        if iface is None:
+            result.unsupported.append(
+                {
+                    "file": rel,
+                    "line": line,
+                    "reason": "dubbo_interface_in_jar",
+                    "kind": "provider",
+                    "detail": service,
+                }
+            )
+            continue
+
+        group = _clean_group_version(args.get("group", ""))
+        version = _clean_group_version(args.get("version", ""))
+        direct_url = args.get("url") or None
+        for record in _provider_records(
+            service=service,
+            impl=impl_fqn,
+            iface=iface,
+            group=group,
+            version=version,
+            direct_url=direct_url,
+            protocol_port=protocol_port,
+            file=rel,
+            line=line,
+        ):
+            _add_provider(providers, record, result)
+
+
 def scan_dubbo_sources(
     *,
     files: list[tuple[Path, str]],
@@ -332,13 +700,18 @@ def scan_dubbo_sources(
     sources: list[tuple[str, str]] = []
     classes: dict[str, str] = {}
     interfaces: dict[str, _Interface] = {}
+    providers: dict[str, dict[str, Any]] = {}
+    xml_services: list[dict[str, Any]] = []
+    protocol_ports: set[int] = set()
     total = 0
     for path, _language in files:
         if len(sources) >= max_files:
             result.warnings.append("dubbo_scan_truncated_file_count")
             break
         suffix = path.suffix.lower()
-        if suffix not in {".java", ".kt", ".kts", ".xml"}:
+        if suffix not in {
+            ".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml"
+        }:
             continue
         try:
             size = path.stat().st_size
@@ -361,8 +734,23 @@ def scan_dubbo_sources(
                         "reason": "dubbo_kotlin_reference_unsupported",
                     }
                 )
+            if _KOTLIN_PROVIDER.search(raw) or (
+                _KOTLIN_DUBBO_IMPORT.search(raw) and re.search(r"@Service\b", raw)
+            ):
+                result.unsupported.append(
+                    {
+                        "file": rel,
+                        "line": _line_of(raw, raw.find("@")),
+                        "reason": "dubbo_kotlin_provider_unsupported",
+                        "kind": "provider",
+                    }
+                )
+            continue
+        if suffix in {".properties", ".yml", ".yaml"}:
+            protocol_ports.update(_dubbo_protocol_ports(raw, suffix))
             continue
         if suffix == ".xml":
+            protocol_ports.update(_dubbo_protocol_ports(raw, suffix))
             for match in _XML_REFERENCE.finditer(raw):
                 interface = _XML_INTERFACE.search(match.group(0))
                 result.unsupported.append(
@@ -371,6 +759,31 @@ def scan_dubbo_sources(
                         "line": _line_of(raw, match.start()),
                         "reason": "dubbo_xml_reference_unsupported",
                         "detail": interface.group(1) if interface else "",
+                    }
+                )
+            for match in _XML_SERVICE.finditer(raw):
+                interface = _XML_INTERFACE.search(match.group(0))
+                if interface is None:
+                    result.unsupported.append(
+                        {
+                            "file": rel,
+                            "line": _line_of(raw, match.start()),
+                            "reason": "dubbo_xml_service_interface_missing",
+                            "kind": "provider",
+                        }
+                    )
+                    continue
+                ref = _XML_REF.search(match.group(0))
+                group = _XML_GROUP.search(match.group(0))
+                version = _XML_VERSION.search(match.group(0))
+                xml_services.append(
+                    {
+                        "file": rel,
+                        "line": _line_of(raw, match.start()),
+                        "service": interface.group(1),
+                        "ref": ref.group(1) if ref else "",
+                        "group": group.group(1) if group else "",
+                        "version": version.group(1) if version else "",
                     }
                 )
             continue
@@ -399,11 +812,59 @@ def scan_dubbo_sources(
                 imports=imports,
                 methods=_interface_methods(
                     body,
+                    text=text,
+                    body_start=brace + 1,
                     package=package,
                     imports=imports,
                     classes=classes,
                 ),
             )
+
+    protocol_port: int | None = None
+    if len(protocol_ports) == 1:
+        protocol_port = next(iter(protocol_ports))
+    elif len(protocol_ports) > 1:
+        result.warnings.append("dubbo_protocol_port_ambiguous")
+
+    # 提供方注解必须在接口索引建好之后解析，否则跨文件 implements 可能找不到。
+    for rel, text in sources:
+        _scan_provider_annotations(
+            rel=rel,
+            text=text,
+            interfaces=interfaces,
+            classes=classes,
+            providers=providers,
+            protocol_port=protocol_port,
+            result=result,
+        )
+    for item in xml_services:
+        iface = interfaces.get(item["service"])
+        if iface is None:
+            result.unsupported.append(
+                {
+                    "file": item["file"],
+                    "line": item["line"],
+                    "reason": "dubbo_interface_in_jar",
+                    "kind": "provider",
+                    "detail": item["service"],
+                }
+            )
+            continue
+        for record in _provider_records(
+            service=item["service"],
+            impl=item["ref"],
+            iface=iface,
+            group=_clean_group_version(item["group"]),
+            version=_clean_group_version(item["version"]),
+            direct_url=None,
+            protocol_port=protocol_port,
+            file=item["file"],
+            line=item["line"],
+        ):
+            _add_provider(providers, record, result)
+
+    result.providers = sorted(providers.values(), key=lambda item: item["endpoint"])
+    result.checked = bool(sources or xml_services)
 
     deps: dict[str, dict[str, Any]] = {}
     for rel, text in sources:
@@ -458,8 +919,8 @@ def scan_dubbo_sources(
                 continue
             group = args.get("group", "")
             version = args.get("version", "")
-            group = re.sub(r"^\$\{[^}]*\}$", "", group)
-            version = re.sub(r"^\$\{[^}]*\}$", "", version)
+            group = _clean_group_version(group)
+            version = _clean_group_version(version)
             for call in _CALL.finditer(text):
                 if call.group(1) != field_name:
                     continue
@@ -492,7 +953,7 @@ def scan_dubbo_sources(
                         }
                     )
                     continue
-                parameter_types = candidates[0][0]
+                parameter_types = candidates[0].params
                 try:
                     record = _dep_record(
                         service=service,

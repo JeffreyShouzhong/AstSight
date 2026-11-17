@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from contracts import DataPlanBundle, TestCase
+from contracts import DataPlanBundle, TestCase, Transport
 
 from .artifacts import RunDir, new_run_id, utc_now
 from .cases import generate_cases
@@ -72,6 +72,8 @@ class RunConfig:
     target: str = "HEAD"
     base_url: str | None = None
     reset_url: str | None = None
+    dubbo_url: str | None = None
+    dubbo_host: str | None = None
     openapi: str | None = None
     out: str = ".astsight/runs"
     depth: int = 5
@@ -261,6 +263,10 @@ def _data_env(
         "data_plan_path": data_plan_path,
         "database_url": config.database_url,
     }
+
+
+def _dubbo_env(config: "RunConfig") -> dict[str, Any]:
+    return {"dubbo_url": config.dubbo_url, "dubbo_host": config.dubbo_host}
 
 
 def _changed_scope_full(routes: list[dict]) -> tuple[list[dict], dict]:
@@ -746,7 +752,12 @@ def _execute_and_report_inner(
     cases_by_id = {case.id: case for case in cases}
     changed_endpoints = {api["handler"] for api in impact.get("changed_apis", [])}
     execution_meta: dict[str, Any] = {"collect_only": False, "executed": False}
-    if cases and not config.skip_execute and config.base_url:
+    needs_http = any(case.transport is Transport.HTTP for case in cases)
+    needs_dubbo = any(case.transport is Transport.DUBBO for case in cases)
+    can_execute = (bool(config.base_url) if needs_http else True) and (
+        needs_http or needs_dubbo
+    )
+    if cases and not config.skip_execute and can_execute:
         if config.collect_only:
             ok, output = collect_only(
                 generated_dir,
@@ -755,6 +766,7 @@ def _execute_and_report_inner(
                 timeout=config.timeout,
                 **_mock_env(config, mock_run_scope),
                 **_data_env(config, data_plan_path),
+                **_dubbo_env(config),
             )
             execution_meta["collect_only"] = True
             execution_meta["collect_ok"] = ok
@@ -770,6 +782,7 @@ def _execute_and_report_inner(
                 timeout=config.timeout,
                 **_mock_env(config, mock_run_scope),
                 **_data_env(config, data_plan_path),
+                **_dubbo_env(config),
             )
             run_dir.write_json("execution-first.json", first.as_dict())
             execution_meta["executed"] = True
@@ -1190,6 +1203,7 @@ def _apply_retry(
         timeout=config.timeout,
         **_mock_env(config, mock_run_scope),
         **_data_env(config, data_plan_path),
+        **_dubbo_env(config),
     )
     run_dir.write_json(f"attempt{attempt_no}_summary.json", retry_result.as_dict())
     retry_by_node = {r.nodeid: r for r in retry_result.records}
@@ -1253,8 +1267,21 @@ def run(config: RunConfig) -> dict:
         project, routes, openapi_operations=supplement.get("operations")
     )
     route_audit = {**(route_audit or {}), "health": route_health}
-    run_dir.write_json("routes.json", {"routes": routes, "audit": route_audit})
+    dubbo_only = False
     if not routes:
+        # 纯 Dubbo 提供方项目没有 HTTP 路由；先确认是否有可画像的
+        # @DubboService / XML provider，再决定是报错还是继续。
+        probe_profiles, _probe_unmapped = build_profiles(
+            [], [], project_root=project
+        )
+        dubbo_only = any(
+            str(profile.get("transport")) == "dubbo"
+            for profile in probe_profiles
+        )
+        if dubbo_only:
+            route_audit["dubbo_only"] = True
+    run_dir.write_json("routes.json", {"routes": routes, "audit": route_audit})
+    if not routes and not dubbo_only:
         hint = ""
         if route_health.get("controller_files"):
             hint = (
@@ -1327,7 +1354,7 @@ def run(config: RunConfig) -> dict:
     run_dir.write_json("changed_apis.json", impact_dict)
     run_dir.write_json("run_meta.json", run_meta)
 
-    if not impact_dict["changed_apis"]:
+    if not impact_dict["changed_apis"] and not dubbo_only:
         # 不影响任何接口也是合法结论，但必须能说清"为什么没有"
         run_meta["note"] = "本次变更未命中任何接口；unresolved 明细见 changed_apis.json"
         report = _finish_without_cases(
@@ -1335,6 +1362,8 @@ def run(config: RunConfig) -> dict:
             unsupported_files, [], config,
         )
         return report
+    if dubbo_only:
+        run_meta["note"] = "未发现 HTTP 路由；本次只按 Dubbo 提供方画像生成/执行用例"
 
     # ── 3. OpenAPI + 画像（C3）────────────────────────────────
     openapi_source = discover_openapi(project, config.openapi, config.base_url)

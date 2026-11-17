@@ -59,12 +59,18 @@ def classify(
             "retryable": False, "detail": "",
         }
     if outcome == "blocked":
+        dubbo = "dubbo" in message
         return {
-            "reason": "data_unavailable",
+            "reason": "dubbo_unavailable" if dubbo else "data_unavailable",
             "root_cause": None,
-            "action_target": "user",
+            "action_target": "framework" if dubbo else "user",
             "retryable": False,
-            "detail": "造数计划或数据库未就绪：用例被阻断，不计入通过，也不是 SUT 缺陷",
+            "detail": (
+                "Dubbo 目标地址或 sidecar 未就绪：用例被阻断，不计入通过，"
+                "也不是 SUT 缺陷"
+                if dubbo
+                else "造数计划或数据库未就绪：用例被阻断，不计入通过，也不是 SUT 缺陷"
+            ),
         }
 
     if any(sign in message for sign in _ENV_SIGNS):

@@ -91,13 +91,26 @@ def _env(
     mock_ttl_ms: int | None = None,
     data_plan_path: str | None = None,
     database_url: str | None = None,
+    dubbo_url: str | None = None,
+    dubbo_host: str | None = None,
 ) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    # 生成物通过 astsight.sidecar 调 Dubbo；保证引擎源码可导入。
+    engine_root = str(Path(__file__).resolve().parents[2])
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    parts = [part for part in existing_pythonpath.split(os.pathsep) if part]
+    if engine_root not in parts:
+        parts.insert(0, engine_root)
+    env["PYTHONPATH"] = os.pathsep.join(parts)
     if base_url:
         env["ASTSIGHT_BASE_URL"] = base_url
     if reset_url:
         env["ASTSIGHT_RESET_URL"] = reset_url
+    if dubbo_url:
+        env["ASTSIGHT_DUBBO_URL"] = dubbo_url
+    if dubbo_host:
+        env["ASTSIGHT_DUBBO_HOST"] = dubbo_host
     env["ASTSIGHT_TIMEOUT"] = str(timeout)
     # 造数计划路径与数据库 URL 只通过环境变量传给生成物，不写入报告。
     if data_plan_path:
@@ -145,6 +158,8 @@ def collect_only(
     mock_ttl_ms: int | None = None,
     data_plan_path: str | None = None,
     database_url: str | None = None,
+    dubbo_url: str | None = None,
+    dubbo_host: str | None = None,
 ) -> tuple[bool, str]:
     """生成代码的收集自检：import/fixture 错误在开跑前暴露。"""
     cwd = Path(generated_dir).resolve()
@@ -163,6 +178,8 @@ def collect_only(
             mock_ttl_ms=mock_ttl_ms,
             data_plan_path=data_plan_path,
             database_url=database_url,
+            dubbo_url=dubbo_url,
+            dubbo_host=dubbo_host,
         ),
         timeout,
     )
@@ -187,6 +204,8 @@ def run_pytest(
     mock_ttl_ms: int | None = None,
     data_plan_path: str | None = None,
     database_url: str | None = None,
+    dubbo_url: str | None = None,
+    dubbo_host: str | None = None,
 ) -> ExecutionResult:
     """执行 pytest（可选只跑指定 nodeids，用于有界重试）。"""
     cwd = Path(generated_dir).resolve()
@@ -213,6 +232,8 @@ def run_pytest(
             mock_ttl_ms=mock_ttl_ms,
             data_plan_path=data_plan_path,
             database_url=database_url,
+            dubbo_url=dubbo_url,
+            dubbo_host=dubbo_host,
         ),
         timeout,
     )
@@ -276,9 +297,11 @@ def _parse_junit(path: Path) -> list[TestRecord]:
         elif skipped is not None:
             outcome = "skipped"
             message = (skipped.get("message") or "").strip()
-            # 造数前置未满足是 blocked（不能算通过，也不是 SUT 缺陷）；
-            # 与普通 skip 区分，报告才能单列。
-            if message.lower().startswith("data_unavailable"):
+            # 造数前置未满足、Dubbo 目标/客户端不可用都是 blocked
+            # （不能算通过，也不是 SUT 缺陷）；与普通 skip 区分。
+            if message.lower().startswith(
+                ("data_unavailable", "dubbo_target_unresolved", "dubbo_sidecar_unavailable")
+            ):
                 outcome = "blocked"
 
         match = _CASE_ID_RE.search(name)

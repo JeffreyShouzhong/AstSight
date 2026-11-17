@@ -335,8 +335,6 @@ def build_context(
     else:
         effective_routes = []
         routes_source = "none"
-    if not effective_routes:
-        warnings.append("routes_missing")
 
     profiles, unmapped = build_profiles(
         effective_routes,
@@ -344,6 +342,16 @@ def build_context(
         codegraph_client=codegraph_client,
         project_root=project_path,
     )
+    dubbo_profiles = [
+        profile
+        for profile in profiles
+        if str(profile.get("transport", "http")).lower() == "dubbo"
+    ]
+    if not effective_routes:
+        # Dubbo 提供方是代码入口，不是 HTTP 路由；没有 HTTP 路由时要如实区分。
+        warnings.append(
+            "dubbo_providers_only" if dubbo_profiles else "routes_missing"
+        )
     if spec:
         _attach_error_codes(profiles, spec)
         _attach_response_meta(profiles, spec)
@@ -358,6 +366,27 @@ def build_context(
         "openapi_sha256": openapi_hash,
         "routes_sha256": routes_hash,
     }
+    if dubbo_profiles:
+        # Dubbo 提供方不在 HTTP routes 里；源码变化也必须让 context_id 变化。
+        identity["dubbo_profiles_sha256"] = sha256_json(
+            [
+                {
+                    key: profile.get(key)
+                    for key in (
+                        "endpoint",
+                        "service",
+                        "method",
+                        "parameter_types",
+                        "return_type",
+                        "group",
+                        "version",
+                        "handler_owner",
+                        "file",
+                    )
+                }
+                for profile in dubbo_profiles
+            ]
+        )
     # 只在实际提供时进入身份，避免没有造数/Mock 输入的项目 context_id 漂移。
     if catalog_payload is not None:
         identity["data_catalog_sha256"] = sha256_json(catalog_payload)
@@ -386,6 +415,7 @@ def build_context(
         "interface_evidence": {
             "openapi": "present" if operations else ("empty" if source else "missing"),
             "routes": routes_source,
+            "dubbo": "present" if dubbo_profiles else "missing",
             "contract_rules_available": bool(operations),
         },
         "warnings": warnings,
@@ -402,6 +432,12 @@ def build_context(
             "header": ["exists", "eq", "contains"],
             "body_schema": ["matches"],
             "db_row": ["exists", "absent", "eq", "ne", "gte", "lte", "count_eq"],
+            "rpc_status": ["eq", "ne", "in"],
+            "result_present": ["exists", "absent"],
+            "result_field": ["exists", "eq", "ne", "in", "gte", "lte", "contains"],
+            "error_code": ["eq", "ne", "in", "contains"],
+            "exception_type": ["eq", "ne", "contains"],
+            "error_message": ["eq", "contains"],
         },
         "assert_expression_ops": list(OP_ARITY),
     }

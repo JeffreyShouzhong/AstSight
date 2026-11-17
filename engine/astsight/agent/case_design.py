@@ -175,6 +175,11 @@ def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
         "success_codes": profile.get("success_codes") or [],
         "error_codes": profile.get("error_codes") or [],
         "downstream_deps": profile.get("downstream_deps") or [],
+        "service": profile.get("service"),
+        "parameter_types": profile.get("parameter_types") or [],
+        "return_type": profile.get("return_type"),
+        "group": profile.get("group"),
+        "version": profile.get("version"),
     }
 
 
@@ -187,10 +192,26 @@ def _prompt_input(
     mock_semantic: MockSemantic | None,
     data_catalog: DataCatalog | None,
 ) -> dict[str, Any]:
+    profiles = context.get("profiles") or []
+    http_profiles = [
+        item
+        for item in profiles
+        if str(item.get("transport", "http")).lower() == "http"
+    ]
+    unsupported_profiles = [
+        {
+            "endpoint": item.get("endpoint"),
+            "transport": item.get("transport"),
+            "reason": "transport_not_supported_in_case_design",
+        }
+        for item in profiles
+        if str(item.get("transport", "http")).lower() != "http"
+    ]
     return {
         "mode": mode,
         "context_id": context.get("context_id"),
-        "profiles": [_profile_view(item) for item in context.get("profiles") or []],
+        "profiles": [_profile_view(item) for item in http_profiles],
+        "unsupported_profiles": unsupported_profiles,
         "profile_unmapped": context.get("profile_unmapped") or [],
         "documents": context.get("documents") or [],
         "openapi": context.get("openapi") or {},

@@ -27,6 +27,48 @@ def _endpoint_index(operations: list[EndpointSpec]) -> dict[tuple[str, str], End
     return index
 
 
+def _dubbo_profile(provider: dict, scan: Any) -> dict[str, Any]:
+    """把提供方扫描结果转成画像；HTTP 字段留空，不伪造 method/path。"""
+    return {
+        "endpoint": provider["endpoint"],
+        "transport": "dubbo",
+        "service": provider.get("service", ""),
+        "method": provider.get("method", ""),
+        "path": "",
+        "parameter_types": list(provider.get("parameter_types") or []),
+        "return_type": provider.get("return_type"),
+        "return_type_declared": provider.get("return_type_declared", ""),
+        "group": provider.get("group", ""),
+        "version": provider.get("version", ""),
+        "direct_url": provider.get("direct_url"),
+        "protocol_port": provider.get("protocol_port"),
+        "url_source": provider.get("url_source", "unresolved"),
+        "business_key": provider.get("business_key", ""),
+        "coverage_role": "primary",
+        "adapter_fingerprint": None,
+        "semantic_branches": [],
+        "handler": provider.get("handler", ""),
+        "handler_owner": provider.get("impl_class", ""),
+        "file": provider.get("file", ""),
+        "line": provider.get("line", 0),
+        "method_line": provider.get("method_line", 0),
+        "route_source": "dubbo_service",
+        "route_confidence": provider.get("confidence", "verified"),
+        "contract_incomplete": bool(provider.get("contract_incomplete")),
+        "contract_incomplete_reason": provider.get("contract_incomplete_reason"),
+        "params": [],
+        "request_body": {},
+        "body_required": [],
+        "success_codes": [],
+        "response_fields": {},
+        "error_codes": [],
+        "downstream_deps": list(scan.deps),
+        "downstream_unmapped": not scan.deps,
+        "dubbo_deps_checked": scan.checked,
+        "source": "dubbo_service",
+    }
+
+
 def build_profiles(
     routes: list[dict],
     operations: list[EndpointSpec],
@@ -198,5 +240,21 @@ def build_profiles(
             ]
 
         profiles.append(profile)
+
+    if dubbo_scan is not None:
+        for provider in dubbo_scan.providers:
+            profiles.append(_dubbo_profile(provider, dubbo_scan))
+        for item in dubbo_scan.unsupported:
+            if item.get("kind") != "provider":
+                continue
+            detail = str(item.get("detail") or "")
+            unmapped.append(
+                {
+                    "endpoint": f"dubbo:{detail}" if detail else "dubbo:?",
+                    "handler": "",
+                    "reason": item.get("reason", ""),
+                    "file": item.get("file", ""),
+                }
+            )
 
     return profiles, unmapped

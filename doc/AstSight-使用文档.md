@@ -41,6 +41,7 @@ AstSight 是一套**接口自动化测试引擎**，不是测试管理平台。�
 | C3 | 路由清单、接口画像、下游调用点 | `run`、`cases prepare`、`mock plan` |
 | C3.5.1 | 契约 `success` + 规则分支 → Mock 语义 | `mock semantics`；`agent run` 内部也会生成 |
 | C3.5.5 | 明文 HTTP 下游 Mock 服务与调用证据 | `mock plan`、`run --mock-plan` |
+| Dubbo 入口 | `@DubboService`/XML 提供方画像 → sidecar 泛化调用 → 原生断言 | `run --dubbo-url`、`cases prepare` |
 | C5a | DDL/FK/seed → 数据目录与业务态候选 | `data catalog`、`data semantics` |
 | A4 / C4 | 规则驱动用例草案 → 校验 → 待审 proposal → 版本化用例库 | `cases prepare`、`cases import`、`cases approve` |
 | C5b | 已批准用例 + 数据目录 → 逐用例造数计划 | `data plan`、`data apply` |
@@ -94,7 +95,8 @@ PYTHONPATH=. python -m astsight codegraph status
 
 - 目标运行环境是 Linux（服务器 / CI 容器）；Windows 只用于本地开发调试。
 - 路径分隔符、子进程、端口绑定和文件锁按 POSIX 语义设计。
-- 被执行的 SUT（被测服务）需要可访问的 HTTP 地址；没有 `--base-url` 时只生成、不执行。
+- 被执行的 SUT 需要可访问的 HTTP 地址（`--base-url`）或 Dubbo 直连地址
+  （`--dubbo-url`，或画像端口 + `--dubbo-host`）；两者都没有时只生成、不执行。
 
 ---
 
@@ -1103,6 +1105,122 @@ PYTHONPATH=. python -m astsight run \
 
 ---
 
+## 11A. Dubbo 入口用例（sidecar）
+
+前面几节讲的是“SUT 调下游，把下游挡成桩”。这一节是反方向：**被测服务本身是
+Dubbo 提供方**，由 sidecar 泛化调用进去。两者互不替代：
+
+- 下游 Mock：Java agent + 消费端 Filter，注入被测 JVM；
+- 被测 Dubbo 入口：独立 Java 进程 `astsight-dubbo-sidecar.jar`，不改、不 Attach 被测 JVM。
+
+### 11A.1 前置
+
+```bash
+cd java
+mvn -pl astsight-sidecar-dubbo package
+# target/astsight-dubbo-sidecar.jar
+
+cd ../engine
+PYTHONPATH=. python -m pytest tests/test_dubbo_provider_profile.py \
+  tests/test_dubbo_case_validate.py tests/test_codegen_dubbo.py -q
+```
+
+引擎按 `ASTSIGHT_DUBBO_SIDECAR_JAR` → 仓库构建产物解析 jar；找不到时用例
+blocked（`dubbo_sidecar_unavailable`），不会回退成 HTTP。
+
+### 11A.2 提供方画像
+
+`build_profiles` 会扫描：
+
+- `@DubboService`、2.7 的 `org.apache.dubbo...@Service`；
+- XML `<dubbo:service interface=... ref=... group=... version=...>`。
+
+每个接口方法生成一个 `transport=dubbo` 画像，例如：
+
+```
+dubbo:com.acme.OrderService#create(com.acme.CreateOrderRequest)?group=order&version=1.0.0
+```
+
+接口源码必须在仓库、参数/返回类型可解析；2.6 注解、接口在 jar、多接口无
+`interfaceName`/`interfaceClass`、Kotlin 提供方都会显式 `unsupported`。
+Spring 的 `@Service` 不会被误判。
+
+### 11A.3 目标地址
+
+按优先级解析：
+
+1. `--dubbo-url dubbo://host:port`（或 `ASTSIGHT_DUBBO_URL`）；
+2. 用例 `dubbo.url`（来自 `@DubboService(url=...)` / XML）；
+3. 画像从 `application.properties` / `application.yml` / XML 解析出的
+   `dubbo.protocol.port` + `--dubbo-host`（默认 `127.0.0.1`）。
+
+三个都拿不到时用例 skip 为 `dubbo_target_unresolved`，报告按 blocked 处理。
+多个协议端口时标 `dubbo_protocol_port_ambiguous`，不猜。
+
+### 11A.4 运行
+
+纯 Dubbo 项目没有 HTTP 路由，`full` 模式仍可执行：
+
+```bash
+PYTHONPATH=. python -m astsight run \
+  --project /path/to/dubbo-service \
+  --mode full \
+  --codegraph off \
+  --dubbo-url dubbo://127.0.0.1:20880
+```
+
+有 HTTP 入口的项目同时带 `--base-url` 和 `--dubbo-url` 即可跑两种入口。
+
+手工用例走 `cases prepare` → 导入草案 → 审核 → `run --mode cases`。
+下面只保留 Dubbo 相关字段；business 用例仍需 `requirement_refs`：
+
+```json
+{
+  "case_key": "order_by_id_ok",
+  "level": "business",
+  "transport": "dubbo",
+  "endpoint": "dubbo:com.acme.OrderService#byId(java.lang.String)?group=order&version=1.0.0",
+  "category": "business",
+  "asserts": [
+    {"kind": "rpc_status", "op": "eq", "expect": "OK"},
+    {"kind": "result_field", "target": "orderId", "op": "eq", "expect": "O-1"}
+  ],
+  "dubbo": {
+    "interface": "com.acme.OrderService",
+    "arguments": ["O-1"]
+  }
+}
+```
+
+`dubbo.interface/method/parameter_types/group/version` 以画像为准，草案省略时
+由框架回填；`arguments` 数量必须与参数类型数量一致。`transport=dubbo` 不接受
+`path_params/query/headers/body`，也不支持多步骤。
+
+### 11A.5 断言
+
+| kind | 支持 op | 说明 |
+|---|---|---|
+| `rpc_status` | `eq` / `ne` / `in` | `OK` / `TIMEOUT` / `SERIALIZATION` / `NETWORK` / `FORBIDDEN` / `NO_PROVIDER` / `RPC_EXCEPTION` / `BAD_REQUEST` |
+| `result_present` | `exists` / `absent` | 返回值是否为 null |
+| `result_field` | `exists` / `eq` / `ne` / `in` / `gte` / `lte` / `contains` | target 用点号路径取返回值字段 |
+| `error_code` | `eq` / `ne` / `in` / `contains` | 如 `rpc_timeout`、`no_provider` |
+| `exception_type` | `eq` / `ne` / `contains` | 异常类名 |
+| `error_message` | `eq` / `contains` | 异常信息 |
+
+每个 Dubbo 用例至少要有 1 条 `rpc_status`。HTTP 断言类型（`status_code` /
+`body_field` / `header` / `body_schema`）与 Dubbo 断言类型不能混用。
+
+### 11A.6 边界
+
+- 首版只支持直连 URL + Hessian2；注册中心（Nacos/ZooKeeper）与 Kryo/FST
+  显式失败。
+- sidecar 固定同步调用；异步/oneway 不生成用例。
+- 模板只生成正向冒烟：POJO 参数按空对象 `{}` 构造，并在用例 `note` 里标明
+  需要人工补字段；没有字段级断言时只校验 `rpc_status` 与返回值存在。
+- A4 提示词目前只收 HTTP 画像；Dubbo 用例来自模板或人工草案。
+
+---
+
 ## 12. 运行模式
 
 同一个引擎，差异只在范围。`run` 默认 `--mode delta`。
@@ -1160,7 +1278,9 @@ PYTHONPATH=. python -m astsight run \
 
 | 参数 | 说明 |
 |---|---|
-| `--base-url` | 被测服务地址；不提供则只生成不执行 |
+| `--base-url` | 被测 HTTP 服务地址；不提供则只生成不执行 |
+| `--dubbo-url` | 被测 Dubbo 直连地址 `dubbo://host:port`；纯 Dubbo 项目用它执行 |
+| `--dubbo-host` | 画像只解析出端口时拼 `dubbo://host:port`，默认 `127.0.0.1` |
 | `--reset-url` | 每条用例前的重置接口；Git Bash 下建议传完整 URL |
 | `--openapi` | OpenAPI 文件或 URL；缺省自动发现 |
 | `--out` | 产物根目录，相对 `project`，默认 `.astsight/runs` |

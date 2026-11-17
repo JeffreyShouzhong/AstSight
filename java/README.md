@@ -1,6 +1,7 @@
 # AstSight Java Agent
 
-Java agent 有两条接入路径：
+Java 侧有两个产物：**agent**（下面两条接入路径）和 **Dubbo sidecar**
+（见下一节，替测试端调用被测服务，不注入被测 JVM）。
 
 1. **HTTP 客户端改写**：在出站 HTTP 调用前改写 URL，把请求定向到引擎内嵌的
    Mock 服务。它只做 URL 改写，响应、分支、会话和证据仍由
@@ -8,6 +9,34 @@ Java agent 有两条接入路径：
 2. **Dubbo 消费端 Filter**：把 Filter 注入 Dubbo 的 `reference.filter` 链，
    计划内调用直接向 Mock 取桩并返回，不发起真实 RPC。首版只支持
    `-javaagent` 形态（v4.21）。
+
+## Dubbo Sidecar（调用被测服务）
+
+`astsight-sidecar-dubbo` 是**另一个方向的独立进程**：它不是 agent，不由被测
+JVM 加载，而是替测试端调用被测 Dubbo 服务。引擎把调用写成 JSONL 送进 stdin，
+sidecar 用 `ReferenceConfig<GenericService>` + Hessian2 泛化调用，再把结构化
+结果写回 stdout。
+
+- 不 Attach 被测 JVM、不装 agent、不执行被测仓库代码；
+- 首版只支持直连 `dubbo://host:port`；注册中心与 Kryo/FST 显式失败；
+- `retries=0`，超时/序列化/网络/无 provider 都归一成结构化 `rpc_status`；
+- JDK 9+ 启动时自动加 `--add-opens java.base/{java.lang,java.math,java.util}`。
+
+```bash
+cd java
+mvn -pl astsight-sidecar-dubbo package
+# target/astsight-dubbo-sidecar.jar
+
+printf '%s\n' '{"id":"1","op":"ping"}' '{"id":"2","op":"shutdown"}' \
+  | java --add-opens=java.base/java.lang=ALL-UNNAMED \
+         --add-opens=java.base/java.math=ALL-UNNAMED \
+         --add-opens=java.base/java.util=ALL-UNNAMED \
+         -jar astsight-sidecar-dubbo/target/astsight-dubbo-sidecar.jar
+```
+
+协议只有 `ping`（版本/协议号自检）、`invoke`、`shutdown`；stdout 只写协议，
+Dubbo/Netty 日志全部转到 stderr。Python 客户端在
+`engine/astsight/sidecar/dubbo.py`。
 
 ## 模块
 
@@ -17,6 +46,7 @@ Java agent 有两条接入路径：
 | `astsight-agent-http` | OkHttp / Feign / RestTemplate / Apache HttpClient 4/5 适配器（ASM 织入 + 反射 bridge） |
 | `astsight-agent-dubbo` | Dubbo 消费端 Filter、`DubboBridge`、Filter 注入器（`defineClass` 进应用类加载器） |
 | `astsight-agent` | 最终 shaded jar，入口 `io.astsight.agent.core.AstSightAgent` |
+| `astsight-sidecar-dubbo` | 独立进程，泛化调用被测 Dubbo 服务；不属于 agent，不注入被测 JVM |
 
 字节码目标为 JDK 8；构建使用 JDK 8+。HTTP adapter 的运行矩阵已在
 JDK 8/11/17/21/26 上实测；Dubbo Filter 在 Dubbo 2.7.22 与 3.2.19 ×

@@ -65,6 +65,10 @@
 | Dubbo Filter 首版 | ✅ 2026-11-16 | `java/astsight-agent-dubbo`：消费端 Filter 由 `@Activate(group="consumer")` 进链；Filter 字节在 `ExtensionLoader` 首次加载时用 `ClassLoader#defineClass` 注入应用类加载器，不增强 Dubbo 内部类；取桩走 `POST /_admin/dubbo/invoke`（按 `dep_id` 命中会话绑定），返回体按接口返回类型经 Jackson 构造；同步/异步/声明 future/oneway/泛化都已处理；计划内取桩失败抛 `RpcException`、真实调用 0 次，计划外 dep 放行且无证据；心跳新增 `dubbo` 块 |
 | Dubbo 端到端闭环 | ✅ 2026-11-16 | 画像只读源码识别 `@DubboReference`/`@Reference` 与接口签名，无法证明即 `unsupported`；dep 进 `downstream_deps`，计划生成 `dubbo_routes` 并固定 `agent_rewrite` 注入；`agent run` 自动加 `-javaagent` 与 token 环境变量；执行门禁读心跳，缺心跳/Filter 未进链阻塞 `filter_not_in_chain`，`serialization_verified=false` 告警；`dep_id` 带参数签名支持重载；矩阵 Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 组合通过 |
 | Dubbo 真实代理 e2e | ✅ 2026-11-16 | `java/samples/dubbo-consumer` 用 `ReferenceConfig` 直连 URL（`check=false`、`lazy=true`，不启注册中心/provider），经真实消费端代理调用；Python 计数端口断言 accept 与收到字节数均为 0；普通 classpath 与 Spring Boot fat jar 均返回桩、心跳 `filter_instantiated>0`；修复 fat jar 下 `java.lang` 模块打开范围与 bridge 跨加载器可见性 |
+| Dubbo sidecar 首版 | ✅ 2026-11-17 | 新增 `java/astsight-sidecar-dubbo`：独立进程 stdin/stdout JSONL（`ping`/`invoke`/`shutdown`），`ReferenceConfig<GenericService>` + Hessian2 泛化调用，引用按 `interface/group/version/url/timeout` 缓存、固定 `retries=0`；错误归一为 `TIMEOUT`/`SERIALIZATION`/`NETWORK`/`NO_PROVIDER`/`RPC_EXCEPTION`/`BAD_REQUEST`；仅直连 URL，注册中心与 Kryo/FST 显式失败；JDK 9+ 自动 `--add-opens`；Java 单测 17 条 |
+| Dubbo 提供方画像 | ✅ 2026-11-17 | `profile/dubbo.py` 扫描 `@DubboService` / 2.7 `@Service` / XML `<dubbo:service>`：接口必须在仓库、参数与返回类型解析到 JVM 名，`group/version` 进入 endpoint；多接口无 override、2.6、接口在 jar、Kotlin 提供方显式 `unsupported`，Spring `@Service` 不误判；`build_profiles` 追加 `transport=dubbo` 画像，context 增加 `dubbo` 证据、`dubbo_providers_only` 告警与提供方指纹；模板用例跳过非 HTTP；新增 10 条测试，全量 522 passed / 41 skipped |
+| Dubbo 入口用例闭环 | ✅ 2026-11-17 | `TestCase.dubbo: DubboCall` + 原生断言 `rpc_status`/`result_present`/`result_field`/`error_code`/`exception_type`/`error_message`；模板生成正向 Dubbo 用例（POJO 参数按 `{}` 并在 note 标明）；codegen 生成 `dubbo_call`，conftest 管理 sidecar 生命周期；目标地址 `ASTSIGHT_DUBBO_URL` → 用例 `dubbo.url` → 画像 `protocol_port` + `ASTSIGHT_DUBBO_HOST`，解析不了 blocked；纯 Dubbo 项目（无 HTTP 路由）`run --mode full` 可执行；草案校验按画像回填 interface/method/param_types；真 provider e2e 覆盖 codegen 与 full 模式；全量 532 passed / 43 skipped |
+| Dubbo sidecar 客户端 | ✅ 2026-11-17 | `engine/astsight/sidecar/dubbo.py`：进程生命周期、JSONL 请求/响应、超时与退出检测、stderr 尾部诊断、jar 解析（`ASTSIGHT_DUBBO_SIDECAR_JAR` → 仓库构建产物）；Python 单测 9 条 + 真实 jar e2e 4 条 |
 | Dubbo 全链路 e2e | ✅ 2026-11-16 | `java/samples/spring-boot-dubbo`（HTTP `/orders/{id}` → `@DubboReference` 字段 → `OrderApi`）+ `test_java_agent_dubbo_flow_e2e.py`：`run_flow` 完成画像 → `dubbo_routes` → `agent_rewrite` 注入（`JAVA_TOOL_OPTIONS` + `token_env`）→ 执行 → 报告；HTTP 响应体为桩数据，证据 `adapter=dubbo-filter`/`mode=agent_filter`，目标端口零建连零字节，门禁 pass（`filter_not_in_chain` 不阻断，`serialization_verified=false` 告警）；注解字段供画像读取，运行期由 `ReferenceConfig` 填同一字段，dep_id 一致 |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
 | 同响应关系断言 | ✅ 2026-11-17 | `body_field.expect` 新增 `$field` 与受限 `$op`（`len/sum/add/sub/mul/div`）；表达式经白名单 AST 校验，生成器只执行固定运算；同响应关系推导为 L3，两个及以上步骤引用仍为 L4 |
@@ -118,8 +122,10 @@
 ### Agent / 下游 Mock
 
 - **gRPC 仅 unary**：流式与 server reflection 未做。
-- **Dubbo**：2.7.22/3.2.19 × JDK 8/11/17/21/26 已验证；classpath 形态明确不支持，
-  更多版本与 sidecar 方案未做。
+- **Dubbo**：2.7.22/3.2.19 × JDK 8/11/17/21/26 已验证；classpath 形态明确不支持。
+  sidecar 首版（直连 URL + Hessian2）、`@DubboService` 提供方画像、Dubbo 入口用例
+  codegen 与执行已打通；注册中心、A4 直接生成 Dubbo 草案、多步骤与异步/oneway
+  仍未接入。
 - **Java agent 未实测清单**：改写后 `Host`/签名/pinning/连接池复用的副作用；
   异步/重试/重定向与二次改写；HTTPS 客户端拒绝 scheme 变化的实际比例；
   `/_agent/unmatched` 的延迟与证据归因。

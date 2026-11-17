@@ -101,6 +101,8 @@ class FlowConfig:
     depth: int = 5
     base_url: str | None = None
     reset_url: str | None = None
+    dubbo_url: str | None = None
+    dubbo_host: str | None = None
     codegraph: str = "auto"
     codegraph_module_root: str | None = None
     full_index: bool | None = None
@@ -328,6 +330,8 @@ def _execution_config(
         mode="cases",
         base_url=config.base_url,
         reset_url=config.reset_url,
+        dubbo_url=config.dubbo_url,
+        dubbo_host=config.dubbo_host,
         openapi=config.openapi,
         timeout=config.timeout,
         retries=config.retries,

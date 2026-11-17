@@ -15,7 +15,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from contracts import Assertion, AssertStrength, TestCase
+from contracts import Assertion, AssertStrength, DubboCall, TestCase, Transport
 
 from ..profile.openapi import sample_value
 from .strength import derive_assert_strength
@@ -151,6 +151,94 @@ def _negative_case(
     )
 
 
+_DUBBO_SCALARS = {
+    "java.lang.String": "sample",
+    "java.lang.CharSequence": "sample",
+    "java.lang.Object": None,
+    "int": 1,
+    "java.lang.Integer": 1,
+    "short": 1,
+    "java.lang.Short": 1,
+    "byte": 1,
+    "java.lang.Byte": 1,
+    "long": 1,
+    "java.lang.Long": 1,
+    "float": 1.0,
+    "java.lang.Float": 1.0,
+    "double": 1.0,
+    "java.lang.Double": 1.0,
+    "boolean": True,
+    "java.lang.Boolean": True,
+    "char": "a",
+    "java.lang.Character": "a",
+    "java.math.BigDecimal": 1,
+    "java.math.BigInteger": 1,
+}
+_DUBBO_COLLECTIONS = (
+    "java.util.List",
+    "java.util.Set",
+    "java.util.Collection",
+    "java.util.Map",
+    "java.util.HashMap",
+)
+
+
+def _dubbo_sample_arg(type_name: str) -> Any:
+    if type_name in _DUBBO_SCALARS:
+        return _DUBBO_SCALARS[type_name]
+    if type_name.endswith("[]"):
+        return []
+    if type_name.startswith("java.util.Map") or type_name.startswith("java.util.HashMap"):
+        return {}
+    if type_name.startswith(_DUBBO_COLLECTIONS[:3]):
+        return []
+    return {}
+
+
+def _dubbo_case(profile: dict, case_id: str) -> TestCase:
+    types = list(profile.get("parameter_types") or [])
+    arguments = [_dubbo_sample_arg(type_name) for type_name in types]
+    complex_args = [
+        type_name
+        for type_name in types
+        if type_name not in _DUBBO_SCALARS
+        and not type_name.endswith("[]")
+        and not type_name.startswith(_DUBBO_COLLECTIONS)
+    ]
+    asserts = [Assertion(kind="rpc_status", op="eq", expect="OK")]
+    return_type = str(profile.get("return_type") or "")
+    if return_type and return_type not in {"void", "java.lang.Void"}:
+        asserts.append(Assertion(kind="result_present", op="exists"))
+    note = (
+        f"DTO 参数按空对象构造，需人工补字段: {', '.join(complex_args)}"
+        if complex_args
+        else None
+    )
+    return TestCase(
+        id=case_id,
+        title=f"{profile.get('service')}.{profile.get('method')}",
+        transport=Transport.DUBBO,
+        endpoint=profile["endpoint"],
+        category="positive",
+        method=str(profile.get("method") or ""),
+        path="",
+        asserts=asserts,
+        source=f"dubbo:{profile['endpoint']}",
+        assert_strength=AssertStrength.L1,
+        note=note,
+        dubbo=DubboCall(
+            interface=str(profile.get("service") or ""),
+            method=str(profile.get("method") or ""),
+            parameter_types=types,
+            arguments=arguments,
+            url=profile.get("direct_url"),
+            group=profile.get("group") or None,
+            version=profile.get("version") or None,
+            target_port=profile.get("protocol_port"),
+        ),
+    )
+
+
 def generate_cases(
     profiles: list[dict],
     *,
@@ -170,6 +258,14 @@ def generate_cases(
         return f"TC-{counter:04d}"
 
     for profile in profiles:
+        transport = str(profile.get("transport", "http")).lower()
+        if transport == "dubbo":
+            cases.append(_dubbo_case(profile, next_id()))
+            continue
+        if transport != "http":
+            # gRPC 等其他入口还没有模板用例与执行链路；保留画像，
+            # 但不生成伪装成 HTTP 的假用例。
+            continue
         if profile.get("contract_incomplete"):
             # 没有契约就不生成——"未生成"必须显式出现在报告的 unmapped 区，
             # 而不是用一条只会打 200 的假用例把缺口盖住。

@@ -275,6 +275,7 @@ def test_prepare_degrades_without_openapi_and_routes(tmp_path: Path) -> None:
     assert context["interface_evidence"] == {
         "openapi": "missing",
         "routes": "none",
+        "dubbo": "missing",
         "contract_rules_available": False,
     }
 

@@ -696,6 +696,15 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 - 返回统一结果：成功值、`RpcException`、超时、连接失败；
 - sidecar 只调用目标服务，不执行被测仓库代码。
 
+> **实现状态（v4.44）**：独立进程与 stdio JSONL 协议已落地
+> （`java/astsight-sidecar-dubbo`、`engine/astsight/sidecar/dubbo.py`）。
+> 首版只支持直连 URL + Hessian2；Nacos/ZooKeeper 与 Kryo/FST 显式返回
+> `registry_not_supported` / `unsupported_serialization`，不静默降级。
+> C3 提供方画像（`@DubboService` / XML `<dubbo:service>`）、C6 codegen 与
+> C7 执行链路已接入，用例使用 `rpc_status` / `result_field` 等原生断言；
+> 目标地址支持 `ASTSIGHT_DUBBO_URL`、用例 URL 与画像端口 + host。
+> 纯 Dubbo 项目无 HTTP 路由时 `run --mode full` 也可执行。
+
 **Dubbo 识别（确定性，零 LLM）**：
 
 - 支持的全限定注解：`org.apache.dubbo.config.annotation.DubboService/DubboReference`（2.7/3.x）、`com.alibaba.dubbo.config.annotation.Service/Reference`（2.6，识别后标 `unsupported`）；

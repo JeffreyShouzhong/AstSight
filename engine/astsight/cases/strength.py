@@ -57,7 +57,7 @@ def derive_assert_strength(
             relation_value = relation_value or has_relation_expression(expect)
         if kind == "db_row":
             ref_steps |= _ref_steps(getattr(assertion, "where", None) or {})
-        if kind in {"body_field", "header", "db_row"} and str(
+        if kind in {"body_field", "header", "db_row", "result_field"} and str(
             getattr(assertion, "op", "")
         ) in _VALUE_OPS:
             literal_value = True

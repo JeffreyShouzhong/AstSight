@@ -122,6 +122,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--target", default="HEAD", help="delta 目标")
     run_parser.add_argument("--base-url", default=None, help="被测服务地址；不提供则只生成不执行")
     run_parser.add_argument("--reset-url", default=None)
+    run_parser.add_argument(
+        "--dubbo-url", default=None,
+        help="被测 Dubbo 服务直连地址（dubbo://host:port）；缺省用画像/环境变量",
+    )
+    run_parser.add_argument(
+        "--dubbo-host", default=None,
+        help="Dubbo 目标主机；画像只解析出端口时拼 dubbo://host:port",
+    )
     run_parser.add_argument("--openapi", default=None, help="OpenAPI 文件或 URL；缺省自动发现")
     run_parser.add_argument("--out", default=".astsight/runs", help="产物根目录（相对 project）")
     run_parser.add_argument("--depth", type=int, default=5)
@@ -568,6 +576,14 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_run.add_argument("--target", default="HEAD")
     agent_run.add_argument("--depth", type=int, default=5)
     agent_run.add_argument("--base-url", default=None, help="SUT 地址；不提供则只生成不执行")
+    agent_run.add_argument(
+        "--dubbo-url", default=None,
+        help="被测 Dubbo 服务直连地址（dubbo://host:port）",
+    )
+    agent_run.add_argument(
+        "--dubbo-host", default=None,
+        help="Dubbo 目标主机；画像只解析出端口时拼 dubbo://host:port",
+    )
     agent_run.add_argument("--reset-url", default=None)
     agent_run.add_argument("--codegraph", choices=("auto", "on", "off"), default="auto")
     agent_run.add_argument("--codegraph-module-root", default=None)
@@ -657,6 +673,8 @@ def _run_command(args) -> int:
         target=args.target,
         base_url=args.base_url,
         reset_url=args.reset_url,
+        dubbo_url=args.dubbo_url,
+        dubbo_host=args.dubbo_host,
         openapi=args.openapi,
         out=args.out,
         depth=args.depth,
@@ -1921,6 +1939,8 @@ def _agent_command(args) -> int:
             depth=args.depth,
             base_url=args.base_url,
             reset_url=args.reset_url,
+            dubbo_url=args.dubbo_url,
+            dubbo_host=args.dubbo_host,
             codegraph=args.codegraph,
             codegraph_module_root=args.codegraph_module_root,
             full_index=True if args.full_index else None,

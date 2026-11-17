@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from contracts import DataPlanBundle, TestCase
+from contracts import DataPlanBundle, TestCase, Transport
 
 from ..artifacts import slugify, utc_now
 from ..cases.expressions import field_paths, has_dynamic, has_relation_expression
@@ -49,6 +49,9 @@ MOCK_NAMESPACE = os.environ.get("ASTSIGHT_MOCK_NAMESPACE", "")
 MOCK_RUN_SCOPE = os.environ.get("ASTSIGHT_MOCK_RUN_SCOPE", "")
 MOCK_DRAIN_MS = int(os.environ.get("ASTSIGHT_MOCK_DRAIN_MS", "200"))
 MOCK_TTL_MS = int(os.environ.get("ASTSIGHT_MOCK_TTL_MS", "60000"))
+
+DUBBO_URL = os.environ.get("ASTSIGHT_DUBBO_URL", "").strip()
+DUBBO_HOST = os.environ.get("ASTSIGHT_DUBBO_HOST", "127.0.0.1").strip() or "127.0.0.1"
 
 DB_URL = os.environ.get("ASTSIGHT_DB_URL", "")
 DB_POLL_MS = max(10, int(os.environ.get("ASTSIGHT_DB_POLL_MS", "50")))
@@ -684,6 +687,58 @@ def schema_tools():
     return _SchemaTools()
 
 
+class _DubboTools:
+    @staticmethod
+    def field(value, path):
+        current = value
+        for part in str(path).split("."):
+            if isinstance(current, dict):
+                current = current.get(part)
+            elif isinstance(current, (list, tuple)):
+                try:
+                    current = current[int(part)]
+                except (ValueError, IndexError):
+                    return None
+            else:
+                return None
+        return current
+
+
+@pytest.fixture(scope="session")
+def dubbo_client():
+    from astsight.sidecar import DubboSidecar, DubboSidecarError
+
+    try:
+        client = DubboSidecar().start()
+    except DubboSidecarError as exc:
+        pytest.skip(f"dubbo_sidecar_unavailable: {exc.code}: {exc}")
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture()
+def dubbo_call(dubbo_client):
+    def call(*, url=None, target_port=None, **kwargs):
+        target = str(url or "").strip() or DUBBO_URL
+        if not target and target_port:
+            target = f"dubbo://{DUBBO_HOST}:{int(target_port)}"
+        if not target:
+            pytest.skip(
+                "dubbo_target_unresolved: 设置 ASTSIGHT_DUBBO_URL 或 "
+                "ASTSIGHT_DUBBO_HOST；不回退成 HTTP"
+            )
+        return dubbo_client.invoke(url=target, **kwargs)
+
+    return call
+
+
+@pytest.fixture()
+def dubbo_tools():
+    return _DubboTools()
+
+
 # ASTSIGHT MANUAL BEGIN
 # ASTSIGHT MANUAL END
 '''
@@ -856,6 +911,103 @@ def _assert_line(
     return f"        # unsupported assertion: {kind}/{op}"
 
 
+def _dubbo_assert_line(assertion, *, result_var: str = "result") -> str:
+    kind = assertion.kind
+    op = assertion.op
+    expect = assertion.expect
+    if kind == "rpc_status":
+        if op == "in":
+            return (
+                f"        assert {result_var}.rpc_status in {expect!r}, "
+                f"f\"unexpected rpc_status {{{result_var}.rpc_status}}\""
+            )
+        if op == "ne":
+            return (
+                f"        assert {result_var}.rpc_status != {expect!r}, "
+                f"f\"unexpected rpc_status {{{result_var}.rpc_status}}\""
+            )
+        return (
+            f"        assert {result_var}.rpc_status == {expect!r}, "
+            f"f\"expected rpc_status {expect!r}, got "
+            f"{{{result_var}.rpc_status}}: {{{result_var}.message}}\""
+        )
+    if kind == "result_present":
+        if op == "absent":
+            return f"        assert {result_var}.value is None, \"expected no result value\""
+        return f"        assert {result_var}.value is not None, \"expected a result value\""
+    if kind == "result_field":
+        target = assertion.target or ""
+        expr = f"dubbo_tools.field({result_var}.value, {target!r})"
+        if op == "exists":
+            return (
+                f"        assert {expr} is not None, "
+                f"f\"missing result field {target}\""
+            )
+        if op == "eq":
+            return (
+                f"        assert {expr} == {expect!r}, "
+                f"f\"unexpected value for {target}: {{{expr}!r}}\""
+            )
+        if op == "ne":
+            return f"        assert {expr} != {expect!r}"
+        if op == "in":
+            return f"        assert {expr} in {expect!r}"
+        if op == "gte":
+            return f"        assert {expr} >= {expect!r}"
+        if op == "lte":
+            return f"        assert {expr} <= {expect!r}"
+        if op == "contains":
+            return f"        assert {expect!r} in str({expr})"
+    if kind in {"error_code", "exception_type", "error_message"}:
+        attr = {
+            "error_code": "error",
+            "exception_type": "exception_type",
+            "error_message": "message",
+        }[kind]
+        expr = f"{result_var}.{attr}"
+        if op == "contains":
+            return f"        assert {expect!r} in str({expr} or '')"
+        if op == "in":
+            return f"        assert {expr} in {expect!r}"
+        if op == "ne":
+            return f"        assert {expr} != {expect!r}"
+        return (
+            f"        assert {expr} == {expect!r}, "
+            f"f\"unexpected {kind}: {{{expr}!r}}\""
+        )
+    if kind == "db_row":
+        table, _, column = (assertion.target or "").partition(".")
+        wait_ms = int(getattr(assertion, "wait_ms", 0) or 0)
+        return (
+            f"        db_tools.check({table!r}, {column or None!r}, "
+            f"{op!r}, {assertion.expect!r}, {assertion.where!r}, wait_ms={wait_ms})"
+        )
+    return f"        # unsupported assertion: {kind}/{op}"
+
+
+def _dubbo_case_lines(case: TestCase) -> list[str]:
+    call = case.dubbo
+    if call is None:
+        return ["        raise RuntimeError('dubbo_call_missing')"]
+    lines = [
+        "        result = dubbo_call(",
+        f"            interface={call.interface!r},",
+        f"            method={call.method!r},",
+        f"            param_types={call.parameter_types!r},",
+        f"            arguments={call.arguments!r},",
+        f"            url={call.url!r},",
+        f"            target_port={call.target_port!r},",
+        f"            group={call.group!r},",
+        f"            version={call.version!r},",
+        f"            attachments={call.attachments!r},",
+        f"            timeout_ms={int(call.timeout_ms)},",
+        "        )",
+    ]
+    for assertion in case.asserts:
+        lines.append(_dubbo_assert_line(assertion))
+    return lines
+
+
 def _responses_expr(case: TestCase, index: int, needed: set[str]) -> str:
     items = [
         f"{step.name!r}: body_{step.name}"
@@ -1009,7 +1161,12 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
     bindings = dict(sorted(case.mock_bindings.items()))
     requires_data = bool(case.preconditions)
     assertions = _case_assertions(case)
-    fixtures = ["client", "mock_session", "data_state", "step_tools"]
+    is_dubbo = case.transport is Transport.DUBBO
+    fixtures = (
+        ["mock_session", "data_state", "dubbo_call", "dubbo_tools"]
+        if is_dubbo
+        else ["client", "mock_session", "data_state", "step_tools"]
+    )
     if any(assertion.kind == "db_row" for assertion in assertions):
         fixtures.append("db_tools")
     if any(assertion.kind == "body_schema" for assertion in assertions):
@@ -1031,7 +1188,10 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
             f"        with mock_session({case.id!r}, {bindings!r}):",
         ]
     )
-    inner = _steps_lines(case) if case.steps else _single_request_lines(case)
+    if is_dubbo:
+        inner = _dubbo_case_lines(case)
+    else:
+        inner = _steps_lines(case) if case.steps else _single_request_lines(case)
     lines.extend("    " + line for line in inner)
     return "\n".join(lines)
 
@@ -1123,9 +1283,16 @@ def generate_pytest(
 
     used_classes: set[str] = set()
     for endpoint, endpoint_cases in grouped.items():
-        method, _, path = endpoint.partition(" ")
-        class_name = _class_name(method, path, used_classes)
-        filename = f"test_{slugify(method.lower() + '_' + path)}.py"
+        first = endpoint_cases[0]
+        if first.transport is Transport.DUBBO and first.dubbo is not None:
+            identifier = f"{first.dubbo.interface}_{first.dubbo.method}"
+            class_name = _class_name("Dubbo", identifier, used_classes)
+            # 文件名不能含 `.`，否则 pytest 会把它当成包路径。
+            filename = f"test_dubbo_{slugify(identifier.replace('.', '_'))}.py"
+        else:
+            method, _, path = endpoint.partition(" ")
+            class_name = _class_name(method, path, used_classes)
+            filename = f"test_{slugify(method.lower() + '_' + path)}.py"
         target = out / filename
         existing = target.read_text(encoding="utf-8") if target.exists() else ""
         manual = _manual_block(existing)

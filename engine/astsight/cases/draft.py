@@ -19,6 +19,7 @@ from contracts import (
     CaseStep,
     ChangeRef,
     CoverageRole,
+    DubboCall,
     Precondition,
     Priority,
     RuleRef,
@@ -137,6 +138,10 @@ class DraftCase(BaseModel):
     mock_bindings: dict[str, str] = Field(
         default_factory=dict,
         description="可选：dep_id → branch；执行时写入用例级 Mock 会话",
+    )
+    dubbo: DubboCall | None = Field(
+        default=None,
+        description="transport=dubbo 时的原生调用；interface/method 由画像回填",
     )
 
 
@@ -322,7 +327,11 @@ def to_test_case(
         preconditions=[item.model_copy() for item in draft_case.preconditions],
         endpoint=draft_case.endpoint,
         category=draft_case.category,
-        method=method.upper(),
+        method=(
+            method
+            if draft_case.transport is Transport.DUBBO
+            else method.upper()
+        ),
         path=path,
         priority=draft_case.priority,
         requirement_refs=refs,
@@ -339,6 +348,7 @@ def to_test_case(
         ),
         note=draft_case.note,
         mock_bindings=dict(draft_case.mock_bindings),
+        dubbo=draft_case.dubbo.model_copy(deep=True) if draft_case.dubbo else None,
     )
 
 
@@ -384,7 +394,11 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
         "endpoint": case.endpoint,
         "category": case.category,
         "priority": case.priority.value,
-        "method": case.method.upper(),
+        "method": (
+            case.method
+            if case.transport is Transport.DUBBO
+            else case.method.upper()
+        ),
         "path": case.path,
         "path_params": case.path_params,
         "query": case.query,
@@ -392,6 +406,11 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
         "body": case.body,
         "asserts": [_assert_payload(assertion) for assertion in case.asserts],
         "assert_strength": case.assert_strength.value,
+        **(
+            {"dubbo": case.dubbo.model_dump(mode="json")}
+            if case.dubbo is not None
+            else {}
+        ),
         # 为空时不写入，保持既有单请求用例指纹不变。
         **(
             {

@@ -706,6 +706,52 @@ typed DTO 均已覆盖。已实测 Dubbo 2.7.22 与 3.2.19 分别在 JDK
 Dubbo 有效，无法覆盖 HTTP）。矩阵外的 Dubbo 版本不做运行期试探，计划期按
 `unsupported` 处理。
 
+### 被测 Dubbo 服务调用（sidecar）
+
+`astsight.sidecar.DubboSidecar` 管理独立 Java 进程
+`astsight-sidecar-dubbo.jar`，通过 stdin/stdout JSONL 做泛化调用。它只负责
+“调用被测服务”，与 agent 的“拦截 SUT 出站调用”是两个方向：
+
+- RPC 失败（`TIMEOUT`/`SERIALIZATION`/`NETWORK`/`NO_PROVIDER`/
+  `RPC_EXCEPTION`）作为 `DubboCallResult` 返回；进程崩溃、协议错才抛
+  `DubboSidecarError`；
+- 首版只支持直连 `url`；传 `registry` 返回 `registry_not_supported`；
+- jar 解析顺序：`ASTSIGHT_DUBBO_SIDECAR_JAR` → 仓库
+  `java/astsight-sidecar-dubbo/target/astsight-dubbo-sidecar.jar`；
+- 启动时对 JDK 9+ 自动加 `--add-opens`，Windows/Linux 同一条命令。
+
+提供方画像已接入：`@DubboService`、2.7 的 `org.apache.dubbo...@Service` 与
+XML `<dubbo:service>` 会生成 `transport=dubbo` 的 profile（接口必须在仓库、
+参数与返回类型可解析）。
+
+Dubbo 入口用例已打通模板 → codegen → 执行：
+
+- `TestCase(transport=dubbo)` 带 `dubbo: DubboCall`，使用原生断言
+  `rpc_status` / `result_present` / `result_field` / `error_code` /
+  `exception_type` / `error_message`；
+- 生成物通过 conftest 的 `dubbo_call` 调 `astsight.sidecar`，sidecar jar
+  由 `ASTSIGHT_DUBBO_SIDECAR_JAR` 或仓库构建产物解析；
+- 目标地址顺序：`ASTSIGHT_DUBBO_URL` → 用例 `dubbo.url` →
+  画像端口 + `ASTSIGHT_DUBBO_HOST`；解析不了 skip 为 blocked；
+- 纯 Dubbo 项目（无 HTTP 路由）`run --mode full` 仍可生成/执行；
+- 模板只生成正向冒烟，POJO 参数按空对象构造并在 `note` 标明；A4 仍只收
+  HTTP 画像。
+
+```bash
+# 真 provider 端到端（codegen + run --mode full）
+ASTSIGHT_DUBBO_SIDECAR_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \
+  python -m pytest tests/integration/test_dubbo_case_e2e.py -q
+```
+
+```bash
+cd java && mvn -pl astsight-sidecar-dubbo package
+cd ../engine
+ASTSIGHT_DUBBO_SIDECAR_E2E=1 PYTHONPATH=. \
+  python -m pytest tests/integration/test_dubbo_sidecar_e2e.py -q
+PYTHONPATH=. python -m pytest tests/test_dubbo_sidecar_client.py \
+  tests/test_dubbo_provider_profile.py tests/test_profile_dubbo.py -q
+```
+
 ### 下游调用点识别与计划草案（P1）
 
 `build_profiles(..., project_root=...)` 会在画像阶段从路由 handler 出发做**有界 Python
