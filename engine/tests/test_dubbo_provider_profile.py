@@ -341,6 +341,7 @@ public class CreateOrderRequest {
     assert fields["status"]["schema"]["kind"] == "enum"
     assert fields["status"]["schema"]["enum_values"] == ["NEW", "PAID"]
     assert fields["tags"]["schema"]["kind"] == "collection"
+    assert fields["tags"]["schema"]["element"]["type"] == "java.lang.String"
     assert fields["address"]["schema"]["kind"] == "dto"
     assert fields["address"]["schema"]["fields"][0]["name"] == "city"
     assert create["result_schema"]["kind"] == "dto"
@@ -357,7 +358,7 @@ public class CreateOrderRequest {
             "sku": "sample",
             "quantity": 1,
             "status": "NEW",
-            "tags": [],
+            "tags": ["sample"],
             "address": {"city": "sample"},
         }
     ]
@@ -419,6 +420,164 @@ def test_a4_prompt_includes_dubbo_profiles_and_dto_fields(
     assert by_id["service"] == "com.acme.OrderService"
     assert by_id["parameter_schemas"][0]["kind"] == "scalar"
     assert payload["unsupported_profiles"] == []
+
+
+def test_constraints_temporal_collections_and_opaque_types_are_sampled(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path
+    package = root / "src" / "main" / "java" / "com" / "acme"
+    package.mkdir(parents=True)
+    (package / "RichService.java").write_text(
+        "package com.acme;\n"
+        "public interface RichService {\n"
+        "    String rich(RichRequest request);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (package / "RichRequest.java").write_text(
+        """package com.acme;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+
+public class RichRequest {
+    @NotNull
+    @Size(min = 3, max = 4)
+    private String code;
+    @Min(10)
+    @Max(20)
+    private int quantity;
+    @Email
+    private String email;
+    @Pattern(regexp = "^[A-Z]{2}$")
+    private String region;
+    private LocalDate birthday;
+    private List<Address> addresses;
+    private Map<String, Address> byCity;
+    private String[] tags;
+    private UnknownThirdParty external;
+}
+""",
+        encoding="utf-8",
+    )
+    (package / "Address.java").write_text(
+        "package com.acme;\npublic class Address { private String city; }\n",
+        encoding="utf-8",
+    )
+    (package / "RichServiceImpl.java").write_text(
+        """package com.acme;
+
+import org.apache.dubbo.config.annotation.DubboService;
+
+@DubboService(group = "rich", version = "1")
+public class RichServiceImpl implements RichService {
+    public String rich(RichRequest request) { return null; }
+}
+""",
+        encoding="utf-8",
+    )
+
+    result = _scan(root)
+    provider = next(
+        item for item in result.providers if item["method"] == "rich"
+    )
+    schema = provider["parameter_schemas"][0]
+    fields = {field["name"]: field for field in schema["fields"]}
+    assert fields["code"]["constraints"] == {
+        "required": True,
+        "min_length": 3,
+        "max_length": 4,
+    }
+    assert fields["quantity"]["constraints"] == {"minimum": 10, "maximum": 20}
+    assert fields["email"]["constraints"] == {"format": "email"}
+    assert fields["region"]["constraints"] == {"pattern": "^[A-Z]{2}$"}
+    assert fields["birthday"]["schema"]["kind"] == "temporal"
+    assert fields["birthday"]["schema"]["format"] == "date"
+    assert fields["addresses"]["schema"]["kind"] == "collection"
+    assert fields["addresses"]["schema"]["element"]["kind"] == "dto"
+    assert fields["byCity"]["schema"]["kind"] == "map"
+    assert fields["byCity"]["schema"]["key"]["type"] == "java.lang.String"
+    assert fields["byCity"]["schema"]["value"]["kind"] == "dto"
+    assert fields["tags"]["schema"]["kind"] == "array"
+    assert fields["tags"]["schema"]["element"]["type"] == "java.lang.String"
+    assert fields["external"]["schema"]["kind"] == "unknown"
+
+    profiles, _ = build_profiles([], [], project_root=root)
+    cases = generate_cases(profiles)
+    case = next(
+        item
+        for item in cases
+        if item.dubbo is not None and item.dubbo.method == "rich"
+    )
+    assert case.dubbo.arguments == [
+        {
+            "code": "samp",
+            "quantity": 10,
+            "email": "test@example.com",
+            "region": "sample",
+            "birthday": "2024-01-01",
+            "addresses": [{"city": "sample"}],
+            "byCity": {"sample": {"city": "sample"}},
+            "tags": ["sample"],
+            "external": {},
+        }
+    ]
+    assert case.note is not None
+    assert "pattern" in case.note
+    assert "无法解析类型" in case.note
+
+
+def test_parameter_annotations_become_constraints(tmp_path: Path) -> None:
+    root = tmp_path
+    package = root / "src" / "main" / "java" / "com" / "acme"
+    package.mkdir(parents=True)
+    (package / "ConstraintService.java").write_text(
+        """package com.acme;
+
+import java.time.LocalDate;
+
+public interface ConstraintService {
+    String echo(@Size(min = 2, max = 4) String code, @Positive int count, LocalDate date);
+}
+""",
+        encoding="utf-8",
+    )
+    (package / "ConstraintServiceImpl.java").write_text(
+        """package com.acme;
+
+import org.apache.dubbo.config.annotation.DubboService;
+
+@DubboService
+public class ConstraintServiceImpl implements ConstraintService {
+    public String echo(String code, int count, LocalDate date) { return null; }
+}
+""",
+        encoding="utf-8",
+    )
+
+    result = _scan(root)
+    provider = next(
+        item for item in result.providers if item["method"] == "echo"
+    )
+    assert provider["parameter_schemas"][0]["constraints"] == {
+        "min_length": 2,
+        "max_length": 4,
+    }
+    assert provider["parameter_schemas"][1]["constraints"] == {
+        "minimum": 0,
+        "minimum_exclusive": True,
+    }
+    assert provider["parameter_schemas"][2]["kind"] == "temporal"
+
+    profiles, _ = build_profiles([], [], project_root=root)
+    case = next(
+        item
+        for item in generate_cases(profiles)
+        if item.dubbo is not None and item.dubbo.method == "echo"
+    )
+    assert case.dubbo.arguments == ["samp", 1, "2024-01-01"]
 
 
 def test_protocol_port_is_resolved_from_properties(tmp_path: Path) -> None:

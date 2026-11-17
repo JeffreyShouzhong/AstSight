@@ -1146,9 +1146,11 @@ dubbo:com.acme.OrderService#create(com.acme.CreateOrderRequest)?group=order&vers
 Spring 的 `@Service` 不会被误判。
 
 DTO 字段会进入 `parameter_schemas` / `result_schema`：普通字段、嵌套 DTO、
-record 组件、枚举常量，以及 `@NotNull` / `@NotBlank` / `@NotEmpty` 等必填
-标记。模板和 A4 都按这些字段构造 `arguments`；无法静态解析的类型按 `null`
-采样并在用例 `note` 里标明。
+record 组件、枚举常量、必填标记（`@NotNull` / `@NotBlank` / `@NotEmpty`），
+以及 `@Size` / `@Min` / `@Max` / `@Pattern` / `@Email` / `@Positive` 等约束。
+集合/Map/数组带元素 schema；`java.time.*`、`java.util.Date`、`UUID`、`URI`、
+`URL` 单独识别。模板和 A4 都按这些字段构造 `arguments`；未知第三方类型按
+空对象采样并在用例 `note` 里标明。
 
 ### 11A.3 目标地址
 
@@ -1220,9 +1222,10 @@ PYTHONPATH=. python -m astsight run \
 - 首版只支持直连 URL + Hessian2；注册中心（Nacos/ZooKeeper）与 Kryo/FST
   显式失败。
 - sidecar 固定同步调用；异步/oneway 不生成用例。
-- 模板只生成正向冒烟：DTO 参数按字段采样（必填标记、嵌套 DTO、枚举），
-  无法解析的字段按 `null` 并在 `note` 标明；没有字段级断言时只校验
-  `rpc_status` 与返回值存在。
+- 模板只生成正向冒烟：DTO 参数按字段采样（必填、嵌套 DTO、枚举、约束、
+  集合元素、时间格式）；未知第三方类型按空对象发送并在 `note` 标明，
+  `pattern` 字段也会提示人工确认；没有字段级断言时只校验 `rpc_status`
+  与返回值存在。
 - A4 已收 Dubbo 画像与 `parameter_schemas`，可直接生成 `transport=dubbo`
   草案；草案只填 `dubbo.arguments`，接口/方法/参数类型由框架回填并校验。
 

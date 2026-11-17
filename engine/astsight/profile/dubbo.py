@@ -180,6 +180,8 @@ class _TypeDecl:
 @dataclass(frozen=True)
 class _MethodDecl:
     params: list[str]
+    declared_params: list[str]
+    parameter_constraints: list[dict[str, Any]]
     line: int
     return_type: str | None
     declared_return_type: str
@@ -191,6 +193,7 @@ class _FieldDecl:
     type: str | None
     declared_type: str
     annotations: tuple[str, ...] = ()
+    constraints: dict[str, Any] = field(default_factory=dict)
     required: bool = False
 
 
@@ -304,39 +307,89 @@ def _resolve_type(
     return None
 
 
-def _parameter_types(
+def _mask_annotation_args(text: str) -> str:
+    """把 `@Foo(...)` 的参数替换成等长空格，供方法签名正则匹配。
+
+    `_METHOD_DECL` 的 `([^)]*)` 遇到注解参数里的括号会提前结束；这里只屏蔽
+    参数、保留注解名与原文偏移，约束仍从原文本解析。
+    """
+    chars = list(text)
+    index = 0
+    length = len(text)
+    while index < length:
+        at = text.find("@", index)
+        if at < 0:
+            break
+        match = re.match(r"@[\w.$]+", text[at:])
+        if match is None:
+            index = at + 1
+            continue
+        cursor = at + len(match.group(0))
+        while cursor < length and text[cursor].isspace():
+            cursor += 1
+        if cursor >= length or text[cursor] != "(":
+            index = cursor
+            continue
+        depth = 0
+        start = cursor
+        in_string = False
+        escaped = False
+        while cursor < length:
+            char = text[cursor]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            else:
+                if char == '"':
+                    in_string = True
+                elif char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        for position in range(start, cursor + 1):
+                            if chars[position] not in "\r\n":
+                                chars[position] = " "
+                        index = cursor + 1
+                        break
+            cursor += 1
+        else:
+            break
+    return "".join(chars)
+
+
+def _parameter_details(
     raw: str,
     *,
     package: str,
     imports: dict[str, str],
     classes: dict[str, str],
-) -> list[str] | None:
+) -> list[dict[str, Any]] | None:
     if not raw.strip():
         return []
-    parts: list[str] = []
-    depth = 0
-    start = 0
-    for index, char in enumerate(raw):
-        if char == "<":
-            depth += 1
-        elif char == ">":
-            depth = max(0, depth - 1)
-        elif char == "," and depth == 0:
-            parts.append(raw[start:index])
-            start = index + 1
-    parts.append(raw[start:])
-    result: list[str] = []
-    for item in parts:
+    result: list[dict[str, Any]] = []
+    for item in _split_type_list(raw):
+        details = _annotation_details(item)
         cleaned = _strip_annotations(item)
         # 去掉参数名，只保留类型部分。
         match = re.match(r"(.+?)\s+[A-Za-z_$]\w*$", cleaned)
-        type_text = match.group(1) if match else cleaned
+        type_text = (match.group(1) if match else cleaned).strip()
         resolved = _resolve_type(
             type_text, package=package, imports=imports, classes=classes
         )
         if resolved is None:
             return None
-        result.append(resolved)
+        result.append(
+            {
+                "type": resolved,
+                "declared": type_text,
+                "constraints": _constraints_from_annotations(details),
+            }
+        )
     return result
 
 
@@ -350,18 +403,24 @@ def _interface_methods(
     classes: dict[str, str],
 ) -> dict[tuple[str, int], list[_MethodDecl]]:
     methods: dict[tuple[str, int], list[_MethodDecl]] = {}
-    for match in _METHOD_DECL.finditer(body):
+    masked = _mask_annotation_args(body)
+    for match in _METHOD_DECL.finditer(masked):
         name = match.group(2)
         if name in {"if", "for", "while", "switch", "catch", "return", "new"}:
             continue
-        params = _parameter_types(
-            match.group(3),
+        # 正则跑在屏蔽注解参数的副本上；参数原文按同一偏移取回，保留约束。
+        raw_params = body[match.start(3) : match.end(3)]
+        details = _parameter_details(
+            raw_params,
             package=package,
             imports=imports,
             classes=classes,
         )
-        if params is None:
+        if details is None:
             continue
+        params = [item["type"] for item in details]
+        declared_params = [item["declared"] for item in details]
+        parameter_constraints = [item["constraints"] for item in details]
         declared_return = _strip_annotations(match.group(1)).strip()
         return_type = _resolve_type(
             declared_return,
@@ -373,6 +432,8 @@ def _interface_methods(
         methods.setdefault((name, len(params)), []).append(
             _MethodDecl(
                 params=params,
+                declared_params=declared_params,
+                parameter_constraints=parameter_constraints,
                 line=line,
                 return_type=return_type,
                 declared_return_type=declared_return,
@@ -438,14 +499,14 @@ def _dep_record(
 
 
 def _split_type_list(raw: str) -> list[str]:
-    """按顶层逗号切分 `implements A, B<C>`，忽略泛型内逗号。"""
+    """按顶层逗号切分 `implements A, B<C>`；忽略泛型、括号与花括号内的逗号。"""
     parts: list[str] = []
     depth = 0
     start = 0
     for index, char in enumerate(raw):
-        if char == "<":
+        if char in "<({":
             depth += 1
-        elif char == ">":
+        elif char in ">)}":
             depth = max(0, depth - 1)
         elif char == "," and depth == 0:
             parts.append(raw[start:index])
@@ -503,7 +564,9 @@ def _dubbo_protocol_ports(raw: str, suffix: str) -> set[int]:
 _SCALAR_JVM_TYPES = {
     "java.lang.String",
     "java.lang.CharSequence",
-    "java.lang.Object",
+    "java.util.UUID",
+    "java.net.URI",
+    "java.net.URL",
     "int",
     "java.lang.Integer",
     "short",
@@ -537,6 +600,20 @@ _MAP_TYPES = {
     "java.util.HashMap",
     "java.util.LinkedHashMap",
     "java.util.TreeMap",
+}
+_TEMPORAL_TYPES = {
+    "java.util.Date": "datetime",
+    "java.sql.Date": "date",
+    "java.sql.Time": "time",
+    "java.sql.Timestamp": "datetime",
+    "java.time.LocalDate": "date",
+    "java.time.LocalTime": "time",
+    "java.time.LocalDateTime": "datetime",
+    "java.time.OffsetDateTime": "datetime",
+    "java.time.ZonedDateTime": "datetime",
+    "java.time.Instant": "instant",
+    "java.time.Duration": "duration",
+    "java.time.Period": "period",
 }
 
 
@@ -573,7 +650,146 @@ def _annotation_names(raw: str) -> tuple[str, ...]:
     return tuple(_ANNOTATION_NAME.findall(raw or ""))
 
 
-def _is_required_field(annotations: tuple[str, ...]) -> bool:
+def _parse_literal(text: str) -> Any:
+    value = (text or "").strip()
+    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+        return value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if value in {"true", "false"}:
+        return value == "true"
+    if value.endswith(".class"):
+        return value[: -len(".class")]
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+def _annotation_args(raw: str) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for match in re.finditer(
+        r"([A-Za-z_$]\w*)\s*=\s*(\"(?:[^\"\\]|\\.)*\"|[^,)]+)", raw or ""
+    ):
+        values[match.group(1)] = _parse_literal(match.group(2))
+    if not values:
+        token = (raw or "").strip().split(",", 1)[0].strip()
+        if token:
+            values["value"] = _parse_literal(token)
+    return values
+
+
+def _annotation_details(raw: str) -> list[tuple[str, dict[str, Any]]]:
+    """解析注解名与参数；括号内的字符串/嵌套括号不截断。"""
+    details: list[tuple[str, dict[str, Any]]] = []
+    index = 0
+    length = len(raw or "")
+    while index < length:
+        at = raw.find("@", index)
+        if at < 0:
+            break
+        match = re.match(r"@([\w.$]+)", raw[at:])
+        if match is None:
+            index = at + 1
+            continue
+        name = match.group(1)
+        end = at + len(match.group(0))
+        while end < length and raw[end].isspace():
+            end += 1
+        args = ""
+        if end < length and raw[end] == "(":
+            depth = 0
+            start = end + 1
+            cursor = end
+            in_string = False
+            escaped = False
+            while cursor < length:
+                char = raw[cursor]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                else:
+                    if char == '"':
+                        in_string = True
+                    elif char == "(":
+                        depth += 1
+                    elif char == ")":
+                        depth -= 1
+                        if depth == 0:
+                            args = raw[start:cursor]
+                            end = cursor + 1
+                            break
+                cursor += 1
+        details.append((name, _annotation_args(args)))
+        index = max(end, at + 1)
+    return details
+
+
+def _as_number(value: Any) -> Any:
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        try:
+            return float(str(value))
+        except (TypeError, ValueError):
+            return value
+
+
+def _constraints_from_annotations(
+    details: list[tuple[str, dict[str, Any]]],
+) -> dict[str, Any]:
+    constraints: dict[str, Any] = {}
+    for name, args in details:
+        short = name.rsplit(".", 1)[-1]
+        if short in _REQUIRED_ANNOTATIONS:
+            constraints["required"] = True
+        elif short in {"Size", "Length"}:
+            if "min" in args:
+                constraints["min_length"] = _as_number(args["min"])
+            if "max" in args:
+                constraints["max_length"] = _as_number(args["max"])
+        elif short == "Min" and "value" in args:
+            constraints["minimum"] = _as_number(args["value"])
+        elif short == "Max" and "value" in args:
+            constraints["maximum"] = _as_number(args["value"])
+        elif short in {"DecimalMin", "DecimalMax"} and "value" in args:
+            key = "minimum" if short == "DecimalMin" else "maximum"
+            constraints[key] = _as_number(args["value"])
+            if args.get("inclusive") is False:
+                constraints[f"{key}_exclusive"] = True
+        elif short == "Pattern":
+            pattern = args.get("regexp", args.get("value"))
+            if pattern:
+                constraints["pattern"] = str(pattern)
+        elif short == "Email":
+            constraints["format"] = "email"
+        elif short in {"Positive", "PositiveOrZero"}:
+            constraints["minimum"] = 0
+            if short == "Positive":
+                constraints["minimum_exclusive"] = True
+        elif short in {"Negative", "NegativeOrZero"}:
+            constraints["maximum"] = 0
+            if short == "Negative":
+                constraints["maximum_exclusive"] = True
+        elif short in {"Past", "Future"}:
+            constraints["temporal"] = short.lower()
+    return constraints
+
+
+def _is_required_field(
+    annotations: tuple[str, ...],
+    constraints: dict[str, Any] | None = None,
+) -> bool:
+    if constraints and constraints.get("required"):
+        return True
     return any(name.rsplit(".", 1)[-1] in _REQUIRED_ANNOTATIONS for name in annotations)
 
 
@@ -596,14 +812,17 @@ def _parse_fields(
         resolved = _resolve_type(
             declared, package=package, imports=imports, classes=classes
         )
-        annotations = _annotation_names(match.group("annotations") or "")
+        details = _annotation_details(match.group("annotations") or "")
+        annotations = tuple(name for name, _args in details)
+        constraints = _constraints_from_annotations(details)
         fields.append(
             _FieldDecl(
                 name=match.group("name"),
                 type=resolved,
                 declared_type=declared,
                 annotations=annotations,
-                required=_is_required_field(annotations),
+                constraints=constraints,
+                required=_is_required_field(annotations, constraints),
             )
         )
     return fields
@@ -642,13 +861,16 @@ def _parse_record_components(
         resolved = _resolve_type(
             declared, package=package, imports=imports, classes=classes
         )
-        annotations = _annotation_names(component.group("annotations") or "")
+        details = _annotation_details(component.group("annotations") or "")
+        annotations = tuple(name for name, _args in details)
+        constraints = _constraints_from_annotations(details)
         fields.append(
             _FieldDecl(
                 name=component.group("name"),
                 type=resolved,
                 declared_type=declared,
                 annotations=annotations,
+                constraints=constraints,
                 required=True,
             )
         )
@@ -664,24 +886,127 @@ def _parse_enum_constants(body: str) -> list[str]:
     return [name for name in names if name not in {"public", "private", "protected"}]
 
 
+def _generic_arguments(declared: str) -> list[str]:
+    match = re.search(r"<(.*)>\s*$", declared or "", re.S)
+    if match is None:
+        return []
+    return _split_type_list(match.group(1))
+
+
+def _schema_from_declared(
+    declared: str,
+    class_index: dict[str, _ClassInfo],
+    *,
+    package: str,
+    imports: dict[str, str],
+    classes: dict[str, str],
+    depth: int,
+    seen: set[str] | None,
+) -> dict[str, Any] | None:
+    text = re.sub(
+        r"^\?\s*(?:extends|super)\s+", "", (declared or "").strip()
+    )
+    if not text:
+        return None
+    resolved = _resolve_type(
+        text, package=package, imports=imports, classes=classes
+    )
+    return _schema_for_type(
+        resolved,
+        class_index,
+        declared_type=text,
+        package=package,
+        imports=imports,
+        classes=classes,
+        depth=depth,
+        seen=seen,
+    )
+
+
 def _schema_for_type(
     type_name: str | None,
     class_index: dict[str, _ClassInfo],
     *,
+    declared_type: str = "",
+    package: str = "",
+    imports: dict[str, str] | None = None,
+    classes: dict[str, str] | None = None,
     depth: int = 0,
     seen: set[str] | None = None,
 ) -> dict[str, Any]:
+    imports = imports or {}
+    classes = classes or {}
     if not type_name:
         return {"kind": "unknown", "type": ""}
+    if type_name in _TEMPORAL_TYPES:
+        return {
+            "kind": "temporal",
+            "type": type_name,
+            "format": _TEMPORAL_TYPES[type_name],
+        }
     if type_name in _SCALAR_JVM_TYPES:
         return {"kind": "scalar", "type": type_name}
-    if type_name in _COLLECTION_TYPES or type_name.endswith("[]"):
-        return {"kind": "collection", "type": type_name}
+    if type_name.endswith("[]"):
+        element = _schema_from_declared(
+            (declared_type or type_name)[:-2],
+            class_index,
+            package=package,
+            imports=imports,
+            classes=classes,
+            depth=depth + 1,
+            seen=seen,
+        )
+        return {"kind": "array", "type": type_name, "element": element}
+    if type_name in _COLLECTION_TYPES:
+        arguments = _generic_arguments(declared_type)
+        element = (
+            _schema_from_declared(
+                arguments[0],
+                class_index,
+                package=package,
+                imports=imports,
+                classes=classes,
+                depth=depth + 1,
+                seen=seen,
+            )
+            if arguments
+            else None
+        )
+        return {"kind": "collection", "type": type_name, "element": element}
     if type_name in _MAP_TYPES:
-        return {"kind": "map", "type": type_name}
+        arguments = _generic_arguments(declared_type)
+        key = (
+            _schema_from_declared(
+                arguments[0],
+                class_index,
+                package=package,
+                imports=imports,
+                classes=classes,
+                depth=depth + 1,
+                seen=seen,
+            )
+            if len(arguments) >= 1
+            else None
+        )
+        value = (
+            _schema_from_declared(
+                arguments[1],
+                class_index,
+                package=package,
+                imports=imports,
+                classes=classes,
+                depth=depth + 1,
+                seen=seen,
+            )
+            if len(arguments) >= 2
+            else None
+        )
+        return {"kind": "map", "type": type_name, "key": key, "value": value}
     info = class_index.get(type_name)
     if info is None:
-        return {"kind": "unknown", "type": type_name}
+        # 已知但不是仓库源码里的类型（第三方 jar/注解等）：用空对象采样，
+        # 并在用例 note 里标明需要人工确认。
+        return {"kind": "opaque", "type": type_name}
     if info.is_enum:
         return {
             "kind": "enum",
@@ -696,18 +1021,26 @@ def _schema_for_type(
     for field in info.fields[:_MAX_SCHEMA_FIELDS]:
         # 每个字段独立记录路径，允许不同分支引用同一 DTO，同时仍能断环。
         schema = _schema_for_type(
-            field.type, class_index, depth=depth + 1, seen=set(seen)
+            field.type,
+            class_index,
+            declared_type=field.declared_type,
+            package=info.package,
+            imports=info.imports,
+            classes=classes,
+            depth=depth + 1,
+            seen=set(seen),
         )
-        fields.append(
-            {
-                "name": field.name,
-                "type": field.type,
-                "declared_type": field.declared_type,
-                "required": field.required,
-                "annotations": list(field.annotations),
-                "schema": schema,
-            }
-        )
+        item: dict[str, Any] = {
+            "name": field.name,
+            "type": field.type,
+            "declared_type": field.declared_type,
+            "required": field.required,
+            "annotations": list(field.annotations),
+            "schema": schema,
+        }
+        if field.constraints:
+            item["constraints"] = dict(field.constraints)
+        fields.append(item)
     return {"kind": "dto", "type": type_name, "fields": fields}
 
 
@@ -740,6 +1073,7 @@ def _provider_records(
     impl: str,
     iface: _Interface,
     class_index: dict[str, _ClassInfo],
+    classes: dict[str, str],
     group: str,
     version: str,
     direct_url: str | None,
@@ -767,14 +1101,21 @@ def _provider_records(
                     "service": service,
                     "method": method_name,
                     "parameter_types": list(declaration.params),
+                    "declared_parameter_types": list(declaration.declared_params),
                     "return_type": declaration.return_type,
                     "return_type_declared": declaration.declared_return_type,
-                    "parameter_schemas": [
-                        _schema_for_type(type_name, class_index)
-                        for type_name in declaration.params
-                    ],
+                    "parameter_schemas": _parameter_schemas(
+                        declaration, iface, class_index, classes
+                    ),
                     "result_schema": (
-                        _schema_for_type(declaration.return_type, class_index)
+                        _schema_for_type(
+                            declaration.return_type,
+                            class_index,
+                            declared_type=declaration.declared_return_type,
+                            package=iface.package,
+                            imports=iface.imports,
+                            classes=classes,
+                        )
                         if declaration.return_type
                         else None
                     ),
@@ -806,6 +1147,38 @@ def _provider_records(
                 }
             )
     return records
+
+
+def _parameter_schemas(
+    declaration: _MethodDecl,
+    iface: _Interface,
+    class_index: dict[str, _ClassInfo],
+    classes: dict[str, str],
+) -> list[dict[str, Any]]:
+    schemas: list[dict[str, Any]] = []
+    for index, type_name in enumerate(declaration.params):
+        declared = (
+            declaration.declared_params[index]
+            if index < len(declaration.declared_params)
+            else ""
+        )
+        schema = _schema_for_type(
+            type_name,
+            class_index,
+            declared_type=declared,
+            package=iface.package,
+            imports=iface.imports,
+            classes=classes,
+        )
+        constraints = (
+            declaration.parameter_constraints[index]
+            if index < len(declaration.parameter_constraints)
+            else {}
+        )
+        if constraints:
+            schema["constraints"] = dict(constraints)
+        schemas.append(schema)
+    return schemas
 
 
 def _add_provider(
@@ -948,6 +1321,7 @@ def _scan_provider_annotations(
             impl=impl_fqn,
             iface=iface,
             class_index=class_index,
+            classes=classes,
             group=group,
             version=version,
             direct_url=direct_url,
@@ -1177,6 +1551,7 @@ def scan_dubbo_sources(
             impl=item["ref"],
             iface=iface,
             class_index=class_index,
+            classes=classes,
             group=_clean_group_version(item["group"]),
             version=_clean_group_version(item["version"]),
             direct_url=None,

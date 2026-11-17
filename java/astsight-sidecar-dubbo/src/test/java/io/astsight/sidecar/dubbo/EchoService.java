@@ -9,6 +9,8 @@ public interface EchoService {
 
     EchoReply describe(EchoRequest request);
 
+    String birthday(EchoRequest request);
+
     String attachment(String key);
 
     String slow(long millis);

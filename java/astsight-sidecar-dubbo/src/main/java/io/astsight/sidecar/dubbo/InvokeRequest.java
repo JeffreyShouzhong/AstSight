@@ -5,6 +5,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.Period;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.util.Date;
+import java.util.UUID;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -266,6 +280,61 @@ final class InvokeRequest {
             if ("java.math.BigInteger".equals(type)) {
                 return new BigInteger(node.asText());
             }
+            if ("java.time.LocalDate".equals(type)) {
+                return LocalDate.parse(node.asText());
+            }
+            if ("java.time.LocalTime".equals(type)) {
+                return LocalTime.parse(node.asText());
+            }
+            if ("java.time.LocalDateTime".equals(type)) {
+                return LocalDateTime.parse(node.asText());
+            }
+            if ("java.time.OffsetDateTime".equals(type)) {
+                return OffsetDateTime.parse(node.asText());
+            }
+            if ("java.time.ZonedDateTime".equals(type)) {
+                return ZonedDateTime.parse(node.asText());
+            }
+            if ("java.time.Instant".equals(type)) {
+                return Instant.parse(node.asText());
+            }
+            if ("java.time.Duration".equals(type)) {
+                return Duration.parse(node.asText());
+            }
+            if ("java.time.Period".equals(type)) {
+                return Period.parse(node.asText());
+            }
+            if ("java.util.Date".equals(type)) {
+                if (node.isNumber()) {
+                    return new Date(node.asLong());
+                }
+                return Date.from(parseInstant(node.asText()));
+            }
+            if ("java.sql.Date".equals(type)) {
+                return java.sql.Date.valueOf(LocalDate.parse(node.asText()));
+            }
+            if ("java.sql.Time".equals(type)) {
+                return java.sql.Time.valueOf(LocalTime.parse(node.asText()));
+            }
+            if ("java.sql.Timestamp".equals(type)) {
+                if (node.isNumber()) {
+                    return new java.sql.Timestamp(node.asLong());
+                }
+                return java.sql.Timestamp.from(parseInstant(node.asText()));
+            }
+            if ("java.util.UUID".equals(type)) {
+                return UUID.fromString(node.asText());
+            }
+            if ("java.net.URI".equals(type)) {
+                return URI.create(node.asText());
+            }
+            if ("java.net.URL".equals(type)) {
+                try {
+                    return URI.create(node.asText()).toURL();
+                } catch (MalformedURLException failure) {
+                    throw new BadArgument("URL 参数非法: " + node.asText());
+                }
+            }
             if (node.isContainerNode()) {
                 return MAPPER.convertValue(node, Object.class);
             }
@@ -281,6 +350,24 @@ final class InvokeRequest {
         } catch (RuntimeException failure) {
             throw new BadArgument(
                     "参数 " + type + " 无法从 " + node + " 转换：" + failure.getMessage());
+        }
+    }
+
+    private static Instant parseInstant(String text) {
+        try {
+            return Instant.parse(text);
+        } catch (DateTimeParseException ignored) {
+            // 继续尝试无时区格式。
+        }
+        try {
+            return LocalDateTime.parse(text).toInstant(ZoneOffset.UTC);
+        } catch (DateTimeParseException ignored) {
+            // 继续尝试只有日期。
+        }
+        try {
+            return LocalDate.parse(text).atStartOfDay().toInstant(ZoneOffset.UTC);
+        } catch (DateTimeParseException ignored) {
+            throw new BadArgument("时间格式不支持: " + text);
         }
     }
 

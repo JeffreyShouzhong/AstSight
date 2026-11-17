@@ -735,7 +735,8 @@ Dubbo 入口用例已打通模板 → codegen → 执行：
   画像端口 + `ASTSIGHT_DUBBO_HOST`；解析不了 skip 为 blocked；
 - 纯 Dubbo 项目（无 HTTP 路由）`run --mode full` 仍可生成/执行；
 - 模板只生成正向冒烟；DTO 参数按字段采样（普通字段、嵌套 DTO、record、
-  枚举、`@NotNull` 等必填标记），无法解析的字段按 `null` 并在 `note` 标明；
+  枚举、集合元素、时间类型、`@NotNull` 等必填标记与 `@Size`/`@Min`/`@Max`/
+  `@Pattern` 等约束），未知第三方类型按空对象并在 `note` 标明；
 - A4 提示词已收 Dubbo 画像与 `parameter_schemas`，可直接生成
   `transport=dubbo` 草案；草案只填 `dubbo.arguments`，其余由画像回填。
 

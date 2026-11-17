@@ -105,6 +105,22 @@ final class DubboInvokerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void genericInvocationRealizesTemporalDtoField() {
+        ObjectNode argument = DubboInvoker.MAPPER.createObjectNode();
+        argument.put("name", "Ada");
+        argument.put("birthday", "2024-01-02");
+
+        InvokeOutcome outcome = invoker.invoke(request(
+                "birthday",
+                new String[]{EchoRequest.class.getName()},
+                argument));
+
+        assertTrue(outcome.ok, outcome.message);
+        assertEquals("2024-01-02", outcome.value);
+    }
+
+    @Test
     void attachmentsReachProvider() {
         InvokeOutcome outcome = invoker.invoke(request(
                 "attachment",

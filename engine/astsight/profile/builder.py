@@ -36,6 +36,9 @@ def _dubbo_profile(provider: dict, scan: Any) -> dict[str, Any]:
         "method": provider.get("method", ""),
         "path": "",
         "parameter_types": list(provider.get("parameter_types") or []),
+        "declared_parameter_types": list(
+            provider.get("declared_parameter_types") or []
+        ),
         "parameter_schemas": list(provider.get("parameter_schemas") or []),
         "return_type": provider.get("return_type"),
         "return_type_declared": provider.get("return_type_declared", ""),

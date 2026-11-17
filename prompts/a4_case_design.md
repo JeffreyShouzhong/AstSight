@@ -30,7 +30,8 @@
   - Dubbo：`transport=dubbo`，`endpoint` 为
     `dubbo:{interface}#{method}({param_types})?group=&version=`，含
     `service` / `method` / `parameter_types` / `parameter_schemas`
-    （DTO 字段、必填标记与枚举值）/ `result_schema` / `group` / `version`。
+    （DTO 字段、必填标记、`constraints`、集合 `element`、枚举值、时间格式）
+    / `result_schema` / `group` / `version`。
   - 两种都带 `coverage_role` 与 `downstream_deps`。
 - `ruleset.rules[]`：A1 业务规则与 CR 契约规则；只可引用其中的 `rule_key`。
 - `mock_semantics[]`：每个 `dep_id` 的可用 `branches[]`；可能为 `null`。
@@ -124,8 +125,12 @@
 
 `transport=dubbo` 时不要写 `path_params/query/headers/body`；业务字段放进
 `dubbo.arguments`，按画像 `parameter_schemas` 构造。`fields[].required=true`
-的字段必须给值，枚举字段取 `enum_values` 中的值。不要手写
-`interface/method/parameter_types/group/version`，框架会按 endpoint 回填并校验。
+的字段必须给值，枚举字段取 `enum_values` 中的值。`constraints` 是注解事实：
+`min_length` / `max_length` / `minimum` / `maximum` / `pattern` / `format`
+用于构造边界与合法值；集合按 `element` 构造元素，时间字段按 `format` 用 ISO
+字符串。`pattern` 不保证自动推导出匹配值；拿不准时在 `assumptions` 写明。
+不要手写 `interface/method/parameter_types/group/version`，框架会按 endpoint
+回填并校验。
 
 ```json
 {

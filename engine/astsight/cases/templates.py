@@ -154,7 +154,9 @@ def _negative_case(
 _DUBBO_SCALARS = {
     "java.lang.String": "sample",
     "java.lang.CharSequence": "sample",
-    "java.lang.Object": None,
+    "java.util.UUID": "00000000-0000-0000-0000-000000000000",
+    "java.net.URI": "https://example.com",
+    "java.net.URL": "https://example.com",
     "int": 1,
     "java.lang.Integer": 1,
     "short": 1,
@@ -195,11 +197,74 @@ def _dubbo_sample_arg(type_name: str) -> Any:
     return {}
 
 
+_TEMPORAL_SAMPLES = {
+    "date": "2024-01-01",
+    "time": "00:00:00",
+    "datetime": "2024-01-01T00:00:00",
+    "instant": "2024-01-01T00:00:00Z",
+    "duration": "PT1H",
+    "period": "P1D",
+}
+
+
+def _constraint_number(constraints: dict, key: str) -> Any:
+    value = constraints.get(key)
+    return value if isinstance(value, (int, float)) else None
+
+
+def _dubbo_scalar_sample(type_name: str, constraints: dict) -> Any:
+    if type_name in {"java.lang.String", "java.lang.CharSequence"}:
+        value = (
+            "test@example.com"
+            if constraints.get("format") == "email"
+            else "sample"
+        )
+        min_length = _constraint_number(constraints, "min_length")
+        max_length = _constraint_number(constraints, "max_length")
+        if min_length is not None and len(value) < min_length:
+            value = value.ljust(int(min_length), "s")
+        if max_length is not None and len(value) > max_length:
+            value = value[: int(max_length)]
+        return value
+    base = _DUBBO_SCALARS.get(type_name)
+    if isinstance(base, bool) or not isinstance(base, (int, float)):
+        return base
+    minimum = _constraint_number(constraints, "minimum")
+    maximum = _constraint_number(constraints, "maximum")
+    value = base
+    if minimum is not None:
+        value = minimum + (1 if constraints.get("minimum_exclusive") else 0)
+    elif maximum is not None:
+        value = maximum - (1 if constraints.get("maximum_exclusive") else 0)
+    if maximum is not None and value > maximum:
+        value = maximum
+    if minimum is not None and value < minimum:
+        value = minimum
+    if isinstance(base, int) and not isinstance(base, bool):
+        return int(value)
+    return value
+
+
+def _collection_count(constraints: dict) -> int:
+    max_length = _constraint_number(constraints, "max_length")
+    if max_length is not None and max_length <= 0:
+        return 0
+    min_length = _constraint_number(constraints, "min_length")
+    count = 1 if min_length is None else max(1, int(min_length))
+    count = min(count, 3)
+    if max_length is not None:
+        count = min(count, int(max_length))
+    return max(0, count)
+
+
 def _dubbo_sample_schema(schema: dict, depth: int = 0) -> Any:
     kind = str(schema.get("kind") or "")
     type_name = str(schema.get("type") or "")
+    constraints = schema.get("constraints") or {}
     if kind == "scalar":
-        return _DUBBO_SCALARS.get(type_name)
+        return _dubbo_scalar_sample(type_name, constraints)
+    if kind == "temporal":
+        return _TEMPORAL_SAMPLES.get(str(schema.get("format") or ""), "2024-01-01T00:00:00")
     if kind == "enum":
         values = schema.get("enum_values") or []
         return values[0] if values else ""
@@ -208,43 +273,86 @@ def _dubbo_sample_schema(schema: dict, depth: int = 0) -> Any:
             return {}
         body: dict[str, Any] = {}
         for field in (schema.get("fields") or [])[:20]:
+            field_schema = dict(field.get("schema") or {})
+            constraints = field.get("constraints") or {}
+            if constraints:
+                field_schema["constraints"] = {
+                    **(field_schema.get("constraints") or {}),
+                    **constraints,
+                }
             body[str(field.get("name"))] = _dubbo_sample_schema(
-                field.get("schema") or {}, depth + 1
+                field_schema, depth + 1
             )
         return body
-    if kind == "collection":
-        return []
+    if kind in {"collection", "array"}:
+        element = schema.get("element")
+        if not isinstance(element, dict):
+            return []
+        return [
+            _dubbo_sample_schema(element, depth + 1)
+            for _ in range(_collection_count(constraints))
+        ]
     if kind == "map":
-        return {}
-    if kind == "reference":
+        key_schema = schema.get("key")
+        value_schema = schema.get("value")
+        key = (
+            _dubbo_sample_schema(key_schema, depth + 1)
+            if isinstance(key_schema, dict)
+            else "key"
+        )
+        value = (
+            _dubbo_sample_schema(value_schema, depth + 1)
+            if isinstance(value_schema, dict)
+            else None
+        )
+        return {str(key): value}
+    if kind in {"opaque", "unknown", "reference"}:
         return {}
     return None
 
 
-def _unknown_schema_types(schema: dict) -> list[str]:
+def _schema_notes(schema: dict, prefix: str = "") -> list[str]:
     if not isinstance(schema, dict):
         return []
-    if schema.get("kind") == "unknown":
-        return [str(schema.get("type") or "")]
-    result: list[str] = []
+    kind = schema.get("kind")
+    type_name = str(schema.get("type") or "")
+    notes: list[str] = []
+    if kind == "opaque":
+        notes.append(f"无法静态采样 {type_name}，按空对象发送")
+    elif kind == "unknown":
+        notes.append(f"无法解析类型 {type_name or '?'}")
+    constraints = schema.get("constraints") or {}
+    if constraints.get("pattern"):
+        notes.append(f"{prefix or type_name} 的 pattern 需人工确认")
     for field in schema.get("fields") or []:
-        result.extend(_unknown_schema_types(field.get("schema") or {}))
-    return result
+        name = str(field.get("name") or "")
+        field_constraints = field.get("constraints") or {}
+        if field_constraints.get("pattern"):
+            notes.append(f"{prefix}{name} 的 pattern 需人工确认")
+        notes.extend(
+            _schema_notes(
+                field.get("schema") or {},
+                f"{prefix}{name}." if prefix else f"{name}.",
+            )
+        )
+    element = schema.get("element")
+    if isinstance(element, dict):
+        notes.extend(_schema_notes(element, prefix))
+    for key in ("key", "value"):
+        nested = schema.get(key)
+        if isinstance(nested, dict):
+            notes.extend(_schema_notes(nested, prefix))
+    return notes
 
 
 def _dubbo_case(profile: dict, case_id: str) -> TestCase:
     types = list(profile.get("parameter_types") or [])
     schemas = list(profile.get("parameter_schemas") or [])
+    notes: list[str] = []
     if schemas:
         arguments = [_dubbo_sample_schema(schema) for schema in schemas]
-        complex_args = sorted(
-            {
-                type_name
-                for schema in schemas
-                for type_name in _unknown_schema_types(schema)
-                if type_name
-            }
-        )
+        for schema in schemas:
+            notes.extend(_schema_notes(schema))
     else:
         arguments = [_dubbo_sample_arg(type_name) for type_name in types]
         complex_args = [
@@ -254,15 +362,16 @@ def _dubbo_case(profile: dict, case_id: str) -> TestCase:
             and not type_name.endswith("[]")
             and not type_name.startswith(_DUBBO_COLLECTIONS)
         ]
+        if complex_args:
+            notes.append(
+                "无法静态采样的参数类型，字段值需人工补充: "
+                + ", ".join(complex_args)
+            )
     asserts = [Assertion(kind="rpc_status", op="eq", expect="OK")]
     return_type = str(profile.get("return_type") or "")
     if return_type and return_type not in {"void", "java.lang.Void"}:
         asserts.append(Assertion(kind="result_present", op="exists"))
-    note = (
-        f"无法静态采样的参数类型，字段值需人工补充: {', '.join(complex_args)}"
-        if complex_args
-        else None
-    )
+    note = "；".join(dict.fromkeys(notes)) if notes else None
     return TestCase(
         id=case_id,
         title=f"{profile.get('service')}.{profile.get('method')}",

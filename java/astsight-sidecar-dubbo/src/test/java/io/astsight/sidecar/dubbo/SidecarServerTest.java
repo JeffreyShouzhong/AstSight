@@ -8,9 +8,14 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.io.StringReader;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -175,6 +180,31 @@ final class SidecarServerTest {
         assertEquals(Boolean.TRUE, InvokeRequest.convertArgument(
                 MAPPER.valueToTree(true), "boolean"));
         assertNull(InvokeRequest.convertArgument(MAPPER.nullNode(), "java.lang.String"));
+    }
+
+    @Test
+    void temporalAndCommonJdkArgumentsAreConverted() {
+        assertEquals(
+                LocalDate.of(2024, 1, 2),
+                InvokeRequest.convertArgument(
+                        MAPPER.valueToTree("2024-01-02"), "java.time.LocalDate"));
+        assertEquals(
+                Instant.parse("2024-01-02T03:04:05Z"),
+                InvokeRequest.convertArgument(
+                        MAPPER.valueToTree("2024-01-02T03:04:05Z"), "java.time.Instant"));
+        assertEquals(
+                Date.from(Instant.parse("2024-01-02T00:00:00Z")),
+                InvokeRequest.convertArgument(
+                        MAPPER.valueToTree("2024-01-02T00:00:00"), "java.util.Date"));
+        assertEquals(
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                InvokeRequest.convertArgument(
+                        MAPPER.valueToTree("00000000-0000-0000-0000-000000000001"),
+                        "java.util.UUID"));
+        assertEquals(
+                URI.create("https://example.com"),
+                InvokeRequest.convertArgument(
+                        MAPPER.valueToTree("https://example.com"), "java.net.URI"));
     }
 
     private static List<JsonNode> run(String input, DubboCaller caller) throws Exception {

@@ -170,15 +170,20 @@ def _dubbo_only_project(root: Path) -> Path:
         "package io.astsight.sidecar.dubbo;\n"
         "public interface EchoService {\n"
         "    EchoReply describe(EchoRequest request);\n"
+        "    String birthday(EchoRequest request);\n"
         "}\n",
         encoding="utf-8",
     )
     (package / "EchoRequest.java").write_text(
         "package io.astsight.sidecar.dubbo;\n"
+        "import java.time.LocalDate;\n"
         "public class EchoRequest {\n"
         "    private String name;\n"
+        "    private LocalDate birthday;\n"
         "    public String getName() { return name; }\n"
         "    public void setName(String name) { this.name = name; }\n"
+        "    public LocalDate getBirthday() { return birthday; }\n"
+        "    public void setBirthday(LocalDate birthday) { this.birthday = birthday; }\n"
         "}\n",
         encoding="utf-8",
     )
@@ -197,6 +202,7 @@ def _dubbo_only_project(root: Path) -> Path:
         "@DubboService(group = \"order\", version = \"1.0.0\")\n"
         "public class EchoServiceImpl implements EchoService {\n"
         "    public EchoReply describe(EchoRequest request) { return null; }\n"
+        "    public String birthday(EchoRequest request) { return null; }\n"
         "}\n",
         encoding="utf-8",
     )
@@ -237,8 +243,8 @@ def test_run_generates_and_executes_dubbo_cases_in_full_mode(
             provider.kill()
             provider.wait(timeout=10)
 
-    assert report["summary"]["executed_cases"] == 1
-    assert report["summary"]["final_pass"] == 1
+    assert report["summary"]["executed_cases"] == 2
+    assert report["summary"]["final_pass"] == 2
     assert report["gate"]["verdict"] == "pass"
 
 

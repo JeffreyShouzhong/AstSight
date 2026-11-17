@@ -73,7 +73,6 @@
             </goals>
             <configuration>
               <includeScope>test</includeScope>
-              <outputAbsolutePaths>true</outputAbsolutePaths>
               <outputFile>${project.build.directory}/sidecar-test-classpath.txt</outputFile>
             </configuration>
           </execution>

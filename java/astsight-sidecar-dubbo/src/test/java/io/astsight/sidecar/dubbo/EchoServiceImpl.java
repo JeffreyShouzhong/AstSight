@@ -22,6 +22,11 @@ public final class EchoServiceImpl implements EchoService {
     }
 
     @Override
+    public String birthday(EchoRequest request) {
+        return String.valueOf(request.getBirthday());
+    }
+
+    @Override
     public String attachment(String key) {
         return RpcContext.getContext().getAttachment(key);
     }
