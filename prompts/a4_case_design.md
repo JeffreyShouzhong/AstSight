@@ -126,9 +126,11 @@
 `transport=dubbo` 时不要写 `path_params/query/headers/body`；业务字段放进
 `dubbo.arguments`，按画像 `parameter_schemas` 构造。`fields[].required=true`
 的字段必须给值，枚举字段取 `enum_values` 中的值。`constraints` 是注解事实：
-`min_length` / `max_length` / `minimum` / `maximum` / `pattern` / `format`
-用于构造边界与合法值；集合按 `element` 构造元素，时间字段按 `format` 用 ISO
-字符串。`pattern` 不保证自动推导出匹配值；拿不准时在 `assumptions` 写明。
+`min_length` / `max_length` / `minimum` / `maximum` / `pattern` / `format` /
+`allowed_values` 用于构造边界与合法值；`constraints.custom` 是项目自定义校验
+注解（如 `@Mobile`、`@Range`、`@EnumValue`），不要忽略。集合按 `element`
+构造元素，时间字段按 `format` 用 ISO 字符串。`pattern` 框架会尝试生成匹配值，
+复杂结构（lookaround/反向引用）仍可能失败；拿不准时在 `assumptions` 写明。
 不要手写 `interface/method/parameter_types/group/version`，框架会按 endpoint
 回填并校验。
 

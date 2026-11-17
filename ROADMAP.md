@@ -73,7 +73,7 @@ DBML `Enum` note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量、Java/Python/Go/TS
 ## 中期
 
 - **gRPC 完整支持**：当前仅 unary；补齐流式与 server reflection。
-- **Dubbo 被测入口（sidecar）**：下游 Mock 已由 agent + Filter 覆盖；sidecar、提供方画像、DTO 字段采样、A4 Dubbo 草案、codegen 与执行已打通。剩余：注册中心（Nacos/ZooKeeper）、多步骤与异步/oneway。
+- **Dubbo 被测入口（sidecar）**：下游 Mock 已由 agent + Filter 覆盖；sidecar、提供方画像、DTO 字段/约束/时间/集合采样、A4 Dubbo 草案、codegen 与执行已打通。剩余：注册中心（Nacos/ZooKeeper）、多步骤与异步/oneway、复杂正则/自定义约束的完整语义。
 - **时间窗口测试**：通过时钟注入或专用测试接口，覆盖频控窗口、跨月零点、超时等真实时间场景（当前以“连续请求立即命中”近似，报告显式标注）。
 - **replay 模式**：流量回放生成用例。
 - **被删除接口的变更感知**：从 base 分支/OpenAPI 建第二份路由清单，覆盖“接口被删”。

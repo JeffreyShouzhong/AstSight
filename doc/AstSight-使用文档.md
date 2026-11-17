@@ -1148,9 +1148,12 @@ Spring 的 `@Service` 不会被误判。
 DTO 字段会进入 `parameter_schemas` / `result_schema`：普通字段、嵌套 DTO、
 record 组件、枚举常量、必填标记（`@NotNull` / `@NotBlank` / `@NotEmpty`），
 以及 `@Size` / `@Min` / `@Max` / `@Pattern` / `@Email` / `@Positive` 等约束。
-集合/Map/数组带元素 schema；`java.time.*`、`java.util.Date`、`UUID`、`URI`、
-`URL` 单独识别。模板和 A4 都按这些字段构造 `arguments`；未知第三方类型按
-空对象采样并在用例 `note` 里标明。
+项目自定义校验注解（如 `@Mobile`、`@Range`、`@EnumValue`、`@Column`）会进入
+`constraints.custom`，能识别的参数会推断成 `format` / `minimum` / `maximum` /
+`allowed_values` 等。集合/Map/数组带元素 schema，模板最多生成 10 个元素；
+`java.time.*`、`java.util.Date`、`UUID`、`URI`、`URL` 单独识别。模板和 A4
+都按这些字段构造 `arguments`；`@Pattern` 会尝试生成匹配值，未知第三方类型
+按空对象采样并在用例 `note` 里标明。
 
 ### 11A.3 目标地址
 
@@ -1223,9 +1226,10 @@ PYTHONPATH=. python -m astsight run \
   显式失败。
 - sidecar 固定同步调用；异步/oneway 不生成用例。
 - 模板只生成正向冒烟：DTO 参数按字段采样（必填、嵌套 DTO、枚举、约束、
-  集合元素、时间格式）；未知第三方类型按空对象发送并在 `note` 标明，
-  `pattern` 字段也会提示人工确认；没有字段级断言时只校验 `rpc_status`
-  与返回值存在。
+  集合元素、时间格式）；`@Pattern` 会尝试生成匹配值，lookaround/反向引用等
+  复杂结构失败时提示人工确认；自定义校验注解按名称与参数推断常用约束。
+  未知第三方类型按空对象发送并在 `note` 标明；没有字段级断言时只校验
+  `rpc_status` 与返回值存在。
 - A4 已收 Dubbo 画像与 `parameter_schemas`，可直接生成 `transport=dubbo`
   草案；草案只填 `dubbo.arguments`，接口/方法/参数类型由框架回填并校验。
 

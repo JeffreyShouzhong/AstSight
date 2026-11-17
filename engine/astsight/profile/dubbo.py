@@ -152,7 +152,6 @@ _FIELD_STATEMENT = re.compile(
     r"(?P<name>[A-Za-z_$][\w$]*)\s*(?:=.*)?$",
     re.S,
 )
-_ANNOTATION_NAME = re.compile(r"@([\w.$]+)")
 _RECORD_COMPONENT = re.compile(
     r"^\s*(?P<annotations>(?:@[\w.$]+(?:\s*\([^)]*\))?\s*)*)"
     r"(?P<type>[A-Za-z_$][\w.$]*(?:\s*<[^;{}]*>)?(?:\s*\[\s*\])*)\s+"
@@ -166,6 +165,97 @@ _REQUIRED_ANNOTATIONS = {
     "NonNull",
     "Required",
 }
+_CUSTOM_FORMAT_ANNOTATIONS = {
+    "Mobile": "phone",
+    "Phone": "phone",
+    "Telephone": "phone",
+    "IdCard": "id_card",
+    "IDCard": "id_card",
+    "IdNumber": "id_card",
+    "Url": "url",
+    "URL": "url",
+}
+_NON_VALIDATION_ANNOTATIONS = {
+    "Override",
+    "Deprecated",
+    "SuppressWarnings",
+    "FunctionalInterface",
+    "SafeVarargs",
+    "Valid",
+    "Validated",
+    "JsonProperty",
+    "JsonIgnore",
+    "JsonFormat",
+    "JsonAlias",
+    "JsonInclude",
+    "JsonTypeInfo",
+    "JsonSubTypes",
+    "JsonDeserialize",
+    "JsonSerialize",
+    "Schema",
+    "ApiModel",
+    "ApiModelProperty",
+    "ApiOperation",
+    "ApiParam",
+    "Data",
+    "Getter",
+    "Setter",
+    "Builder",
+    "SuperBuilder",
+    "NoArgsConstructor",
+    "AllArgsConstructor",
+    "RequiredArgsConstructor",
+    "ToString",
+    "EqualsAndHashCode",
+    "Slf4j",
+    "Log4j2",
+    "Value",
+    "Component",
+    "Service",
+    "Repository",
+    "Controller",
+    "RestController",
+    "Configuration",
+    "Bean",
+    "Autowired",
+    "Resource",
+    "Qualifier",
+    "Transactional",
+    "Id",
+    "GeneratedValue",
+    "Transient",
+    "OneToMany",
+    "ManyToOne",
+    "JoinColumn",
+    "Table",
+    "Enumerated",
+    "Temporal",
+    "Lob",
+    "Basic",
+}
+_VALIDATION_HINTS = (
+    "Check",
+    "Pattern",
+    "Regex",
+    "Range",
+    "Length",
+    "Size",
+    "NotEmpty",
+    "NotBlank",
+    "Required",
+    "Min",
+    "Max",
+    "In",
+    "Enum",
+    "Mobile",
+    "Phone",
+    "Email",
+    "IdCard",
+    "Amount",
+    "Money",
+    "Format",
+    "Column",
+)
 _MAX_SCHEMA_DEPTH = 4
 _MAX_SCHEMA_FIELDS = 40
 
@@ -503,7 +593,20 @@ def _split_type_list(raw: str) -> list[str]:
     parts: list[str] = []
     depth = 0
     start = 0
+    in_string = False
+    escaped = False
     for index, char in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
         if char in "<({":
             depth += 1
         elif char in ">)}":
@@ -618,7 +721,7 @@ _TEMPORAL_TYPES = {
 
 
 def _top_level_statements(body: str):
-    """按顶层 `;` 切出字段语句；跳过方法体/内部类等 `{...}` 块。"""
+    """按顶层 `;` 切出字段区间；跳过方法体/内部类等 `{...}` 块。"""
     start = 0
     index = 0
     length = len(body)
@@ -641,17 +744,18 @@ def _top_level_statements(body: str):
             start = index
             continue
         if char == ";":
-            yield body[start:index]
+            yield start, index
             start = index + 1
         index += 1
 
 
-def _annotation_names(raw: str) -> tuple[str, ...]:
-    return tuple(_ANNOTATION_NAME.findall(raw or ""))
-
-
 def _parse_literal(text: str) -> Any:
     value = (text or "").strip()
+    if value.startswith("{") and value.endswith("}"):
+        return [
+            _parse_literal(item)
+            for item in _split_type_list(value[1:-1])
+        ]
     if value.startswith('"') and value.endswith('"') and len(value) >= 2:
         return value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
     if value in {"true", "false"}:
@@ -670,14 +774,17 @@ def _parse_literal(text: str) -> Any:
 
 def _annotation_args(raw: str) -> dict[str, Any]:
     values: dict[str, Any] = {}
-    for match in re.finditer(
-        r"([A-Za-z_$]\w*)\s*=\s*(\"(?:[^\"\\]|\\.)*\"|[^,)]+)", raw or ""
-    ):
-        values[match.group(1)] = _parse_literal(match.group(2))
-    if not values:
-        token = (raw or "").strip().split(",", 1)[0].strip()
-        if token:
-            values["value"] = _parse_literal(token)
+    positional: list[str] = []
+    for part in _split_type_list(raw or ""):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            key = key.strip()
+            if re.fullmatch(r"[A-Za-z_$]\w*", key):
+                values[key] = _parse_literal(value)
+                continue
+        positional.append(part)
+    if "value" not in values and positional:
+        values["value"] = _parse_literal(positional[0])
     return values
 
 
@@ -743,6 +850,60 @@ def _as_number(value: Any) -> Any:
             return value
 
 
+def _looks_like_custom_validation(short: str) -> bool:
+    if short in _NON_VALIDATION_ANNOTATIONS:
+        return False
+    if short in _CUSTOM_FORMAT_ANNOTATIONS:
+        return True
+    return any(hint in short for hint in _VALIDATION_HINTS)
+
+
+def _apply_custom_constraints(
+    short: str,
+    args: dict[str, Any],
+    constraints: dict[str, Any],
+) -> None:
+    constraints.setdefault("custom", {})[short] = dict(args)
+    if args.get("required") is True or args.get("nullable") is False:
+        constraints["required"] = True
+    if "length" in args:
+        constraints.setdefault("max_length", _as_number(args["length"]))
+    for key in ("minLength", "min_length", "minLen", "minSize"):
+        if key in args:
+            constraints.setdefault("min_length", _as_number(args[key]))
+    for key in ("maxLength", "max_length", "maxLen", "maxSize"):
+        if key in args:
+            constraints.setdefault("max_length", _as_number(args[key]))
+    length_named = any(token in short for token in ("Length", "Size", "Len"))
+    if "min" in args:
+        constraints.setdefault(
+            "min_length" if length_named else "minimum",
+            _as_number(args["min"]),
+        )
+    if "max" in args:
+        constraints.setdefault(
+            "max_length" if length_named else "maximum",
+            _as_number(args["max"]),
+        )
+    for key in ("minValue", "min_value"):
+        if key in args:
+            constraints.setdefault("minimum", _as_number(args[key]))
+    for key in ("maxValue", "max_value"):
+        if key in args:
+            constraints.setdefault("maximum", _as_number(args[key]))
+    for key in ("pattern", "regexp", "regex"):
+        if args.get(key):
+            constraints.setdefault("pattern", str(args[key]))
+    if args.get("format"):
+        constraints.setdefault("format", str(args["format"]).lower())
+    for key in ("values", "options", "enumValues", "allowedValues"):
+        value = args.get(key)
+        if isinstance(value, list) and value:
+            constraints.setdefault("allowed_values", value)
+    if short in _CUSTOM_FORMAT_ANNOTATIONS:
+        constraints.setdefault("format", _CUSTOM_FORMAT_ANNOTATIONS[short])
+
+
 def _constraints_from_annotations(
     details: list[tuple[str, dict[str, Any]]],
 ) -> dict[str, Any]:
@@ -781,6 +942,8 @@ def _constraints_from_annotations(
                 constraints["maximum_exclusive"] = True
         elif short in {"Past", "Future"}:
             constraints["temporal"] = short.lower()
+        elif _looks_like_custom_validation(short):
+            _apply_custom_constraints(short, args, constraints)
     return constraints
 
 
@@ -801,7 +964,12 @@ def _parse_fields(
     classes: dict[str, str],
 ) -> list[_FieldDecl]:
     fields: list[_FieldDecl] = []
-    for statement in _top_level_statements(body):
+    # 先在屏蔽注解参数的副本上切结构，避免注解里的 {} 被当成代码块；
+    # 约束仍从原文同一区间解析。
+    masked = _mask_annotation_args(body)
+    for start, end in _top_level_statements(masked):
+        statement = masked[start:end]
+        raw_statement = body[start:end]
         match = _FIELD_STATEMENT.match(statement)
         if match is None:
             continue
@@ -812,7 +980,7 @@ def _parse_fields(
         resolved = _resolve_type(
             declared, package=package, imports=imports, classes=classes
         )
-        details = _annotation_details(match.group("annotations") or "")
+        details = _annotation_details(raw_statement)
         annotations = tuple(name for name, _args in details)
         constraints = _constraints_from_annotations(details)
         fields.append(

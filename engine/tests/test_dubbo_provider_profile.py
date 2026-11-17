@@ -457,6 +457,22 @@ public class RichRequest {
     private List<Address> addresses;
     private Map<String, Address> byCity;
     private String[] tags;
+    @Mobile
+    private String phone;
+    @Range(min = 1, max = 9)
+    private int level;
+    @EnumValue(values = {"A", "B"})
+    private String grade;
+    @JsonProperty("ignored")
+    private String ignored;
+    @BizCheck(code = "X")
+    private String biz;
+    @Size(min = 5)
+    private List<String> five;
+    @Size(min = 12)
+    private List<String> many;
+    @Pattern(regexp = "^(?=a)a$")
+    private String lookahead;
     private UnknownThirdParty external;
 }
 """,
@@ -502,6 +518,25 @@ public class RichServiceImpl implements RichService {
     assert fields["byCity"]["schema"]["value"]["kind"] == "dto"
     assert fields["tags"]["schema"]["kind"] == "array"
     assert fields["tags"]["schema"]["element"]["type"] == "java.lang.String"
+    assert fields["phone"]["constraints"]["format"] == "phone"
+    assert fields["level"]["constraints"]["minimum"] == 1
+    assert fields["level"]["constraints"]["maximum"] == 9
+    assert fields["level"]["constraints"]["custom"]["Range"] == {
+        "min": 1,
+        "max": 9,
+    }
+    assert fields["grade"]["constraints"]["allowed_values"] == ["A", "B"]
+    assert fields["grade"]["constraints"]["custom"]["EnumValue"]["values"] == [
+        "A",
+        "B",
+    ]
+    assert fields["ignored"].get("constraints") is None
+    assert fields["biz"]["constraints"]["custom"] == {
+        "BizCheck": {"code": "X"}
+    }
+    assert fields["five"]["constraints"]["min_length"] == 5
+    assert fields["many"]["constraints"]["min_length"] == 12
+    assert fields["lookahead"]["constraints"]["pattern"] == "^(?=a)a$"
     assert fields["external"]["schema"]["kind"] == "unknown"
 
     profiles, _ = build_profiles([], [], project_root=root)
@@ -516,17 +551,29 @@ public class RichServiceImpl implements RichService {
             "code": "samp",
             "quantity": 10,
             "email": "test@example.com",
-            "region": "sample",
+            "region": "AA",
             "birthday": "2024-01-01",
             "addresses": [{"city": "sample"}],
             "byCity": {"sample": {"city": "sample"}},
             "tags": ["sample"],
+            "phone": "13800138000",
+            "level": 1,
+            "grade": "A",
+            "ignored": "sample",
+            "biz": "sample",
+            "five": ["sample"] * 5,
+            "many": ["sample"] * 10,
+            "lookahead": "sample",
             "external": {},
         }
     ]
     assert case.note is not None
-    assert "pattern" in case.note
+    assert "BizCheck" in case.note
+    assert "最多生成 10 个" in case.note
+    assert "无法自动生成匹配值" in case.note
     assert "无法解析类型" in case.note
+    # 可生成匹配值的 pattern（region）不再提示人工确认。
+    assert "region 的 pattern" not in case.note
 
 
 def test_parameter_annotations_become_constraints(tmp_path: Path) -> None:

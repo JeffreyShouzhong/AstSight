@@ -18,10 +18,12 @@ from typing import Any
 from contracts import Assertion, AssertStrength, DubboCall, TestCase, Transport
 
 from ..profile.openapi import sample_value
+from .regexsample import sample_for_pattern
 from .strength import derive_assert_strength
 
 _NEGATIVE_STATUS = {"kind": "status_code", "op": "between", "expect": [400, 499]}
 _MAX_BOUNDARY = 2
+_MAX_COLLECTION_ITEMS = 10
 
 
 def _sample_from_param(param: dict) -> Any:
@@ -213,12 +215,26 @@ def _constraint_number(constraints: dict, key: str) -> Any:
 
 
 def _dubbo_scalar_sample(type_name: str, constraints: dict) -> Any:
+    allowed = constraints.get("allowed_values")
+    if isinstance(allowed, list) and allowed:
+        return allowed[0]
     if type_name in {"java.lang.String", "java.lang.CharSequence"}:
-        value = (
-            "test@example.com"
-            if constraints.get("format") == "email"
-            else "sample"
-        )
+        pattern = constraints.get("pattern")
+        if pattern:
+            generated = sample_for_pattern(str(pattern))
+            if generated is not None:
+                return generated
+        format_name = str(constraints.get("format") or "")
+        value = {
+            "email": "test@example.com",
+            "phone": "13800138000",
+            "mobile": "13800138000",
+            "url": "https://example.com",
+            "uri": "https://example.com",
+            "date": "2024-01-01",
+            "datetime": "2024-01-01T00:00:00",
+            "id_card": "110101199001011234",
+        }.get(format_name, "sample")
         min_length = _constraint_number(constraints, "min_length")
         max_length = _constraint_number(constraints, "max_length")
         if min_length is not None and len(value) < min_length:
@@ -251,7 +267,7 @@ def _collection_count(constraints: dict) -> int:
         return 0
     min_length = _constraint_number(constraints, "min_length")
     count = 1 if min_length is None else max(1, int(min_length))
-    count = min(count, 3)
+    count = min(count, _MAX_COLLECTION_ITEMS)
     if max_length is not None:
         count = min(count, int(max_length))
     return max(0, count)
@@ -311,30 +327,74 @@ def _dubbo_sample_schema(schema: dict, depth: int = 0) -> Any:
     return None
 
 
+def _constraint_notes(constraints: dict, label: str) -> list[str]:
+    notes: list[str] = []
+    pattern = constraints.get("pattern")
+    if pattern:
+        sample = sample_for_pattern(str(pattern))
+        if sample is None:
+            notes.append(f"{label} 的 pattern 无法自动生成匹配值")
+        else:
+            min_length = _constraint_number(constraints, "min_length")
+            max_length = _constraint_number(constraints, "max_length")
+            if (
+                min_length is not None
+                and len(sample) < min_length
+                or max_length is not None
+                and len(sample) > max_length
+            ):
+                notes.append(f"{label} 的 pattern 样例长度与长度约束冲突")
+    custom = constraints.get("custom") or {}
+    if custom:
+        inferred = any(
+            key in constraints
+            for key in (
+                "min_length",
+                "max_length",
+                "minimum",
+                "maximum",
+                "pattern",
+                "format",
+                "allowed_values",
+            )
+        )
+        if not inferred:
+            names = ",".join(str(name) for name in custom)
+            notes.append(f"{label} 的自定义约束 {names} 需人工确认")
+    return notes
+
+
 def _schema_notes(schema: dict, prefix: str = "") -> list[str]:
     if not isinstance(schema, dict):
         return []
     kind = schema.get("kind")
     type_name = str(schema.get("type") or "")
+    label = (prefix or type_name or "参数").rstrip(".")
     notes: list[str] = []
     if kind == "opaque":
         notes.append(f"无法静态采样 {type_name}，按空对象发送")
     elif kind == "unknown":
         notes.append(f"无法解析类型 {type_name or '?'}")
     constraints = schema.get("constraints") or {}
-    if constraints.get("pattern"):
-        notes.append(f"{prefix or type_name} 的 pattern 需人工确认")
+    notes.extend(_constraint_notes(constraints, label))
+    if kind in {"collection", "array"}:
+        min_length = _constraint_number(constraints, "min_length")
+        if min_length is not None and min_length > _MAX_COLLECTION_ITEMS:
+            notes.append(
+                f"{label} 的集合最少 {min_length} 个元素，"
+                f"模板最多生成 {_MAX_COLLECTION_ITEMS} 个"
+            )
     for field in schema.get("fields") or []:
         name = str(field.get("name") or "")
+        field_label = f"{prefix}{name}" if prefix else name
         field_constraints = field.get("constraints") or {}
-        if field_constraints.get("pattern"):
-            notes.append(f"{prefix}{name} 的 pattern 需人工确认")
-        notes.extend(
-            _schema_notes(
-                field.get("schema") or {},
-                f"{prefix}{name}." if prefix else f"{name}.",
-            )
-        )
+        field_schema = dict(field.get("schema") or {})
+        if field_constraints:
+            field_schema["constraints"] = {
+                **(field_schema.get("constraints") or {}),
+                **field_constraints,
+            }
+        notes.extend(_schema_notes(field_schema, f"{field_label}."))
     element = schema.get("element")
     if isinstance(element, dict):
         notes.extend(_schema_notes(element, prefix))
