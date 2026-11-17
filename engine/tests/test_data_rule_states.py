@@ -90,6 +90,68 @@ def test_cross_table_rule_generates_state_with_fk_closure() -> None:
     )
 
 
+def test_in_constraints_expand_to_value_combinations() -> None:
+    catalog = _catalog(
+        _rule(
+            RuleConstraint(
+                field="orders.status",
+                operator="in",
+                values=["pending", "paid"],
+                condition="创建订单",
+            ),
+            RuleConstraint(
+                field="order_items.qty",
+                operator="in",
+                values=["1", "2"],
+                condition="创建订单",
+            ),
+        )
+    )
+    assert len(catalog.states) == 4
+    combos = {
+        (
+            state.table_values["orders"][0]["status"],
+            state.table_values["order_items"][0]["qty"],
+        )
+        for state in catalog.states
+    }
+    assert combos == {
+        ("pending", 1),
+        ("pending", 2),
+        ("paid", 1),
+        ("paid", 2),
+    }
+    assert len({state.state_key for state in catalog.states}) == 4
+    assert not any(
+        gap.get("kind") == "state_value_combinations_truncated"
+        for gap in catalog.gaps
+    )
+
+
+def test_in_combinations_are_capped_and_reported() -> None:
+    catalog = _catalog(
+        _rule(
+            RuleConstraint(
+                field="orders.status",
+                operator="in",
+                values=["a1", "a2", "a3", "a4", "a5"],
+                condition="创建订单",
+            ),
+            RuleConstraint(
+                field="order_items.qty",
+                operator="in",
+                values=["1", "2", "3", "4", "5"],
+                condition="创建订单",
+            ),
+        )
+    )
+    assert len(catalog.states) == 20
+    assert any(
+        gap.get("kind") == "state_value_combinations_truncated"
+        for gap in catalog.gaps
+    )
+
+
 def test_single_table_constraints_do_not_create_cross_table_state() -> None:
     catalog = _catalog(
         _rule(

@@ -1907,7 +1907,7 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
    **跨表状态候选**（`data/states.py`，`data catalog --rule-states`）：把同一条件下
    覆盖两张及以上表的 `eq/in` 约束组合成 `DataState` 骨架。主键、外键和被外键牵连
    的父表用确定性占位值补齐；其它 NOT NULL 列按类型补占位值，并在目录 `gaps` 中
-   逐条写 `state_placeholder` / `state_value_choice`。候选生成后跑
+   逐条写 `state_placeholder` / `state_value_combinations_truncated`。候选生成后跑
    `validate_plan_fixtures`（类型/枚举/FK 闭包），不通过即丢弃并告警。占位值只是
    “能落库的骨架”，不是业务正确数据，必须人工确认。
 6. **确定性校验（LLM 之后）**：表/列白名单、类型/枚举/NOT NULL、FK 闭包、拓扑顺序、`preconditions` 全覆盖、行数/列数上限；未知表/列直接拒绝，失败用例写入 `rejected`，不生成计划

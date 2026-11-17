@@ -53,8 +53,8 @@
 DBML `Enum` note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量、Java/Python/Go/TS 枚举
 与 Java `static final`、Go `const`、TS `as const` 常量组进入 `value_semantics`，
 每条候选带 `source`，冲突会丢弃并告警。跨表状态骨架已支持：`--rule-states`
-把同一条件下覆盖多表的 `eq/in` 约束组合成 `DataState`，主键/外键/NOT NULL 用
-确定性占位值补齐并逐条写 gap。
+把同一条件下覆盖多表的 `eq/in` 约束组合成 `DataState`，`in` 按取值组合展开
+（单组上限 20），主键/外键/NOT NULL 用确定性占位值补齐并逐条写 gap。
 **目标**：继续补状态机路径、多行组合与跨状态转移的候选，降低人工补 catalog 的成本。
 真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务判断仍回需求原文”。
 

@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -27,6 +29,7 @@ from .annotations import coerce_constant, resolve_field_targets
 from .validate import validate_plan_fixtures
 
 MAX_STATES = 200
+MAX_STATE_COMBINATIONS = 20
 _PLACEHOLDER_TIMESTAMP = "2026-01-01T00:00:00"
 
 
@@ -85,9 +88,7 @@ def _propose_one(
     tables: list[TableCatalog],
     proposal: StateProposal,
 ) -> None:
-    table_index = {table.name: table for table in tables}
-    pinned: dict[str, dict[str, Any]] = {}
-    choices: list[dict[str, Any]] = []
+    options: list[tuple[TableCatalog, ColumnCatalog, list[Any]]] = []
     for constraint, values in constraints:
         matches = resolve_field_targets(tables, constraint.field)
         if not matches:
@@ -98,36 +99,62 @@ def _propose_one(
             )
             return
         table, column = matches[0]
-        value = coerce_constant(values[0], column)
-        if column.enum_values and not any(
-            str(item) == str(value) for item in column.enum_values
-        ):
-            proposal.warnings.append(
-                f"rule_state_enum_mismatch:{table.name}.{column.name}:{values[0]}"
-            )
-            return
-        current = pinned.setdefault(table.name, {})
-        existing = current.get(column.name)
-        if existing is not None and str(existing) != str(value):
-            proposal.warnings.append(
-                f"rule_state_value_conflict:{table.name}.{column.name}"
-            )
-            return
-        current[column.name] = value
-        if len(values) > 1:
-            choices.append(
-                {
-                    "table": table.name,
-                    "column": column.name,
-                    "chosen": values[0],
-                    "ignored": values[1:],
-                }
-            )
+        coerced: list[Any] = []
+        seen: set[tuple[str, str]] = set()
+        for raw in values:
+            value = coerce_constant(raw, column)
+            if column.enum_values and not any(
+                str(item) == str(value) for item in column.enum_values
+            ):
+                proposal.warnings.append(
+                    f"rule_state_enum_mismatch:"
+                    f"{table.name}.{column.name}:{raw}"
+                )
+                return
+            key = (type(value).__name__, str(value))
+            if key in seen:
+                continue
+            seen.add(key)
+            coerced.append(value)
+        if coerced:
+            options.append((table, column, coerced))
 
-    if len(pinned) < 2:
+    if len({table.name for table, _column, _values in options}) < 2:
         return
 
-    key = _state_key(rule, condition)
+    total = math.prod(len(values) for _table, _column, values in options)
+    iterator = itertools.product(
+        *(values for _table, _column, values in options)
+    )
+    combos = list(itertools.islice(iterator, MAX_STATE_COMBINATIONS))
+    if total > MAX_STATE_COMBINATIONS:
+        proposal.gaps.append(
+            {
+                "kind": "state_value_combinations_truncated",
+                "rule_key": rule.rule_key,
+                "condition": condition,
+                "reason": (
+                    f"取值组合共 {total} 个，只展开前 "
+                    f"{MAX_STATE_COMBINATIONS} 个"
+                ),
+            }
+        )
+    for combo in combos:
+        pinned: dict[str, dict[str, Any]] = {}
+        for (table, column, _values), value in zip(options, combo):
+            pinned.setdefault(table.name, {})[column.name] = value
+        _build_state(rule, condition, pinned, tables, proposal)
+
+
+def _build_state(
+    rule: Rule,
+    condition: str,
+    pinned: dict[str, dict[str, Any]],
+    tables: list[TableCatalog],
+    proposal: StateProposal,
+) -> None:
+    table_index = {table.name: table for table in tables}
+    key = _state_key(rule, condition, pinned)
     rows = {table: dict(values) for table, values in pinned.items()}
     placeholders: list[tuple[str, str, str]] = []
     warnings: list[str] = []
@@ -150,9 +177,7 @@ def _propose_one(
             )
         for table_name, row in rows.items():
             table = table_index[table_name]
-            _fill_not_null(
-                key, table, row, placeholders, warnings
-            )
+            _fill_not_null(key, table, row, placeholders, warnings)
     except _StateError as exc:
         proposal.warnings.append(f"rule_state_invalid:{key}:{exc}")
         return
@@ -181,15 +206,6 @@ def _propose_one(
                 "table": table,
                 "column": column,
                 "reason": reason,
-            }
-        )
-    for choice in choices:
-        proposal.gaps.append(
-            {
-                "kind": "state_value_choice",
-                "state_key": key,
-                **choice,
-                "reason": "IN 约束只用一个取值；其余取值未在候选态中展开",
             }
         )
     for warning in warnings:
@@ -339,11 +355,16 @@ def _placeholder(column: ColumnCatalog) -> tuple[Any, str]:
     return None, ""
 
 
-def _state_key(rule: Rule, condition: str) -> str:
+def _state_key(
+    rule: Rule,
+    condition: str,
+    pinned: dict[str, dict[str, Any]],
+) -> str:
     raw = json.dumps(
-        {"rule": rule.rule_key, "condition": condition},
+        {"rule": rule.rule_key, "condition": condition, "pinned": pinned},
         ensure_ascii=False,
         sort_keys=True,
+        default=str,
     )
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:6]
     label = rule.rule_id or rule.rule_key.replace("RK-", "")
