@@ -702,10 +702,10 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 > `registry_not_supported` / `unsupported_serialization`，不静默降级。
 > C3 提供方画像（`@DubboService` / XML `<dubbo:service>`）、DTO 字段/枚举/
 > 约束/时间/集合元素采样、正则样例与自定义校验注解、C4 A4 Dubbo 草案、
-> C6 codegen 与 C7 执行链路已接入，用例使用
-> `rpc_status` / `result_field` 等原生断言；目标地址支持
-> `ASTSIGHT_DUBBO_URL`、用例 URL 与画像端口 + host。纯 Dubbo 项目无 HTTP
-> 路由时 `run --mode full` 也可执行。
+> 多步骤、C6 codegen 与 C7 执行/诊断链路已接入，用例使用
+> `rpc_status` / `result_field` 等原生断言；sidecar 随 wheel 分发并校验
+> manifest，目标地址支持 `ASTSIGHT_DUBBO_URL`、用例 URL 与画像端口 + host。
+> 纯 Dubbo 项目无 HTTP 路由时 `run --mode full` 也可执行。
 
 **Dubbo 识别（确定性，零 LLM）**：
 

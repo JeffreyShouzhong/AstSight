@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from astsight.codegen import generate_pytest
-from contracts import Assertion, DubboCall, TestCase, Transport
+from contracts import Assertion, CaseStep, DubboCall, TestCase, Transport
 
 ENDPOINT = (
     "dubbo:com.acme.OrderService#create(com.acme.CreateOrderRequest)"
@@ -64,6 +64,85 @@ def test_dubbo_case_generates_native_call_and_assertions(tmp_path: Path) -> None
     assert "ASTSIGHT_DUBBO_URL" in conftest
     compile(text, str(test_file), "exec")
     compile(conftest, str(tmp_path / "conftest.py"), "exec")
+
+
+def test_multistep_dubbo_case_generates_refs(tmp_path: Path) -> None:
+    by_id = (
+        "dubbo:com.acme.OrderService#byId(com.acme.String)"
+        "?group=order&version=1.0.0"
+    )
+    echo = (
+        "dubbo:com.acme.OrderService#echo(java.lang.String)"
+        "?group=order&version=1.0.0"
+    )
+    case = TestCase(
+        id="TC-0002",
+        transport=Transport.DUBBO,
+        endpoint=echo,
+        category="business",
+        method="echo",
+        path="",
+        source="dubbo:flow",
+        asserts=[],
+        steps=[
+            CaseStep(
+                name="first",
+                transport=Transport.DUBBO,
+                endpoint=by_id,
+                method="byId",
+                path="",
+                dubbo=DubboCall(
+                    interface="com.acme.OrderService",
+                    method="byId",
+                    parameter_types=["java.lang.String"],
+                    arguments=["O-1"],
+                    group="order",
+                    version="1.0.0",
+                ),
+                asserts=[
+                    Assertion(kind="rpc_status", op="eq", expect="OK"),
+                    Assertion(
+                        kind="result_field", target="orderId", op="exists"
+                    ),
+                ],
+            ),
+            CaseStep(
+                name="second",
+                transport=Transport.DUBBO,
+                endpoint=echo,
+                method="echo",
+                path="",
+                dubbo=DubboCall(
+                    interface="com.acme.OrderService",
+                    method="echo",
+                    parameter_types=["java.lang.String"],
+                    arguments=[{"$ref": "first.orderId"}],
+                    group="order",
+                    version="1.0.0",
+                ),
+                asserts=[
+                    Assertion(kind="rpc_status", op="eq", expect="OK"),
+                    Assertion(kind="result_present", op="exists"),
+                ],
+            ),
+        ],
+    )
+
+    result = generate_pytest([case], tmp_path)
+    assert result.errors == []
+    test_file = next(
+        path for path in result.files if path.name.startswith("test_dubbo_")
+    )
+    text = test_file.read_text(encoding="utf-8")
+    assert "result_first = dubbo_call(" in text
+    assert "body_first = result_first.value" in text
+    assert "result_second = dubbo_call(" in text
+    assert "arguments=step_tools.refs(" in text
+    assert "{'first': body_first}" in text
+    assert "body_second = result_second.value" in text
+    assert "dubbo_tools.field(result_first.value, 'orderId')" in text
+    assert "def test_tc_0002_business(self" in text
+    compile(text, str(test_file), "exec")
 
 
 def test_dubbo_error_assertions_are_generated(tmp_path: Path) -> None:

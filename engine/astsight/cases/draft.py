@@ -67,7 +67,7 @@ class DraftCaseStep(BaseModel):
     name: str = Field(
         description="步骤名，匹配 ^[a-z][a-z0-9_]{1,63}$；用例内唯一"
     )
-    endpoint: str = Field(description="METHOD /path")
+    endpoint: str = Field(description="METHOD /path 或 Dubbo endpoint")
     path_params: dict[str, Any] = Field(default_factory=dict)
     query: dict[str, Any] = Field(default_factory=dict)
     headers: dict[str, Any] = Field(
@@ -75,6 +75,10 @@ class DraftCaseStep(BaseModel):
         description="Header 值必须是字符串；$ref 会在校验阶段被拒绝",
     )
     body: Any = None
+    dubbo: DubboCall | None = Field(
+        default=None,
+        description="Dubbo 步骤的原生调用；interface/method 由画像回填",
+    )
     asserts: list[Assertion] = Field(default_factory=list)
 
 
@@ -417,9 +421,21 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
                 "steps": [
                     {
                         "name": step.name,
+                        "transport": step.transport.value,
                         "endpoint": step.endpoint,
-                        "method": step.method.upper(),
+                        "method": (
+                            step.method
+                            if step.transport is Transport.DUBBO
+                            else step.method.upper()
+                        ),
                         "path": step.path,
+                        **(
+                            {
+                                "dubbo": step.dubbo.model_dump(mode="json")
+                            }
+                            if step.dubbo is not None
+                            else {}
+                        ),
                         "path_params": step.path_params,
                         "query": step.query,
                         "headers": {

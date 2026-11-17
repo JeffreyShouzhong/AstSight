@@ -3,8 +3,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from astsight.agent.models import CasePatch, CaseStepPatch
+from astsight.agent.repair import _apply_case_patch, _assertion_weakening
 from astsight.cases.context import prepare_context
-from astsight.cases.draft import CaseDraft, DraftCase, DraftRequirementRef
+from astsight.cases.draft import (
+    CaseDraft,
+    DraftCase,
+    DraftCaseStep,
+    DraftRequirementRef,
+)
 from astsight.cases.validate import validate_draft
 from contracts import (
     AssertStrength,
@@ -18,6 +25,8 @@ INTERFACE = """package com.acme;
 
 public interface OrderService {
     OrderView byId(String id);
+
+    String echo(String value);
 }
 """
 
@@ -35,6 +44,7 @@ import org.apache.dubbo.config.annotation.DubboService;
 @DubboService(group = "order", version = "1.0.0")
 public class OrderServiceImpl implements OrderService {
     public OrderView byId(String id) { return null; }
+    public String echo(String value) { return null; }
 }
 """
 
@@ -166,6 +176,251 @@ def test_interface_mismatch_is_rejected(tmp_path: Path) -> None:
 
     assert any(
         error.code == "dubbo.interface_mismatch" for error in result.errors
+    )
+
+
+def test_dubbo_multistep_draft_resolves_with_refs(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    by_id = _dubbo_profile(context)
+    echo = next(
+        item
+        for item in context["profiles"]
+        if item["transport"] == "dubbo" and item["method"] == "echo"
+    )
+    draft = CaseDraft(
+        context_id=context.get("context_id"),
+        generator={"kind": "manual", "name": "test"},
+        cases=[
+            DraftCase(
+                case_key="dubbo_flow_ok",
+                level=CaseLevel.BUSINESS,
+                transport=Transport.DUBBO,
+                requirement_refs=[_requirement_ref(context)],
+                endpoint=echo["endpoint"],
+                category="business",
+                asserts=[],
+                steps=[
+                    DraftCaseStep(
+                        name="first",
+                        endpoint=by_id["endpoint"],
+                        dubbo=DubboCall(arguments=["O-1"]),
+                        asserts=[
+                            Assertion(kind="rpc_status", op="eq", expect="OK")
+                        ],
+                    ),
+                    DraftCaseStep(
+                        name="second",
+                        endpoint=echo["endpoint"],
+                        dubbo=DubboCall(arguments=[{"$ref": "first.orderId"}]),
+                        asserts=[
+                            Assertion(kind="rpc_status", op="eq", expect="OK"),
+                            Assertion(kind="result_present", op="exists"),
+                        ],
+                    ),
+                ],
+                assert_strength=AssertStrength.L1,
+            )
+        ],
+    )
+
+    result = validate_draft(draft, context, project=root)
+
+    assert result.errors == []
+    case = result.resolved[0].case
+    assert [step.transport for step in case.steps] == [
+        Transport.DUBBO,
+        Transport.DUBBO,
+    ]
+    assert case.steps[0].dubbo is not None
+    assert case.steps[0].dubbo.method == "byId"
+    assert case.steps[0].dubbo.arguments == ["O-1"]
+    assert case.steps[1].dubbo is not None
+    assert case.steps[1].dubbo.method == "echo"
+    assert case.steps[1].dubbo.arguments == [{"$ref": "first.orderId"}]
+    assert case.steps[1].dubbo.parameter_types == ["java.lang.String"]
+
+
+def test_dubbo_step_requires_rpc_status(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    by_id = _dubbo_profile(context)
+    draft = CaseDraft(
+        context_id=context.get("context_id"),
+        generator={"kind": "manual", "name": "test"},
+        cases=[
+            DraftCase(
+                case_key="dubbo_flow_missing_status",
+                level=CaseLevel.BUSINESS,
+                transport=Transport.DUBBO,
+                requirement_refs=[_requirement_ref(context)],
+                endpoint=by_id["endpoint"],
+                category="business",
+                asserts=[],
+                steps=[
+                    DraftCaseStep(
+                        name="first",
+                        endpoint=by_id["endpoint"],
+                        dubbo=DubboCall(arguments=["O-1"]),
+                        asserts=[
+                            Assertion(
+                                kind="result_field",
+                                target="orderId",
+                                op="exists",
+                            )
+                        ],
+                    )
+                ],
+                assert_strength=AssertStrength.L1,
+            )
+        ],
+    )
+
+    result = validate_draft(draft, context, project=root)
+    assert any(
+        error.code == "assertion.rpc_status_missing"
+        for error in result.errors
+    )
+
+
+def test_repair_patch_can_replace_dubbo_arguments() -> None:
+    patch = CasePatch(
+        case_key="dubbo_by_id_ok",
+        reason="修正订单号",
+        dubbo=DubboCall(arguments=["O-2"]),
+    )
+    assert "dubbo" in patch.changed_fields()
+    assert patch.dubbo is not None
+    assert patch.dubbo.arguments == ["O-2"]
+
+
+def _multistep_draft(context: dict) -> CaseDraft:
+    by_id = _dubbo_profile(context)
+    echo = next(
+        item
+        for item in context["profiles"]
+        if item["transport"] == "dubbo" and item["method"] == "echo"
+    )
+    return CaseDraft(
+        context_id=context.get("context_id"),
+        generator={"kind": "manual", "name": "test"},
+        cases=[
+            DraftCase(
+                case_key="dubbo_flow_ok",
+                level=CaseLevel.BUSINESS,
+                transport=Transport.DUBBO,
+                requirement_refs=[_requirement_ref(context)],
+                endpoint=echo["endpoint"],
+                category="business",
+                asserts=[],
+                steps=[
+                    DraftCaseStep(
+                        name="first",
+                        endpoint=by_id["endpoint"],
+                        dubbo=DubboCall(arguments=["O-1"]),
+                        asserts=[
+                            Assertion(kind="rpc_status", op="eq", expect="OK"),
+                            Assertion(
+                                kind="result_field",
+                                target="orderId",
+                                op="exists",
+                            ),
+                        ],
+                    ),
+                    DraftCaseStep(
+                        name="second",
+                        endpoint=echo["endpoint"],
+                        dubbo=DubboCall(arguments=[{"$ref": "first.orderId"}]),
+                        asserts=[
+                            Assertion(kind="rpc_status", op="eq", expect="OK"),
+                            Assertion(kind="result_present", op="exists"),
+                        ],
+                    ),
+                ],
+                assert_strength=AssertStrength.L1,
+            )
+        ],
+    )
+
+
+def test_repair_step_patch_applies_and_validates(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    draft = _multistep_draft(context)
+    target = draft.cases[0]
+    patch = CasePatch(
+        case_key="dubbo_flow_ok",
+        reason="修正第二步参数",
+        steps=[
+            CaseStepPatch(
+                name="second",
+                dubbo=DubboCall(arguments=["O-2"]),
+            )
+        ],
+    )
+
+    assert _assertion_weakening(target, patch) is None
+    assert _apply_case_patch(target, patch) is None
+    assert target.steps[1].dubbo is not None
+    assert target.steps[1].dubbo.arguments == ["O-2"]
+
+    result = validate_draft(draft, context, project=root)
+    assert result.errors == []
+
+
+def test_repair_step_patch_rejects_unknown_step(tmp_path: Path) -> None:
+    _root, context = _context(tmp_path)
+    draft = _multistep_draft(context)
+    target = draft.cases[0]
+    patch = CasePatch(
+        case_key="dubbo_flow_ok",
+        reason="错误步骤",
+        steps=[
+            CaseStepPatch(
+                name="missing",
+                dubbo=DubboCall(arguments=["O-2"]),
+            )
+        ],
+    )
+
+    assert _apply_case_patch(target, patch) == "step_unknown:missing"
+
+
+def test_repair_step_patch_guards_assertions(tmp_path: Path) -> None:
+    _root, context = _context(tmp_path)
+    draft = _multistep_draft(context)
+    target = draft.cases[0]
+
+    fewer = CasePatch(
+        case_key="dubbo_flow_ok",
+        reason="删断言",
+        steps=[
+            CaseStepPatch(
+                name="second",
+                asserts=[Assertion(kind="result_present", op="exists")],
+            )
+        ],
+    )
+    assert _assertion_weakening(target, fewer).startswith(
+        "step_assertion_count_decreased"
+    )
+
+    missing_status = CasePatch(
+        case_key="dubbo_flow_ok",
+        reason="缺 rpc_status",
+        steps=[
+            CaseStepPatch(
+                name="second",
+                asserts=[
+                    Assertion(
+                        kind="result_field",
+                        target="message",
+                        op="exists",
+                    ),
+                    Assertion(kind="result_present", op="exists"),
+                ],
+            )
+        ],
+    )
+    assert _assertion_weakening(target, missing_status) == (
+        "step_rpc_status_missing:second"
     )
 
 

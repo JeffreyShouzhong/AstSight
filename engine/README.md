@@ -716,8 +716,9 @@ Dubbo 有效，无法覆盖 HTTP）。矩阵外的 Dubbo 版本不做运行期�
   `RPC_EXCEPTION`）作为 `DubboCallResult` 返回；进程崩溃、协议错才抛
   `DubboSidecarError`；
 - 首版只支持直连 `url`；传 `registry` 返回 `registry_not_supported`；
-- jar 解析顺序：`ASTSIGHT_DUBBO_SIDECAR_JAR` → 仓库
-  `java/astsight-sidecar-dubbo/target/astsight-dubbo-sidecar.jar`；
+- jar 解析顺序：`ASTSIGHT_DUBBO_SIDECAR_JAR` → 已安装的
+  `astsight-dubbo-sidecar` wheel（校验 manifest/版本/协议/sha256/size）→
+  仓库 `java/astsight-sidecar-dubbo/target/astsight-dubbo-sidecar.jar`；
 - 启动时对 JDK 9+ 自动加 `--add-opens`，Windows/Linux 同一条命令。
 
 提供方画像已接入：`@DubboService`、2.7 的 `org.apache.dubbo...@Service` 与
@@ -748,13 +749,27 @@ ASTSIGHT_DUBBO_SIDECAR_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \
   python -m pytest tests/integration/test_dubbo_case_e2e.py -q
 ```
 
+Dubbo 多步骤与诊断：
+
+- `CaseStep` 支持 `transport=dubbo` 与 `dubbo`；步骤返回值可用
+  `{"$ref": "<step>.<field>"}` 引用到后续步骤参数/断言；
+- 失败归因读取 `rpc_status` / `error_code`：`NO_PROVIDER`/`NETWORK`/`TIMEOUT`
+  归环境重试，`SERIALIZATION`/`BAD_REQUEST` 归用例错误；
+- 报告新增 `by_transport`；A5 可修单步 `dubbo.arguments` 和多步骤
+  `steps[].dubbo.arguments`，步骤级断言同样受“不得减少/降强”护栏约束。
+
 ```bash
 cd java && mvn -pl astsight-sidecar-dubbo package
-cd ../engine
+cd ..
+python tools/build_sidecar_wheel.py
+cd engine
 ASTSIGHT_DUBBO_SIDECAR_E2E=1 PYTHONPATH=. \
-  python -m pytest tests/integration/test_dubbo_sidecar_e2e.py -q
+  python -m pytest tests/integration/test_dubbo_sidecar_e2e.py \
+  tests/integration/test_dubbo_case_e2e.py -q
 PYTHONPATH=. python -m pytest tests/test_dubbo_sidecar_client.py \
-  tests/test_dubbo_provider_profile.py tests/test_profile_dubbo.py -q
+  tests/test_sidecar_jar.py tests/test_dubbo_provider_profile.py \
+  tests/test_dubbo_case_validate.py tests/test_codegen_dubbo.py \
+  tests/test_dubbo_diagnose.py tests/test_profile_dubbo.py -q
 ```
 
 ### 下游调用点识别与计划草案（P1）

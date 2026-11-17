@@ -79,8 +79,15 @@ def load_repair_prompt(path: str | Path | None = None) -> str:
 def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
     return {
         "endpoint": profile.get("endpoint"),
+        "transport": profile.get("transport", "http"),
         "method": profile.get("method"),
         "path": profile.get("path"),
+        "service": profile.get("service"),
+        "parameter_types": profile.get("parameter_types") or [],
+        "parameter_schemas": profile.get("parameter_schemas") or [],
+        "result_schema": profile.get("result_schema"),
+        "group": profile.get("group"),
+        "version": profile.get("version"),
         "request_fields": profile.get("request_fields") or [],
         "response_fields": profile.get("response_fields") or [],
         "success_codes": profile.get("success_codes") or [],
@@ -96,9 +103,25 @@ def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _apply_case_patch(case: Any, patch: CasePatch) -> None:
+def _apply_case_patch(case: Any, patch: CasePatch) -> str | None:
+    """应用顶层与步骤级修补；步骤名不存在时整条 patch 拒绝。"""
+    step_patches = patch.steps or []
+    steps = {
+        str(getattr(step, "name", "")): step
+        for step in (getattr(case, "steps", []) or [])
+    }
+    missing = [item.name for item in step_patches if item.name not in steps]
+    if missing:
+        return "step_unknown:" + ",".join(missing)
     for name in patch.changed_fields():
+        if name == "steps":
+            continue
         setattr(case, name, copy.deepcopy(getattr(patch, name)))
+    for step_patch in step_patches:
+        target = steps[step_patch.name]
+        for field in step_patch.changed_fields():
+            setattr(target, field, copy.deepcopy(getattr(step_patch, field)))
+    return None
 
 
 def _all_assertions(case: Any) -> list[Any]:
@@ -110,6 +133,35 @@ def _all_assertions(case: Any) -> list[Any]:
 
 def _assertion_weakening(case: Any, patch: CasePatch) -> str | None:
     """断言条数或推导强度下降即拒绝；避免“删断言式修复”。"""
+    steps_by_name = {
+        str(getattr(step, "name", "")): step
+        for step in (getattr(case, "steps", []) or [])
+    }
+    for step_patch in patch.steps or []:
+        if "asserts" not in step_patch.changed_fields():
+            continue
+        target = steps_by_name.get(step_patch.name)
+        if target is None:
+            return f"step_unknown:{step_patch.name}"
+        before_values = list(getattr(target, "asserts", []) or [])
+        after_values = list(step_patch.asserts or [])
+        if len(after_values) < len(before_values):
+            return f"step_assertion_count_decreased:{step_patch.name}"
+        before = str(derive_assert_strength(before_values, steps=1))
+        after = str(derive_assert_strength(after_values, steps=1))
+        if _STRENGTH_RANK.get(after, 1) < _STRENGTH_RANK.get(before, 1):
+            return (
+                f"step_assert_strength_decreased:{step_patch.name}:"
+                f"{before}->{after}"
+            )
+        transport = str(getattr(getattr(target, "transport", None), "value", ""))
+        is_dubbo = transport == "dubbo" or getattr(target, "dubbo", None) is not None
+        required = "rpc_status" if is_dubbo else "status_code"
+        if not any(
+            assertion.kind == required for assertion in after_values
+        ):
+            return f"step_{required}_missing:{step_patch.name}"
+
     if "asserts" not in patch.changed_fields():
         return None
     before_values = _all_assertions(case)
@@ -378,9 +430,10 @@ def diagnose_and_repair(
 
         branch_snapshots: dict[tuple[str, str], Any] = {}
         applied_mock: list[dict[str, Any]] = []
-        reject_reason: str | None = None
-        _apply_case_patch(target, patch)
+        reject_reason: str | None = _apply_case_patch(target, patch)
         for mock_patch in patch.mock_branches:
+            if reject_reason is not None:
+                break
             pair = (mock_patch.dep_id, mock_patch.branch)
             if pair in seen_mock_pairs:
                 reject_reason = f"mock_branch_duplicate:{pair[0]}/{pair[1]}"

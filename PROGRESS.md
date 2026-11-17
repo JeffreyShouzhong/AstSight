@@ -67,6 +67,10 @@
 | Dubbo 真实代理 e2e | ✅ 2026-11-16 | `java/samples/dubbo-consumer` 用 `ReferenceConfig` 直连 URL（`check=false`、`lazy=true`，不启注册中心/provider），经真实消费端代理调用；Python 计数端口断言 accept 与收到字节数均为 0；普通 classpath 与 Spring Boot fat jar 均返回桩、心跳 `filter_instantiated>0`；修复 fat jar 下 `java.lang` 模块打开范围与 bridge 跨加载器可见性 |
 | Dubbo sidecar 首版 | ✅ 2026-11-17 | 新增 `java/astsight-sidecar-dubbo`：独立进程 stdin/stdout JSONL（`ping`/`invoke`/`shutdown`），`ReferenceConfig<GenericService>` + Hessian2 泛化调用，引用按 `interface/group/version/url/timeout` 缓存、固定 `retries=0`；错误归一为 `TIMEOUT`/`SERIALIZATION`/`NETWORK`/`NO_PROVIDER`/`RPC_EXCEPTION`/`BAD_REQUEST`；仅直连 URL，注册中心与 Kryo/FST 显式失败；JDK 9+ 自动 `--add-opens`；Java 单测 17 条 |
 | Dubbo 提供方画像 | ✅ 2026-11-17 | `profile/dubbo.py` 扫描 `@DubboService` / 2.7 `@Service` / XML `<dubbo:service>`：接口必须在仓库、参数与返回类型解析到 JVM 名，`group/version` 进入 endpoint；多接口无 override、2.6、接口在 jar、Kotlin 提供方显式 `unsupported`，Spring `@Service` 不误判；`build_profiles` 追加 `transport=dubbo` 画像，context 增加 `dubbo` 证据、`dubbo_providers_only` 告警与提供方指纹；模板用例跳过非 HTTP；新增 10 条测试，全量 522 passed / 41 skipped |
+| A5 多步骤修复 | ✅ 2026-11-18 | `CasePatch.steps: [CaseStepPatch]`：按步骤名定位，可改 `path_params/query/headers/body/dubbo/asserts`；未知步骤整条拒绝；步骤级断言不得减少/降强，Dubbo 步骤必须保留 `rpc_status`；应用后重新走 `validate_draft`；新增 3 条修复测试；全量 564 passed / 44 skipped |
+| Sidecar wheel 分发 | ✅ 2026-11-18 | `tools/build_sidecar_wheel.py`：jar + `manifest.json`（版本/协议/sha256/大小）+ RECORD；引擎解析 env → 已安装 wheel → 仓库构建产物，wheel 逐项校验；8 条分发/校验测试 |
+| Dubbo 多步骤 | ✅ 2026-11-18 | `CaseStep`/`DraftCaseStep` 支持 `transport=dubbo` 与 `dubbo`；校验按步骤检查 `rpc_status` 与 `$ref`；codegen 生成多个 `dubbo_call` 并把 `result.value` 暴露给后续步骤；真实 provider e2e 覆盖两步调用与字段引用 |
+| Dubbo 诊断与报告 | ✅ 2026-11-18 | `classify` 读取 `rpc_status`/`error_code`：NO_PROVIDER/NETWORK/TIMEOUT → 环境重试，SERIALIZATION/BAD_REQUEST → 用例错误；A5 可修单步 `dubbo.arguments`，case payload/profile view 补 Dubbo 字段；报告新增 `by_transport`；新增 3 条归因测试 |
 | DTO 采样再增强 | ✅ 2026-11-18 | 新增正则样例生成（字面量/字符类/范围/量词/分支/锚点，复杂结构安全失败）；自定义校验注解（`@Mobile`/`@Range`/`@EnumValue`/`@Column` 等）进入 `constraints.custom` 并推断常用约束；集合元素上限 3→10，按 `min_length`/`max_length` 生成；新增 9 条正则测试与自定义注解/集合上限断言；全量 546 passed / 43 skipped |
 | DTO 采样增强 | ✅ 2026-11-18 | 时间类型（`java.time.*`、`java.util.Date`、`UUID`/`URI`/`URL`）进入 schema 并由 sidecar 转成真实 Java 对象；集合/Map/数组按 `element`/`key`/`value` 采样；`@Size`/`@Min`/`@Max`/`@Pattern`/`@Email`/`@Positive` 等注解进入 `constraints`，模板按约束生成合法值，`pattern` 提示人工确认；未知第三方类型按空对象并写入 note；Java 19 条单测、真实 provider 验证 `LocalDate` DTO 字段；全量 537 passed / 43 skipped |
 | A4 Dubbo 草案 + DTO 采样 | ✅ 2026-11-17 | A4 提示词收入 `transport=dubbo` 画像、`parameter_schemas`、`result_schema`、`direct_url/protocol_port`；草案只填 `dubbo.arguments`，interface/method/param_types 由画像回填；provider 扫描解析 DTO 字段、嵌套 DTO、record 组件、枚举常量与 `@NotNull` 等必填标记；模板按字段生成 arguments，无法解析的类型按 `null` 并在 note 标明；新增 3 条测试，全量 535 passed / 43 skipped |
@@ -126,9 +130,9 @@
 
 - **gRPC 仅 unary**：流式与 server reflection 未做。
 - **Dubbo**：2.7.22/3.2.19 × JDK 8/11/17/21/26 已验证；classpath 形态明确不支持。
-  sidecar 首版（直连 URL + Hessian2）、提供方画像、DTO 字段/约束/时间/集合采样、
-  A4 Dubbo 草案、codegen 与执行已打通；注册中心、多步骤与异步/oneway 仍未接入，
-  `pattern` 等复杂约束只做提示、不保证生成匹配值。
+  sidecar 首版（直连 URL + Hessian2）、wheel 分发、提供方画像、DTO 字段/约束/
+  时间/集合采样、A4 Dubbo 草案、多步骤、诊断/修复与执行已打通；注册中心、
+  异步/oneway 仍未接入，复杂正则与自定义约束只做有限推断。
 - **Java agent 未实测清单**：改写后 `Host`/签名/pinning/连接池复用的副作用；
   异步/重试/重定向与二次改写；HTTPS 客户端拒绝 scheme 变化的实际比例；
   `/_agent/unmatched` 的延迟与证据归因。

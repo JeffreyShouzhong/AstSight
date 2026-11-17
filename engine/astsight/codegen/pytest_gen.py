@@ -911,7 +911,13 @@ def _assert_line(
     return f"        # unsupported assertion: {kind}/{op}"
 
 
-def _dubbo_assert_line(assertion, *, result_var: str = "result") -> str:
+def _dubbo_assert_line(
+    assertion,
+    *,
+    result_var: str = "result",
+    responses_expr: str = "{}",
+    request_expr: str | None = None,
+) -> str:
     kind = assertion.kind
     op = assertion.op
     expect = assertion.expect
@@ -938,6 +944,12 @@ def _dubbo_assert_line(assertion, *, result_var: str = "result") -> str:
     if kind == "result_field":
         target = assertion.target or ""
         expr = f"dubbo_tools.field({result_var}.value, {target!r})"
+        expect_expr = _expect_expr(
+            expect,
+            responses_expr,
+            body_var=None,
+            request_expr=request_expr,
+        )
         if op == "exists":
             return (
                 f"        assert {expr} is not None, "
@@ -945,19 +957,19 @@ def _dubbo_assert_line(assertion, *, result_var: str = "result") -> str:
             )
         if op == "eq":
             return (
-                f"        assert {expr} == {expect!r}, "
+                f"        assert {expr} == {expect_expr}, "
                 f"f\"unexpected value for {target}: {{{expr}!r}}\""
             )
         if op == "ne":
-            return f"        assert {expr} != {expect!r}"
+            return f"        assert {expr} != {expect_expr}"
         if op == "in":
-            return f"        assert {expr} in {expect!r}"
+            return f"        assert {expr} in {expect_expr}"
         if op == "gte":
-            return f"        assert {expr} >= {expect!r}"
+            return f"        assert {expr} >= {expect_expr}"
         if op == "lte":
-            return f"        assert {expr} <= {expect!r}"
+            return f"        assert {expr} <= {expect_expr}"
         if op == "contains":
-            return f"        assert {expect!r} in str({expr})"
+            return f"        assert {expect_expr} in str({expr})"
     if kind in {"error_code", "exception_type", "error_message"}:
         attr = {
             "error_code": "error",
@@ -978,23 +990,40 @@ def _dubbo_assert_line(assertion, *, result_var: str = "result") -> str:
     if kind == "db_row":
         table, _, column = (assertion.target or "").partition(".")
         wait_ms = int(getattr(assertion, "wait_ms", 0) or 0)
+        expect_expr = _expect_expr(
+            assertion.expect,
+            responses_expr,
+            body_var=None,
+            request_expr=request_expr,
+        )
+        where_expr = _expect_expr(
+            assertion.where or {},
+            responses_expr,
+            body_var=None,
+            request_expr=request_expr,
+        )
         return (
             f"        db_tools.check({table!r}, {column or None!r}, "
-            f"{op!r}, {assertion.expect!r}, {assertion.where!r}, wait_ms={wait_ms})"
+            f"{op!r}, {expect_expr}, {where_expr}, wait_ms={wait_ms})"
         )
     return f"        # unsupported assertion: {kind}/{op}"
 
 
-def _dubbo_case_lines(case: TestCase) -> list[str]:
-    call = case.dubbo
-    if call is None:
-        return ["        raise RuntimeError('dubbo_call_missing')"]
-    lines = [
-        "        result = dubbo_call(",
+def _dubbo_invoke_lines(
+    call,
+    *,
+    result_var: str,
+    responses_expr: str = "{}",
+) -> list[str]:
+    arguments_expr = _expect_expr(
+        call.arguments, responses_expr, body_var=None
+    )
+    return [
+        f"        {result_var} = dubbo_call(",
         f"            interface={call.interface!r},",
         f"            method={call.method!r},",
         f"            param_types={call.parameter_types!r},",
-        f"            arguments={call.arguments!r},",
+        f"            arguments={arguments_expr},",
         f"            url={call.url!r},",
         f"            target_port={call.target_port!r},",
         f"            group={call.group!r},",
@@ -1003,6 +1032,13 @@ def _dubbo_case_lines(case: TestCase) -> list[str]:
         f"            timeout_ms={int(call.timeout_ms)},",
         "        )",
     ]
+
+
+def _dubbo_case_lines(case: TestCase) -> list[str]:
+    call = case.dubbo
+    if call is None:
+        return ["        raise RuntimeError('dubbo_call_missing')"]
+    lines = _dubbo_invoke_lines(call, result_var="result")
     for assertion in case.asserts:
         lines.append(_dubbo_assert_line(assertion))
     return lines
@@ -1092,6 +1128,8 @@ def _steps_lines(case: TestCase) -> list[str]:
     for step in case.steps:
         for value in (step.body, step.query, step.path_params):
             needed.update(_ref_steps(value))
+        if step.dubbo is not None:
+            needed.update(_ref_steps(step.dubbo.arguments))
         for assertion in step.asserts:
             if assertion.kind == "body_schema":
                 continue
@@ -1101,6 +1139,26 @@ def _steps_lines(case: TestCase) -> list[str]:
     inner: list[str] = []
     for index, step in enumerate(case.steps):
         responses_expr = _responses_expr(case, index, needed)
+        if step.dubbo is not None:
+            resp_var = f"result_{step.name}"
+            body_var = f"body_{step.name}"
+            inner.extend(
+                _dubbo_invoke_lines(
+                    step.dubbo,
+                    result_var=resp_var,
+                    responses_expr=responses_expr,
+                )
+            )
+            inner.append(f"        {body_var} = {resp_var}.value")
+            for assertion in step.asserts:
+                inner.append(
+                    _dubbo_assert_line(
+                        assertion,
+                        result_var=resp_var,
+                        responses_expr=responses_expr,
+                    )
+                )
+            continue
         resp_var = f"resp_{step.name}"
         body_var = f"body_{step.name}"
         request_expr = (
@@ -1162,11 +1220,21 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
     requires_data = bool(case.preconditions)
     assertions = _case_assertions(case)
     is_dubbo = case.transport is Transport.DUBBO
-    fixtures = (
-        ["mock_session", "data_state", "dubbo_call", "dubbo_tools"]
-        if is_dubbo
-        else ["client", "mock_session", "data_state", "step_tools"]
-    )
+    has_dubbo_step = any(step.dubbo is not None for step in case.steps)
+    has_http_step = any(step.dubbo is None for step in case.steps)
+    if case.steps:
+        # 多步骤统一需要 step_tools（$ref/路径解析）；Dubbo 步骤也用它解析参数。
+        fixtures = ["mock_session", "data_state", "step_tools"]
+        if has_http_step:
+            fixtures.append("client")
+        if has_dubbo_step:
+            fixtures.extend(["dubbo_call", "dubbo_tools"])
+    else:
+        fixtures = (
+            ["mock_session", "data_state", "dubbo_call", "dubbo_tools"]
+            if is_dubbo
+            else ["client", "mock_session", "data_state", "step_tools"]
+        )
     if any(assertion.kind == "db_row" for assertion in assertions):
         fixtures.append("db_tools")
     if any(assertion.kind == "body_schema" for assertion in assertions):
@@ -1188,10 +1256,12 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
             f"        with mock_session({case.id!r}, {bindings!r}):",
         ]
     )
-    if is_dubbo:
+    if case.steps:
+        inner = _steps_lines(case)
+    elif is_dubbo:
         inner = _dubbo_case_lines(case)
     else:
-        inner = _steps_lines(case) if case.steps else _single_request_lines(case)
+        inner = _single_request_lines(case)
     lines.extend("    " + line for line in inner)
     return "\n".join(lines)
 
@@ -1284,8 +1354,15 @@ def generate_pytest(
     used_classes: set[str] = set()
     for endpoint, endpoint_cases in grouped.items():
         first = endpoint_cases[0]
-        if first.transport is Transport.DUBBO and first.dubbo is not None:
-            identifier = f"{first.dubbo.interface}_{first.dubbo.method}"
+        is_dubbo_case = (
+            first.transport is Transport.DUBBO or endpoint.startswith("dubbo:")
+        )
+        if is_dubbo_case:
+            identifier = (
+                f"{first.dubbo.interface}_{first.dubbo.method}"
+                if first.dubbo is not None
+                else endpoint.partition("dubbo:")[2] or endpoint
+            )
             class_name = _class_name("Dubbo", identifier, used_classes)
             # 文件名不能含 `.`，否则 pytest 会把它当成包路径。
             filename = f"test_dubbo_{slugify(identifier.replace('.', '_'))}.py"

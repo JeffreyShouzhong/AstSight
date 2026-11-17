@@ -75,9 +75,19 @@
 
 ### 可以修改
 
-- `path_params` / `query` / `headers` / `body`：修正请求构造；
+- `path_params` / `query` / `headers` / `body`：修正 HTTP 请求构造；
+- `dubbo`：修正单步 Dubbo 用例的 `arguments` / `attachments`。只能改取值，
+  `interface` / `method` / `parameter_types` / `group` / `version` 以画像为准，
+  不得改写；
+- `steps`：多步骤用例的逐步骤修复，每项
+  `{name, path_params?, query?, headers?, body?, dubbo?, asserts?}`。
+  `name` 只能引用输入 `case.steps` 中已存在的步骤；不能改步骤顺序、endpoint
+  或名称。Dubbo 步骤用 `dubbo.arguments`。多步骤示例：
+  `"steps": [{"name": "second", "dubbo": {"arguments": ["O-2"]}}]`；
 - `asserts`：整体替换断言列表。**不得减少条数，不得降低强度**
-  （L1 状态/存在 < L2 确定值 < L3 `$ref` < L4 跨步骤），必须保留 `status_code`；
+  （L1 状态/存在 < L2 确定值 < L3 `$ref` < L4 跨步骤）。HTTP 用例必须保留
+  `status_code`，Dubbo 用例必须保留 `rpc_status`；步骤级 `steps[].asserts`
+  同样受这条护栏约束；
 - `mock_bindings`：`{dep_id: branch}`，只能绑定输入 `mock_semantics` 里已存在的分支；
 - `mock_branches`：修正用例实际绑定的 Mock 分支返回，字段为
   `dep_id` / `branch` / `reason` / `status` / `headers` / `body` / `semantics`。
@@ -86,7 +96,8 @@
 ### 禁止修改
 
 - `case_key`、`endpoint`、`method`、`path`、`steps`、`category`、`priority`、
-  `requirement_refs`、`rule_refs`、`source`；
+  `requirement_refs`、`rule_refs`、`source`、`dubbo.interface/method/
+  parameter_types/group/version`；
 - 禁止删除断言、清空断言、把具体值断言降成“仅状态码”；
 - 禁止把 5xx 改成 200，或新增 5xx 来“制造”失败；
 - 禁止新增输入里不存在的接口、字段、分支或需求原文；

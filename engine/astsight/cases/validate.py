@@ -412,21 +412,74 @@ def _resolve_case_steps(
                     path=step_label,
                 )
             )
-        parsed = parse_endpoint(canonical)
-        if parsed is None or not profile.get("method") or not profile.get("path"):
-            result.errors.append(
-                _issue(
-                    "error",
-                    "step.endpoint_invalid_context",
-                    f"step profile 缺少 method/path: {canonical!r}",
+        is_dubbo = str(profile.get("transport") or "http").lower() == "dubbo"
+        if is_dubbo:
+            if not profile.get("service") or not profile.get("method"):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "step.endpoint_invalid_context",
+                        f"step Dubbo profile 缺少 service/method: {canonical!r}",
+                        case_key=case_key,
+                        endpoint=canonical,
+                        path=step_label,
+                    )
+                )
+                continue
+        else:
+            parsed = parse_endpoint(canonical)
+            if parsed is None or not profile.get("method") or not profile.get("path"):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "step.endpoint_invalid_context",
+                        f"step profile 缺少 method/path: {canonical!r}",
+                        case_key=case_key,
+                        endpoint=canonical,
+                        path=step_label,
+                    )
+                )
+                continue
+            if raw.dubbo is not None:
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "step.dubbo_on_http",
+                        "HTTP 步骤不能带 dubbo 调用参数",
+                        case_key=case_key,
+                        endpoint=canonical,
+                        path=step_label,
+                    )
+                )
+
+        allowed = set(seen_names) - {name}
+        step_dubbo = (
+            _hydrate_dubbo(raw.dubbo, profile=profile) if is_dubbo else None
+        )
+        if is_dubbo:
+            _check_dubbo_call_fields(
+                step_dubbo,
+                profile=profile,
+                path_params=raw.path_params,
+                query=raw.query,
+                headers=raw.headers,
+                body=raw.body,
+                require_call=True,
+                case_key=case_key,
+                endpoint=canonical,
+                path=step_label,
+                result=result,
+            )
+            if step_dubbo is not None:
+                _check_step_refs(
+                    step_dubbo.arguments,
+                    allowed_steps=allowed,
+                    location=f"steps[{index}].dubbo.arguments",
                     case_key=case_key,
                     endpoint=canonical,
                     path=step_label,
+                    result=result,
                 )
-            )
-            continue
-
-        allowed = set(seen_names) - {name}
         _check_step_refs(
             raw.body,
             allowed_steps=allowed,
@@ -474,7 +527,9 @@ def _resolve_case_steps(
                 _check_step_refs(
                     assertion.expect,
                     allowed_steps=allowed,
-                    allow_response_expr=assertion.kind in {"body_field", "db_row"},
+                    allow_response_expr=assertion.kind
+                    in {"body_field", "db_row"}
+                    or (is_dubbo and assertion.kind == "result_field"),
                     location=f"steps[{index}].asserts.expect",
                     case_key=case_key,
                     endpoint=canonical,
@@ -497,13 +552,21 @@ def _resolve_case_steps(
             (
                 CaseStep(
                     name=name,
+                    transport=(
+                        Transport.DUBBO if is_dubbo else Transport.HTTP
+                    ),
                     endpoint=canonical,
-                    method=str(profile["method"]).upper(),
-                    path=str(profile["path"]),
+                    method=(
+                        str(profile["method"])
+                        if is_dubbo
+                        else str(profile["method"]).upper()
+                    ),
+                    path="" if is_dubbo else str(profile["path"]),
                     path_params=dict(raw.path_params),
                     query=dict(raw.query),
                     headers=safe_headers,
                     body=raw.body,
+                    dubbo=step_dubbo,
                     asserts=[item.model_copy() for item in raw.asserts],
                 ),
                 profile,
@@ -1547,13 +1610,13 @@ def _check_assert_strength(
         )
 
 
-def _hydrate_dubbo_call(
-    draft_case: DraftCase,
+def _hydrate_dubbo(
+    dubbo: DubboCall | None,
     *,
     profile: dict[str, Any],
-) -> DraftCase:
+) -> DubboCall:
     """接口/方法/参数类型以画像为准；草案只保留取值与附件。"""
-    call = draft_case.dubbo.model_copy(deep=True) if draft_case.dubbo else DubboCall()
+    call = dubbo.model_copy(deep=True) if dubbo else DubboCall()
     updates: dict[str, Any] = {}
     if not call.interface:
         updates["interface"] = str(profile.get("service") or "")
@@ -1571,30 +1634,47 @@ def _hydrate_dubbo_call(
         updates["target_port"] = profile.get("protocol_port")
     if updates:
         call = call.model_copy(update=updates)
-    return draft_case.model_copy(update={"dubbo": call})
+    return call
 
 
-def _check_dubbo_call(
+def _hydrate_dubbo_call(
     draft_case: DraftCase,
     *,
     profile: dict[str, Any],
+) -> DraftCase:
+    if draft_case.steps and draft_case.dubbo is None:
+        return draft_case
+    return draft_case.model_copy(
+        update={"dubbo": _hydrate_dubbo(draft_case.dubbo, profile=profile)}
+    )
+
+
+def _check_dubbo_call_fields(
+    call: DubboCall | None,
+    *,
+    profile: dict[str, Any],
+    path_params: dict[str, Any],
+    query: dict[str, Any],
+    headers: dict[str, Any],
+    body: Any,
+    require_call: bool,
     case_key: str,
     endpoint: str,
     path: str,
     result: ValidationResult,
 ) -> None:
-    call = draft_case.dubbo
     if call is None:
-        result.errors.append(
-            _issue(
-                "error",
-                "dubbo.call_missing",
-                "transport=dubbo 的用例必须提供 dubbo 调用参数",
-                case_key=case_key,
-                endpoint=endpoint,
-                path=path,
+        if require_call:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "dubbo.call_missing",
+                    "transport=dubbo 的用例必须提供 dubbo 调用参数",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
             )
-        )
         return
     expected_service = str(profile.get("service") or "")
     expected_method = str(profile.get("method") or "")
@@ -1669,12 +1749,7 @@ def _check_dubbo_call(
                 path=path,
             )
         )
-    if (
-        draft_case.path_params
-        or draft_case.query
-        or draft_case.body is not None
-        or draft_case.headers
-    ):
+    if path_params or query or body is not None or headers:
         result.errors.append(
             _issue(
                 "error",
@@ -1685,17 +1760,30 @@ def _check_dubbo_call(
                 path=path,
             )
         )
-    if draft_case.steps:
-        result.errors.append(
-            _issue(
-                "error",
-                "dubbo.steps_unsupported",
-                "Dubbo 多步骤用例尚未支持",
-                case_key=case_key,
-                endpoint=endpoint,
-                path=path,
-            )
-        )
+
+
+def _check_dubbo_call(
+    draft_case: DraftCase,
+    *,
+    profile: dict[str, Any],
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    _check_dubbo_call_fields(
+        draft_case.dubbo,
+        profile=profile,
+        path_params=draft_case.path_params,
+        query=draft_case.query,
+        headers=draft_case.headers,
+        body=draft_case.body,
+        require_call=not bool(draft_case.steps),
+        case_key=case_key,
+        endpoint=endpoint,
+        path=path,
+        result=result,
+    )
 
 
 def _check_profile_alignment(
@@ -2368,7 +2456,10 @@ def validate_draft(
         canonical_draft = draft_case.model_copy(
             update={"endpoint": canonical_endpoint}
         )
-        if canonical_draft.transport is Transport.DUBBO:
+        if (
+            canonical_draft.transport is Transport.DUBBO
+            and not canonical_draft.steps
+        ):
             canonical_draft = _hydrate_dubbo_call(
                 canonical_draft, profile=profile
             )
@@ -2386,7 +2477,7 @@ def validate_draft(
             if dep.get("dep_id")
         }
         resolved_steps: list[tuple[CaseStep, dict[str, Any]]] = []
-        if canonical_draft.steps and canonical_draft.transport is not Transport.DUBBO:
+        if canonical_draft.steps:
             if len(canonical_draft.steps) < 2:
                 result.errors.append(
                     _issue(
@@ -2444,15 +2535,16 @@ def validate_draft(
                 )
             for index, (step, step_profile) in enumerate(resolved_steps):
                 step_path = f"{pseudo_path}.steps[{index}]"
-                _check_request(
-                    step,
-                    category=canonical_draft.category,
-                    case_key=key,
-                    endpoint=step.endpoint,
-                    profile=step_profile,
-                    path=step_path,
-                    result=result,
-                )
+                if step.transport is not Transport.DUBBO:
+                    _check_request(
+                        step,
+                        category=canonical_draft.category,
+                        case_key=key,
+                        endpoint=step.endpoint,
+                        profile=step_profile,
+                        path=step_path,
+                        result=result,
+                    )
                 if not step.asserts:
                     result.errors.append(
                         _issue(
@@ -2464,14 +2556,27 @@ def validate_draft(
                             path=step_path,
                         )
                     )
+                required_kind = (
+                    "rpc_status"
+                    if step.transport is Transport.DUBBO
+                    else "status_code"
+                )
                 if not any(
-                    assertion.kind == "status_code" for assertion in step.asserts
+                    assertion.kind == required_kind for assertion in step.asserts
                 ):
                     result.errors.append(
                         _issue(
                             "error",
-                            "assertion.status_missing",
-                            f"步骤 {step.name!r} 至少需要一条 status_code 断言",
+                            (
+                                "assertion.rpc_status_missing"
+                                if required_kind == "rpc_status"
+                                else "assertion.status_missing"
+                            ),
+                            (
+                                f"步骤 {step.name!r} 至少需要一条 rpc_status 断言"
+                                if required_kind == "rpc_status"
+                                else f"步骤 {step.name!r} 至少需要一条 status_code 断言"
+                            ),
                             case_key=key,
                             endpoint=step.endpoint,
                             path=step_path,

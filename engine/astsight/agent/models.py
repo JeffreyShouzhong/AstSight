@@ -6,9 +6,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from contracts import Assertion, MockStub
+from contracts import Assertion, DubboCall, MockStub
 
-from ..cases.draft import DraftRequirementRef
+from ..cases.draft import STEP_NAME_RE, DraftRequirementRef
 
 MAX_BEHAVIORS = 200
 MAX_BRANCHES = 200
@@ -162,6 +162,40 @@ class MockBranchPatch(BaseModel):
         return value
 
 
+class CaseStepPatch(BaseModel):
+    """多步骤用例的单步修复；`name` 只作定位，不允许改步骤顺序或身份。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=STEP_NAME_RE.pattern, max_length=64)
+    path_params: dict[str, Any] | None = None
+    query: dict[str, Any] | None = None
+    headers: dict[str, str] | None = None
+    body: Any = None
+    dubbo: DubboCall | None = None
+    asserts: list[Assertion] | None = None
+
+    def changed_fields(self) -> list[str]:
+        allowed = (
+            "path_params",
+            "query",
+            "headers",
+            "body",
+            "dubbo",
+            "asserts",
+        )
+        return [name for name in allowed if name in self.model_fields_set]
+
+    @field_validator("asserts")
+    @classmethod
+    def _asserts(cls, values: list[Assertion] | None):
+        if values is not None and not values:
+            raise ValueError("asserts 不能为空")
+        if values is not None and len(values) > 50:
+            raise ValueError("asserts 超过 50 条")
+        return values
+
+
 class CasePatch(BaseModel):
     """修复建议：只允许改请求/断言/绑定，不允许改身份和需求归属。"""
 
@@ -173,15 +207,34 @@ class CasePatch(BaseModel):
     query: dict[str, Any] | None = None
     headers: dict[str, str] | None = None
     body: Any = None
+    dubbo: DubboCall | None = None
     asserts: list[Assertion] | None = None
+    steps: list[CaseStepPatch] | None = Field(default=None, max_length=50)
     mock_bindings: dict[str, str] | None = None
     mock_branches: list[MockBranchPatch] = Field(default_factory=list, max_length=20)
 
     def changed_fields(self) -> list[str]:
         allowed = (
-            "path_params", "query", "headers", "body", "asserts", "mock_bindings"
+            "path_params",
+            "query",
+            "headers",
+            "body",
+            "dubbo",
+            "asserts",
+            "steps",
+            "mock_bindings",
         )
         return [name for name in allowed if name in self.model_fields_set]
+
+    @field_validator("steps")
+    @classmethod
+    def _steps(cls, values: list[CaseStepPatch] | None):
+        if values is not None and not values:
+            raise ValueError("steps 不能为空")
+        names = [item.name for item in values or []]
+        if len(names) != len(set(names)):
+            raise ValueError("steps 中步骤名不能重复")
+        return values
 
     @field_validator("asserts")
     @classmethod
@@ -220,6 +273,7 @@ __all__ = [
     "BRANCH_RE",
     "BehaviorDownstream",
     "CasePatch",
+    "CaseStepPatch",
     "DiagnosisEvidence",
     "DownstreamBranchSpec",
     "FailureDiagnosis",

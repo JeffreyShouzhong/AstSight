@@ -232,13 +232,17 @@ class CaseStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(description="步骤名，用例内唯一；用于响应引用")
+    transport: Transport = Field(default=Transport.HTTP)
     endpoint: str = Field(description="接口标识，如 'GET /api/v1/products'")
-    method: str = Field(description="HTTP 方法")
-    path: str = Field(description="请求路径（含路径参数占位）")
+    method: str = Field(description="HTTP 方法或 Dubbo 方法")
+    path: str = Field(description="请求路径（含路径参数占位）；Dubbo 为空")
     path_params: dict[str, Any] = Field(default_factory=dict)
     query: dict[str, Any] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
     body: Any = Field(default=None, description="请求体（JSON）")
+    dubbo: DubboCall | None = Field(
+        default=None, description="transport=dubbo 时的原生调用"
+    )
     asserts: list[Assertion] = Field(default_factory=list)
 
 

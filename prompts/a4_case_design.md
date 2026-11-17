@@ -114,7 +114,7 @@
 | `preconditions` | `state_key` 必须存在于 `data_catalog.states`；没有 catalog 时不要编造 |
 | `category` | 小写标识，如 `positive` / `negative` / `boundary` / `change_regression` |
 | `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op。HTTP：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`，`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`。Dubbo：`rpc_status` 用 `eq/ne/in`，`result_present` 用 `exists/absent`，`result_field` 用 `exists/eq/ne/in/gte/lte/contains`，`error_code` 用 `eq/ne/in/contains`，`exception_type` 用 `eq/ne/contains`，`error_message` 用 `eq/contains`。HTTP 与 Dubbo 断言不能混用；Dubbo 用例至少 1 条 `rpc_status`。值必须来自规则原文或契约。关系式只允许 `context.assert_expression_ops` 中的受限运算 |
-| `steps` | 仅 HTTP；多请求用例至少 2 步。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中。Dubbo 不支持 `steps` |
+| `steps` | HTTP/Dubbo 多请求用例至少 2 步。每步 `{name, endpoint, asserts, ...}`；Dubbo 步骤用 `dubbo.arguments`，可用 `{"$ref": "<step>.<field>"}` 引用更早步骤的返回值字段。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中；每个 Dubbo 步骤至少一条 `rpc_status` |
 | `assert_strength` | 按断言内容填写：`L1` 状态码/字段存在/结构；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨两个及以上步骤的不变量。框架会按内容重新推导，不一致时产生 `assert_strength.mismatch` warning 并以推导值为准 |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
 | `path_params` / `query` / `headers` / `body` | 仅 HTTP。字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
@@ -158,7 +158,8 @@
 
 失败分支用 `rpc_status` + `error_code` / `exception_type`，例如
 `{"kind": "rpc_status", "op": "eq", "expect": "NO_PROVIDER"}`。
-Dubbo 用例不支持 `steps`；连续调用请等后续版本或用 HTTP 入口。
+Dubbo 多步骤用 `steps`，后续步骤参数可用 `{"$ref": "first.orderId"}` 引用
+更早步骤的返回值字段。
 
 失败场景可用 `db_row` 验证“没有副作用”：写入失败后断言目标表不存在对应行，
 例如 `{"kind": "db_row", "target": "partners", "op": "absent", "where": {"mobile": "13800138000"}}`。

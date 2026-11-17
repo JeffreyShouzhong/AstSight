@@ -51,8 +51,17 @@ def case_payload(case: Any, *, case_key: str | None = None) -> dict[str, Any]:
         "case_key": case_key or getattr(case, "id", ""),
         "category": getattr(case, "category", ""),
         "title": getattr(case, "title", ""),
+        "transport": getattr(
+            getattr(case, "transport", None), "value", None
+        )
+        or str(getattr(case, "transport", "http")),
         "method": getattr(case, "method", ""),
         "path": getattr(case, "path", ""),
+        "dubbo": (
+            getattr(case, "dubbo").model_dump(mode="json")
+            if getattr(case, "dubbo", None) is not None
+            else None
+        ),
         "path_params": getattr(case, "path_params", {}) or {},
         "query": getattr(case, "query", {}) or {},
         "headers": _safe_headers(getattr(case, "headers", {}) or {}),

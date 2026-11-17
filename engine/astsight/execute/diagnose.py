@@ -16,6 +16,14 @@ import re
 from typing import Any
 
 _STATUS_RE = re.compile(r"(?:got|status)\s+(\d{3})", re.I)
+_GOT_RPC_STATUS_RE = re.compile(r"got\s+([a-z_]{3,})", re.I)
+_RPC_STATUS_RE = re.compile(r"rpc_status\s+([a-z_]{3,})", re.I)
+_ERROR_CODE_RE = re.compile(r"unexpected error_code:\s*['\"]?([a-z_]+)")
+
+_DUBBO_ENV_STATUSES = {"NO_PROVIDER", "NETWORK", "TIMEOUT"}
+_DUBBO_CASE_STATUSES = {"SERIALIZATION", "BAD_REQUEST"}
+_DUBBO_ENV_ERRORS = {"no_provider", "network_error", "rpc_timeout"}
+_DUBBO_CASE_ERRORS = {"serialization_error", "bad_request"}
 
 _ENV_SIGNS = (
     "connecterror", "connectionerror", "connection refused", "connection reset",
@@ -34,6 +42,19 @@ _SUT_BODY_SIGNS = ("jsondecodeerror", "expecting value: line 1 column 1")
 def _actual_status(message: str) -> int | None:
     match = _STATUS_RE.search(message or "")
     return int(match.group(1)) if match else None
+
+
+def _actual_rpc_status(message: str) -> str | None:
+    match = _GOT_RPC_STATUS_RE.search(message or "")
+    if match is not None:
+        return match.group(1).upper()
+    match = _RPC_STATUS_RE.search(message or "")
+    return match.group(1).upper() if match else None
+
+
+def _dubbo_error_code(message: str) -> str | None:
+    match = _ERROR_CODE_RE.search(message or "")
+    return match.group(1) if match else None
 
 
 def classify(
@@ -71,6 +92,41 @@ def classify(
                 if dubbo
                 else "造数计划或数据库未就绪：用例被阻断，不计入通过，也不是 SUT 缺陷"
             ),
+        }
+
+    rpc_status = _actual_rpc_status(message)
+    if rpc_status in _DUBBO_ENV_STATUSES:
+        return {
+            "reason": "env_flake",
+            "root_cause": None,
+            "action_target": None,
+            "retryable": True,
+            "detail": f"Dubbo {rpc_status}：provider/网络/超时问题，不判 SUT 缺陷",
+        }
+    if rpc_status in _DUBBO_CASE_STATUSES:
+        return {
+            "reason": "case_error",
+            "root_cause": "case_error",
+            "action_target": "user",
+            "retryable": False,
+            "detail": f"Dubbo {rpc_status}：参数/序列化契约不匹配，先修用例",
+        }
+    error_code = _dubbo_error_code(message)
+    if error_code in _DUBBO_ENV_ERRORS:
+        return {
+            "reason": "env_flake",
+            "root_cause": None,
+            "action_target": None,
+            "retryable": True,
+            "detail": f"Dubbo {error_code}：provider/网络/超时问题，不判 SUT 缺陷",
+        }
+    if error_code in _DUBBO_CASE_ERRORS:
+        return {
+            "reason": "case_error",
+            "root_cause": "case_error",
+            "action_target": "user",
+            "retryable": False,
+            "detail": f"Dubbo {error_code}：参数/序列化契约不匹配，先修用例",
         }
 
     if any(sign in message for sign in _ENV_SIGNS):

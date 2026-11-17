@@ -26,7 +26,7 @@ from astsight.codegen import generate_pytest
 from astsight.execute.runner import run_pytest
 from astsight.pipeline import RunConfig, run
 from astsight.sidecar import locate_java
-from contracts import Assertion, DubboCall, TestCase, Transport
+from contracts import Assertion, CaseStep, DubboCall, TestCase, Transport
 
 ROOT = Path(__file__).resolve().parents[3]
 MODULE = ROOT / "java" / "astsight-sidecar-dubbo"
@@ -246,6 +246,99 @@ def test_run_generates_and_executes_dubbo_cases_in_full_mode(
     assert report["summary"]["executed_cases"] == 2
     assert report["summary"]["final_pass"] == 2
     assert report["gate"]["verdict"] == "pass"
+
+
+def _multistep_case() -> TestCase:
+    return TestCase(
+        id="TC-0002",
+        transport=Transport.DUBBO,
+        endpoint=ENDPOINT,
+        category="business",
+        method="describe",
+        path="",
+        source=f"dubbo:{ENDPOINT}",
+        asserts=[],
+        steps=[
+            CaseStep(
+                name="first",
+                transport=Transport.DUBBO,
+                endpoint=ENDPOINT,
+                method="describe",
+                path="",
+                dubbo=DubboCall(
+                    interface="io.astsight.sidecar.dubbo.EchoService",
+                    method="describe",
+                    parameter_types=["io.astsight.sidecar.dubbo.EchoRequest"],
+                    arguments=[{"name": "Ada"}],
+                    group="order",
+                    version="1.0.0",
+                ),
+                asserts=[
+                    Assertion(kind="rpc_status", op="eq", expect="OK"),
+                    Assertion(kind="result_field", target="message", op="exists"),
+                ],
+            ),
+            CaseStep(
+                name="second",
+                transport=Transport.DUBBO,
+                endpoint=ENDPOINT,
+                method="describe",
+                path="",
+                dubbo=DubboCall(
+                    interface="io.astsight.sidecar.dubbo.EchoService",
+                    method="describe",
+                    parameter_types=["io.astsight.sidecar.dubbo.EchoRequest"],
+                    arguments=[{"name": {"$ref": "first.message"}}],
+                    group="order",
+                    version="1.0.0",
+                ),
+                asserts=[
+                    Assertion(kind="rpc_status", op="eq", expect="OK"),
+                    Assertion(
+                        kind="result_field",
+                        target="message",
+                        op="eq",
+                        expect="hello hello Ada",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    not JAR.is_file() or not CLASSPATH_FILE.is_file(),
+    reason="先构建 java/astsight-sidecar-dubbo",
+)
+def test_multistep_dubbo_case_runs_with_ref(tmp_path: Path) -> None:
+    java = locate_java()
+    port = _free_port()
+    provider = _start_provider(java, port)
+    try:
+        generated = tmp_path / "generated"
+        codegen = generate_pytest([_multistep_case()], generated)
+        assert codegen.errors == [], codegen.errors
+        execution = run_pytest(
+            generated,
+            dubbo_url=f"dubbo://127.0.0.1:{port}",
+            timeout=120,
+        )
+        assert execution.returncode == 0, (
+            execution.stdout[-4000:] + "\n" + execution.stderr[-4000:]
+        )
+        assert [record.outcome for record in execution.records] == ["passed"]
+        assert execution.records[0].case_id == "TC-0002"
+    finally:
+        if provider.stdin is not None:
+            try:
+                provider.stdin.close()
+            except OSError:
+                pass
+        try:
+            provider.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            provider.kill()
+            provider.wait(timeout=10)
 
 
 @pytest.mark.skipif(

@@ -24,18 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-SIDECAR_PROTOCOL = 1
+from .package import SIDECAR_PROTOCOL, resolve_sidecar_jar
+
 DEFAULT_TIMEOUT_MS = 5_000
 MAX_TIMEOUT_MS = 600_000
-_JAR_ENV = "ASTSIGHT_DUBBO_SIDECAR_JAR"
 _JAVA_ENV = "ASTSIGHT_JAVA"
-_DEFAULT_JAR = (
-    Path(__file__).resolve().parents[3]
-    / "java"
-    / "astsight-sidecar-dubbo"
-    / "target"
-    / "astsight-dubbo-sidecar.jar"
-)
 # Dubbo 2.7 的 javassist / Hessian 在 JDK 9+ 需要打开这些包；
 # JDK 8 不接受 --add-opens，因此按版本决定。
 _ADD_OPENS = (
@@ -83,7 +76,7 @@ class DubboCallResult:
 
 
 def locate_sidecar_jar(explicit: str | Path | None = None) -> Path:
-    """按 显式参数 → 环境变量 → 仓库构建产物 的顺序解析 sidecar jar。"""
+    """按 显式参数 → 环境变量 → 已安装 wheel → 仓库构建产物 解析 jar。"""
     if explicit is not None:
         path = Path(explicit)
         if path.is_file():
@@ -92,24 +85,15 @@ def locate_sidecar_jar(explicit: str | Path | None = None) -> Path:
             "sidecar_jar_missing", f"sidecar jar 不存在：{path}"
         )
 
-    configured = os.environ.get(_JAR_ENV, "").strip()
-    if configured:
-        path = Path(configured)
-        if path.is_file():
-            return path
-        # 显式覆盖只认该路径，缺失不回退，避免悄悄跑旧包。
+    resolved, reason = resolve_sidecar_jar()
+    if resolved is None:
         raise DubboSidecarError(
-            "sidecar_jar_missing", f"{_JAR_ENV} 指向的文件不存在：{path}"
+            reason or "sidecar_jar_missing",
+            "找不到可用的 Dubbo sidecar jar；先执行 "
+            "`mvn -pl astsight-sidecar-dubbo package` 或"
+            "`python tools/build_sidecar_wheel.py` 并安装 wheel",
         )
-
-    if _DEFAULT_JAR.is_file():
-        return _DEFAULT_JAR
-    raise DubboSidecarError(
-        "sidecar_jar_missing",
-        "找不到 Dubbo sidecar jar；先执行 "
-        "`cd java && mvn -pl astsight-sidecar-dubbo package`，"
-        f"或设置 {_JAR_ENV}",
-    )
+    return resolved.path
 
 
 def locate_java(explicit: str | Path | None = None) -> str:

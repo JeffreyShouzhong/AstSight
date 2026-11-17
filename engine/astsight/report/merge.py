@@ -40,6 +40,7 @@ def build_report(
 
     by_endpoint: dict[str, dict] = defaultdict(_bucket)
     by_category: dict[str, dict] = defaultdict(_bucket)
+    by_transport: dict[str, dict] = defaultdict(_bucket)
     by_reason: Counter = Counter()
     failures: list[dict] = []
     blocked_records: list[dict] = []
@@ -64,11 +65,18 @@ def build_report(
         final_ok = record.get("outcome") == "passed"
         is_blocked = record.get("outcome") == "blocked"
 
+        transport_value = getattr(case, "transport", None) if case is not None else None
+        transport = (
+            getattr(transport_value, "value", None)
+            or (str(transport_value) if transport_value is not None else "unknown")
+        )
         by_endpoint[endpoint]["total"] += 1
         by_category[category]["total"] += 1
+        by_transport[transport]["total"] += 1
         bucket = "passed" if final_ok else ("blocked" if is_blocked else "failed")
         by_endpoint[endpoint][bucket] += 1
         by_category[category][bucket] += 1
+        by_transport[transport][bucket] += 1
         first_pass += int(first_ok)
         final_pass += int(final_ok)
         if is_blocked:
@@ -314,6 +322,7 @@ def build_report(
         },
         "by_endpoint": dict(by_endpoint),
         "by_category": dict(by_category),
+        "by_transport": dict(by_transport),
         "by_reason": dict(by_reason),
         "failures": failures,
         "unexecuted": unexecuted,

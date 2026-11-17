@@ -1120,13 +1120,19 @@ cd java
 mvn -pl astsight-sidecar-dubbo package
 # target/astsight-dubbo-sidecar.jar
 
-cd ../engine
+cd ..
+python tools/build_sidecar_wheel.py
+# dist/astsight_dubbo_sidecar-0.1.0.dev0-py3-none-any.whl
+pip install dist/astsight_dubbo_sidecar-*.whl
+
+cd engine
 PYTHONPATH=. python -m pytest tests/test_dubbo_provider_profile.py \
   tests/test_dubbo_case_validate.py tests/test_codegen_dubbo.py -q
 ```
 
-引擎按 `ASTSIGHT_DUBBO_SIDECAR_JAR` → 仓库构建产物解析 jar；找不到时用例
-blocked（`dubbo_sidecar_unavailable`），不会回退成 HTTP。
+引擎按 `ASTSIGHT_DUBBO_SIDECAR_JAR` → 已安装 wheel → 仓库构建产物解析 jar；
+wheel 会校验 manifest、版本、协议号、sha256 与大小。找不到时用例 blocked
+（`dubbo_sidecar_unavailable`），不会回退成 HTTP。
 
 ### 11A.2 提供方画像
 
@@ -1204,7 +1210,43 @@ PYTHONPATH=. python -m astsight run \
 
 `dubbo.interface/method/parameter_types/group/version` 以画像为准，草案省略时
 由框架回填；`arguments` 数量必须与参数类型数量一致。`transport=dubbo` 不接受
-`path_params/query/headers/body`，也不支持多步骤。
+`path_params/query/headers/body`。
+
+Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `asserts`，
+后续步骤可以用 `{"$ref": "<step>.<field>"}` 引用更早步骤的返回值：
+
+```json
+{
+  "case_key": "order_query_then_echo",
+  "level": "business",
+  "transport": "dubbo",
+  "endpoint": "dubbo:com.acme.OrderService#echo(java.lang.String)?group=order&version=1.0.0",
+  "category": "business",
+  "steps": [
+    {
+      "name": "first",
+      "endpoint": "dubbo:com.acme.OrderService#byId(java.lang.String)?group=order&version=1.0.0",
+      "dubbo": {"arguments": ["O-1"]},
+      "asserts": [
+        {"kind": "rpc_status", "op": "eq", "expect": "OK"},
+        {"kind": "result_field", "target": "orderId", "op": "exists"}
+      ]
+    },
+    {
+      "name": "second",
+      "endpoint": "dubbo:com.acme.OrderService#echo(java.lang.String)?group=order&version=1.0.0",
+      "dubbo": {"arguments": [{"$ref": "first.orderId"}]},
+      "asserts": [
+        {"kind": "rpc_status", "op": "eq", "expect": "OK"},
+        {"kind": "result_present", "op": "exists"}
+      ]
+    }
+  ]
+}
+```
+
+顶层 `asserts`、`body`、`path_params`、`query`、`headers` 必须为空；
+顶层 `endpoint` 必须出现在 steps 中。每个 Dubbo 步骤至少一条 `rpc_status`。
 
 ### 11A.5 断言
 
@@ -1225,6 +1267,8 @@ PYTHONPATH=. python -m astsight run \
 - 首版只支持直连 URL + Hessian2；注册中心（Nacos/ZooKeeper）与 Kryo/FST
   显式失败。
 - sidecar 固定同步调用；异步/oneway 不生成用例。
+- Dubbo 多步骤已支持；A5 可通过 `steps[].dubbo.arguments` / `steps[].asserts`
+  修多步骤用例，单步用例用顶层 `dubbo.arguments`。
 - 模板只生成正向冒烟：DTO 参数按字段采样（必填、嵌套 DTO、枚举、约束、
   集合元素、时间格式）；`@Pattern` 会尝试生成匹配值，lookaround/反向引用等
   复杂结构失败时提示人工确认；自定义校验注解按名称与参数推断常用约束。

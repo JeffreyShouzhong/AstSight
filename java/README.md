@@ -27,6 +27,11 @@ cd java
 mvn -pl astsight-sidecar-dubbo package
 # target/astsight-dubbo-sidecar.jar
 
+# 打成随引擎分发的 wheel（含 manifest/sha256/size）
+cd ..
+python tools/build_sidecar_wheel.py
+# dist/astsight_dubbo_sidecar-0.1.0.dev0-py3-none-any.whl
+
 printf '%s\n' '{"id":"1","op":"ping"}' '{"id":"2","op":"shutdown"}' \
   | java --add-opens=java.base/java.lang=ALL-UNNAMED \
          --add-opens=java.base/java.math=ALL-UNNAMED \
