@@ -1909,7 +1909,9 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
    的父表用确定性占位值补齐；其它 NOT NULL 列按类型补占位值，并在目录 `gaps` 中
    逐条写 `state_placeholder` / `state_value_combinations_truncated`。候选生成后跑
    `validate_plan_fixtures`（类型/枚举/FK 闭包），不通过即丢弃并告警。占位值只是
-   “能落库的骨架”，不是业务正确数据，必须人工确认。
+   “能落库的骨架”，不是业务正确数据，必须人工确认。`operator="transition"` 的
+   约束（值顺序 `[迁移前, 迁移后]`）生成转移候选：迁移前值进 `table_values`，
+   迁移后值进 `target_state`；`target_state` 同样做表/列/类型/枚举校验。
 6. **确定性校验（LLM 之后）**：表/列白名单、类型/枚举/NOT NULL、FK 闭包、拓扑顺序、`preconditions` 全覆盖、行数/列数上限；未知表/列直接拒绝，失败用例写入 `rejected`，不生成计划
 7. **SQL 渲染**：模型**不输出 SQL**；`data/render.py` 只从通过校验的 fixtures 生成参数化 `INSERT`/`DELETE`，标识符按白名单校验，值只走 `params`
 8. **隔离与回收**：每个用例一个 `data_state` fixture，请求前在事务内 apply，用例结束（含失败/异常）按主键 teardown；`run_scope` 记录到计划里用于多 run 审计。`keep-data` 调试模式保留数据

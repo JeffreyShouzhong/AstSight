@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（前六轮已提交；本轮多值状态组合在工作区）
+> 分支：`feat/postgres-mysql-data`（前七轮已提交；本轮状态转移在工作区）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -24,7 +24,8 @@
 > 并会从注释、DBML Enum note、规则常量、Java/Python/Go/TS 枚举与
 > Java `static final`/Go `const`/TS `as const` 常量组确定性地给出取值语义候选
 > （每条带 `source`）。`--rule-states` 还能把同一条件下的多表规则约束组合成
-> 跨表状态骨架，占位值逐条写入 gaps。公式抽取已有 20 条离线评估集与脚本，v10 基线
+> 跨表状态骨架，并把 `transition` 约束生成“迁移前 → 迁移后”的 `target_state`
+> 候选；占位值逐条写入 gaps。公式抽取已有 20 条离线评估集与脚本，v10 基线
 > 14/14 严格命中、P/R/表达式准确率均为 1.00；下一步用评估结果决定哪些公式值得
 > 进规则层。
 
@@ -78,7 +79,25 @@
 | 数据目录语义候选 | ✅ 2026-11-17 | `data/annotations.py`：注释关键词补 `semantic_type`；注释「值=含义」、DBML Enum note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量进入 `value_semantics`；表注释写入 `purpose`；冲突候选丢弃并告警；`data catalog --ruleset` |
 | 代码枚举常量 | ✅ 2026-11-17 | `data/codeconst.py`：静态扫描 Java/Python/TS 枚举（Python 用 ast，不执行代码）；按数据库枚举值、注释点名、表名+状态/类型命名三种路径映射；`ValueSemantics.source` 记录来源；`data catalog --code`；冲突/多候选/类型不符均告警，不猜 |
 | 非枚举常量组 | ✅ 2026-11-17 | 同一扫描器新增 Java `static final`（含 interface 隐式常量）、Go `const`（含 `iota`/简单 `iota` 运算）与 TS `as const` 对象；常量组要求组名以状态/类型/编码等后缀结尾；重复定义取值一致时稳定选一份；`.go` 纳入扫描；测试 473 passed / 37 skipped |
-| 跨表状态候选 | ✅ 2026-11-17 | `data/states.py`：同一条件下覆盖 ≥2 张表的 `eq/in` 约束 → `DataState` 骨架；`in` 按组合展开（单组上限 20）；主键/外键/父表/NOT NULL 用确定性占位值补齐，逐条写 `state_placeholder` gap；复用 `validate_plan_fixtures`，不合法候选丢弃并告警；`data catalog --rule-states`；测试 481 passed / 37 skipped |
+| 跨表状态候选 | ✅ 2026-11-17 | `data/states.py`：同一条件下覆盖 ≥2 张表的 `eq/in` 约束 → `DataState` 骨架；`in` 按组合展开（单组上限 20）；主键/外键/父表/NOT NULL 用确定性占位值补齐，逐条写 `state_placeholder` gap；复用 `validate_plan_fixtures`，不合法候选丢弃并告警；`data catalog --rule-states` |
+| 状态转移候选 | ✅ 2026-11-17 | `operator="transition"` 按 `[迁移前, 迁移后]` 生成 `transition_*` 状态：迁移前进 `table_values`、迁移后进 `target_state`；target 同样校验表/列/类型/枚举/NOT NULL；可与同条件另一张表的 `eq/in` 组合；A1 提示词升至 11；测试 485 passed / 37 skipped |
+
+## 本轮完成（状态转移候选，2026-11-17）
+
+1. **转移约束**：识别 `RuleOperator.TRANSITION`，值必须给两个，按 `[迁移前, 迁移后]`
+   解释；迁移前值进入 `table_values`，迁移后值进入 `target_state`，生成
+   `transition_<rule>_<hash>` 状态。允许单表，也可和同条件下另一张表的 `eq/in`
+   约束合并成跨表状态。
+2. **target 校验**：`_validate_target` 检查表/列是否存在、值是否标量、类型是否匹配、
+   枚举是否闭合；NOT NULL 列不允许写成 null；不通过就丢弃并写 `rule_state_invalid`。
+3. **冲突与歧义**：同一字段多个迁移值冲突、字段多表歧义、枚举不符都显式告警并放弃；
+   不因为“看起来像状态机”就放宽。
+4. **提示词**：A1 明确 `transition` 两个值的顺序；提示词版本 10 → 11。公式抽取基线
+   仍以 v10 为准，v11 只影响转移约束的写法，不影响关系抽取。
+5. **验证**：新增 4 条测试（单表转移、与另一张表 eq 组合、枚举不符、target 类型不符）；
+   全量 Python **485 passed, 37 skipped**（上轮 481/37，新增 4 条通过）。
+6. **边界**：不做多步状态机路径、跨状态转移链、多行组合；`from_*/to_*` 两列表达仍按
+   普通 `eq` 约束处理，不会自动拼成迁移。
 
 ## 本轮完成（跨表状态候选，2026-11-17）
 

@@ -152,6 +152,106 @@ def test_in_combinations_are_capped_and_reported() -> None:
     )
 
 
+def test_transition_constraint_generates_before_and_target_state() -> None:
+    catalog = _catalog(
+        _rule(
+            RuleConstraint(
+                field="orders.status",
+                operator="transition",
+                values=["pending", "paid"],
+                condition="支付订单",
+            )
+        )
+    )
+    assert len(catalog.states) == 1
+    state = catalog.states[0]
+    assert state.state_key.startswith("transition_BR_01_")
+    assert state.table_values == {"orders": [{"id": 1, "status": "pending"}]}
+    assert state.target_state == {"orders": {"status": "paid"}}
+
+
+def test_transition_can_combine_with_eq_constraints_on_other_tables() -> None:
+    catalog = _catalog(
+        _rule(
+            RuleConstraint(
+                field="orders.status",
+                operator="transition",
+                values=["pending", "paid"],
+                condition="支付订单",
+            ),
+            RuleConstraint(
+                field="order_items.qty",
+                operator="eq",
+                values=["2"],
+                condition="支付订单",
+            ),
+        )
+    )
+    assert len(catalog.states) == 1
+    state = catalog.states[0]
+    assert state.table_values["orders"][0]["status"] == "pending"
+    assert state.table_values["order_items"][0]["qty"] == 2
+    assert state.target_state == {"orders": {"status": "paid"}}
+
+
+def test_transition_enum_mismatch_is_rejected() -> None:
+    ddl = """
+    CREATE TABLE orders (
+      id INTEGER PRIMARY KEY,
+      status TEXT CHECK (status IN ('pending', 'paid')) NOT NULL
+    );
+    """
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=_ruleset(
+            _rule(
+                RuleConstraint(
+                    field="orders.status",
+                    operator="transition",
+                    values=["pending", "lost"],
+                    condition="支付订单",
+                )
+            )
+        ),
+        rule_states=True,
+    )
+    assert catalog.states == []
+    assert any(
+        warning.startswith("rule_state_enum_mismatch:orders.status:")
+        for warning in catalog.warnings
+    )
+
+
+def test_transition_target_type_is_validated() -> None:
+    ddl = """
+    CREATE TABLE items (
+      id INTEGER PRIMARY KEY,
+      qty INTEGER NOT NULL
+    );
+    """
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=_ruleset(
+            _rule(
+                RuleConstraint(
+                    field="items.qty",
+                    operator="transition",
+                    values=["1", "not-a-number"],
+                    condition="调整数量",
+                )
+            )
+        ),
+        rule_states=True,
+    )
+    assert catalog.states == []
+    assert any(
+        warning.startswith("rule_state_invalid:transition_BR_01_")
+        for warning in catalog.warnings
+    )
+
+
 def test_single_table_constraints_do_not_create_cross_table_state() -> None:
     catalog = _catalog(
         _rule(

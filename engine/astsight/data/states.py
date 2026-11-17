@@ -26,7 +26,7 @@ from contracts import (
 )
 
 from .annotations import coerce_constant, resolve_field_targets
-from .validate import validate_plan_fixtures
+from .validate import check_type, validate_plan_fixtures
 
 MAX_STATES = 200
 MAX_STATE_COMBINATIONS = 20
@@ -49,6 +49,7 @@ def propose_rule_states(
     table_list = list(tables)
     proposal = StateProposal()
     for rule in ruleset.rules:
+        _propose_transitions(rule, table_list, proposal)
         for condition, constraints in _constraint_groups(rule).items():
             if len(proposal.states) >= MAX_STATES:
                 proposal.warnings.append(f"rule_state_limit:{MAX_STATES}")
@@ -79,6 +80,105 @@ def _constraint_groups(
             (constraint, values)
         )
     return groups
+
+
+def _propose_transitions(
+    rule: Rule,
+    tables: list[TableCatalog],
+    proposal: StateProposal,
+) -> None:
+    groups: dict[str, list[RuleConstraint]] = {}
+    for constraint in rule.constraints:
+        if constraint.operator != RuleOperator.TRANSITION:
+            continue
+        if len(constraint.values) < 2:
+            continue
+        groups.setdefault(constraint.condition or "", []).append(constraint)
+    if not groups:
+        return
+    eq_groups = _constraint_groups(rule)
+    for condition, transitions in groups.items():
+        if len(proposal.states) >= MAX_STATES:
+            proposal.warnings.append(f"rule_state_limit:{MAX_STATES}")
+            return
+        before: dict[str, dict[str, Any]] = {}
+        target: dict[str, dict[str, Any]] = {}
+        for constraint in transitions:
+            matches = resolve_field_targets(tables, constraint.field)
+            if not matches:
+                continue
+            if len(matches) > 1:
+                proposal.warnings.append(
+                    f"rule_state_field_ambiguous:"
+                    f"{constraint.field}:{len(matches)}"
+                )
+                return
+            table, column = matches[0]
+            raw_before = str(constraint.values[0]).strip()
+            raw_after = str(constraint.values[1]).strip()
+            before_value = _transition_value(raw_before, column)
+            after_value = _transition_value(raw_after, column)
+            for raw, value in (
+                (raw_before, before_value),
+                (raw_after, after_value),
+            ):
+                if column.enum_values and value is not None and not any(
+                    str(item) == str(value) for item in column.enum_values
+                ):
+                    proposal.warnings.append(
+                        f"rule_state_enum_mismatch:"
+                        f"{table.name}.{column.name}:{raw}"
+                    )
+                    return
+            existing = before.setdefault(table.name, {}).get(column.name)
+            if existing is not None and str(existing) != str(before_value):
+                proposal.warnings.append(
+                    f"rule_state_value_conflict:{table.name}.{column.name}"
+                )
+                return
+            before[table.name][column.name] = before_value
+            target.setdefault(table.name, {})[column.name] = after_value
+
+        for constraint, values in eq_groups.get(condition, []):
+            matches = resolve_field_targets(tables, constraint.field)
+            if len(matches) != 1:
+                continue
+            table, column = matches[0]
+            value = coerce_constant(values[0], column)
+            if column.enum_values and not any(
+                str(item) == str(value) for item in column.enum_values
+            ):
+                proposal.warnings.append(
+                    f"rule_state_enum_mismatch:"
+                    f"{table.name}.{column.name}:{values[0]}"
+                )
+                return
+            current = before.setdefault(table.name, {})
+            existing = current.get(column.name)
+            if existing is not None and str(existing) != str(value):
+                proposal.warnings.append(
+                    f"rule_state_value_conflict:{table.name}.{column.name}"
+                )
+                return
+            current[column.name] = value
+
+        if not before:
+            return
+        _build_state(
+            rule,
+            condition,
+            before,
+            tables,
+            proposal,
+            target_state=target,
+            prefix="transition",
+        )
+
+
+def _transition_value(raw: str, column: ColumnCatalog) -> Any:
+    if raw.upper() in {"NULL", "NONE"}:
+        return None
+    return coerce_constant(raw, column)
 
 
 def _propose_one(
@@ -152,9 +252,12 @@ def _build_state(
     pinned: dict[str, dict[str, Any]],
     tables: list[TableCatalog],
     proposal: StateProposal,
+    *,
+    target_state: dict[str, dict[str, Any]] | None = None,
+    prefix: str = "rule",
 ) -> None:
     table_index = {table.name: table for table in tables}
-    key = _state_key(rule, condition, pinned)
+    key = _state_key(rule, condition, pinned, target_state, prefix)
     rows = {table: dict(values) for table, values in pinned.items()}
     placeholders: list[tuple[str, str, str]] = []
     warnings: list[str] = []
@@ -182,9 +285,16 @@ def _build_state(
         proposal.warnings.append(f"rule_state_invalid:{key}:{exc}")
         return
 
+    target = target_state or {}
+    target_errors = _validate_target(tables, target)
+    if target_errors:
+        proposal.warnings.append(
+            f"rule_state_invalid:{key}:{';'.join(target_errors[:5])}"
+        )
+        return
     state = DataState(
         state_key=key,
-        target_state={},
+        target_state=target,
         table_values={table: [row] for table, row in rows.items()},
         evidence=Evidence.INFERRED,
         rule_keys=[rule.rule_key],
@@ -210,6 +320,48 @@ def _build_state(
         )
     for warning in warnings:
         proposal.warnings.append(f"{key}:{warning}")
+
+
+def _validate_target(
+    tables: list[TableCatalog],
+    target: dict[str, dict[str, Any]],
+) -> list[str]:
+    index = {table.name: table for table in tables}
+    errors: list[str] = []
+    for table_name, values in target.items():
+        table = index.get(table_name)
+        if table is None:
+            errors.append(f"target_table_unknown:{table_name}")
+            continue
+        columns = table.column_index()
+        for column_name, value in values.items():
+            column = columns.get(column_name)
+            if column is None:
+                errors.append(f"target_column_unknown:{table_name}.{column_name}")
+                continue
+            if value is None:
+                if not column.nullable:
+                    errors.append(
+                        f"target_not_null:{table_name}.{column_name}"
+                    )
+                continue
+            if not isinstance(value, (str, int, float, bool)):
+                errors.append(
+                    f"target_value_not_scalar:{table_name}.{column_name}"
+                )
+                continue
+            if not check_type(column.type, value):
+                errors.append(
+                    f"target_type_mismatch:{table_name}.{column_name}"
+                )
+                continue
+            if column.enum_values and not any(
+                str(item) == str(value) for item in column.enum_values
+            ):
+                errors.append(
+                    f"target_enum_mismatch:{table_name}.{column_name}:{value}"
+                )
+    return errors
 
 
 class _StateError(ValueError):
@@ -359,9 +511,16 @@ def _state_key(
     rule: Rule,
     condition: str,
     pinned: dict[str, dict[str, Any]],
+    target_state: dict[str, dict[str, Any]] | None = None,
+    prefix: str = "rule",
 ) -> str:
     raw = json.dumps(
-        {"rule": rule.rule_key, "condition": condition, "pinned": pinned},
+        {
+            "rule": rule.rule_key,
+            "condition": condition,
+            "pinned": pinned,
+            "target": target_state or {},
+        },
         ensure_ascii=False,
         sort_keys=True,
         default=str,
@@ -371,7 +530,7 @@ def _state_key(
     label = "".join(
         char if char.isalnum() or char == "_" else "_" for char in label
     )
-    return f"rule_{label}_{digest}"
+    return f"{prefix}_{label}_{digest}"
 
 
 class _CatalogView:

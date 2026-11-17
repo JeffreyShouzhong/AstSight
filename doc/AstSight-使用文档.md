@@ -858,8 +858,11 @@ PYTHONPATH=. python -m astsight data catalog \
 
 跨表状态候选（`--rule-states`）的边界：
 
-- 只处理 `eq/in` 约束；`in` 会按取值组合展开，每条组合一个候选态，单组最多展开
-  20 个组合，超出部分写 `state_value_combinations_truncated` gap；
+- 跨表组合只处理 `eq/in` 约束；`in` 会按取值组合展开，每条组合一个候选态，单组
+  最多展开 20 个组合，超出部分写 `state_value_combinations_truncated` gap；
+- `operator="transition"` 的约束按 `[迁移前, 迁移后]` 生成状态转移候选：迁移前值进
+  `table_values`，迁移后值进 `target_state`；允许单表，也可以和另一张表的 `eq/in`
+  约束组合；
 - 约束字段必须唯一映射到某张表的某一列，同名跨表出现时写
   `rule_state_field_ambiguous` 并放弃；
 - 只支持单列主键和单列外键；复合主键/外键、循环依赖会写 `rule_state_invalid`；
