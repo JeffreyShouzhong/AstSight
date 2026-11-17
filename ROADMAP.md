@@ -38,15 +38,21 @@
 `db_row.wait_ms` 支持显式异步落库轮询。规则库可声明原文明确的关系配方
 （`$response` / `$request` / `$step` / `$op`），A4 只选择 `relation_key` 并为 `$step`
 绑定具体步骤名，由框架确定性生成断言；未物化且未声明未覆盖的关系会阻断导入。
-**下一步**：支持更多受控聚合运算，并评估复杂自然语言公式的抽取质量。
+受控运算已扩展到 `avg/min/max/count_distinct/pluck`，并配有标注评估集与
+`tools/eval_relation_extraction.py`，可回归公式抽取的
+precision/recall/expression_accuracy。
+**下一步**：用评估集跟踪更长、含条件的自然语言公式，决定哪些公式值得进入规则层，
+哪些只能落成 gap。
 这是“AI 测试能顶事”最关键的一步——只有 L1 时，框架只能判断“接口有没有按契约返回”，判断不了“业务对不对”。
 
 ### 2. 造数深度：方言已通，下一步反射与跨库 schema
 
 **现状**：C5a/C5b 已支持 SQLite / PostgreSQL / MySQL 的 apply/teardown 与方言校验；
 `data catalog` 现在可以从 DDL、DBML 或真实数据库反射生成结构目录，多 schema 时使用
-`schema.table` 限定名。
-**目标**：补更复杂的跨表业务态与取值语义候选（DB 注释/常量折叠），继续降低人工补
+`schema.table` 限定名。确定性语义候选已落地：注释关键词补结构语义，注释「值=含义」、
+DBML `Enum` note、`CHECK IN`/`ENUM` 与规则 `eq/in` 常量进入 `value_semantics`，
+候选冲突会丢弃并告警。
+**目标**：继续补跨表业务态候选与代码常量（Java/Python/TS 枚举）来源，降低人工补
 catalog 的成本。真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务
 判断仍回需求原文”。
 

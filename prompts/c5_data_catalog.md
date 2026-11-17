@@ -9,6 +9,10 @@
 ## 输入
 
 - `catalog.tables[]`：表、列、类型、可空、默认值、主键、枚举、注释；
+  - `value_semantics` 首轮来自框架的**确定性候选**：DB 注释（`0=待支付`）、
+    DBML `Enum` note 与规则 `eq/in` 常量折叠；证据固定为 `inferred`，带
+    `rule_keys` 的项说明有规则依据；
+  - `purpose` 是表注释，`semantic_type` 已由命名/类型/注释预填。
 - `catalog.foreign_keys[]`：外键关系；
 - `catalog.seed_states[]`：seed 已提供的初始数据状态；
 - `rules[]`：已导入的业务规则（含 `rule_key` / `rule_id` / `text`）；
@@ -22,7 +26,8 @@
 1. 为有业务意义的列补 `field_semantics`：
    - `semantic_type`：`identifier` / `reference` / `quantity` / `amount` / `status` /
      `enum` / `timestamp` / `boolean` / `text` / `unknown`；
-   - `value_semantics[]`：取值及其业务含义；
+   - `value_semantics[]`：取值及其业务含义；框架已给出的候选可以修正或补全，
+     但不要与 DB 枚举/CHECK 冲突；带 `rule_keys` 的候选优先保留其规则依据；
    - `business_notes`：一句话说明；
    - `evidence`：只有需求原文或规则明确支撑时才可写 `verified`，
      否则写 `inferred`；无法判断则不要输出该列（框架保持 `unmapped`）。

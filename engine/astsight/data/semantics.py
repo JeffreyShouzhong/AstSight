@@ -20,6 +20,7 @@ from contracts import (
     ValueSemantics,
 )
 
+from .annotations import fold_rule_constants
 from .validate import validate_plan_fixtures
 
 
@@ -84,7 +85,7 @@ def apply_semantics(
     tables = catalog.table_index()
     known_rules = _known_rule_keys(ruleset)
     errors: list[str] = []
-    warnings: list[str] = []
+    warnings: list[str] = list(fold_rule_constants(catalog.tables, ruleset))
     field_index: dict[tuple[str, str], FieldSemantics] = {
         (item.table, item.column): item for item in catalog.field_semantics
     }

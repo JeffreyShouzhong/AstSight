@@ -19,10 +19,16 @@ from contracts import (
     Evidence,
     FieldSemantics,
     ForeignKey,
+    RuleSet,
     TableCatalog,
     ValueSemantics,
 )
 
+from .annotations import (
+    fold_rule_constants,
+    semantic_hint,
+    value_semantics_for,
+)
 from .ddl import ParsedColumn, ParsedDDL, ParsedTable
 from .seed import SeedData
 
@@ -68,17 +74,19 @@ def _semantic_for(column: ParsedColumn, *, is_fk: bool) -> ColumnSemantic:
     return ColumnSemantic.UNKNOWN
 
 
-def _value_semantics(column: ParsedColumn) -> list[ValueSemantics]:
-    out: list[ValueSemantics] = []
-    for value in column.enum_values:
-        out.append(
-            ValueSemantics(
-                value=value,
-                meaning=str(value),
-                evidence=Evidence.INFERRED,
-            )
-        )
-    return out
+def _value_semantics(
+    table_name: str,
+    column: ParsedColumn,
+    warnings: list[str],
+) -> list[ValueSemantics]:
+    return value_semantics_for(
+        table=table_name,
+        column=column.name,
+        comment=column.comment,
+        enum_values=column.enum_values,
+        noted_meanings=column.value_meanings,
+        warnings=warnings,
+    )
 
 
 def _fk_columns(ddl: ParsedDDL) -> set[tuple[str, str]]:
@@ -90,26 +98,42 @@ def _fk_columns(ddl: ParsedDDL) -> set[tuple[str, str]]:
 
 
 def _table_catalog(
-    table: ParsedTable, *, fk_columns: set[tuple[str, str]]
+    table: ParsedTable,
+    *,
+    fk_columns: set[tuple[str, str]],
+    warnings: list[str],
 ) -> TableCatalog:
-    columns = [
-        ColumnCatalog(
-            name=column.name,
-            type=column.type,
-            nullable=column.nullable,
-            default=column.default,
-            primary_key=column.primary_key or column.name in table.primary_key,
-            unique=column.unique,
-            comment=column.comment,
-            enum_values=list(column.enum_values),
-            semantic_type=_semantic_for(
-                column, is_fk=(table.name, column.name) in fk_columns
-            ),
-            value_semantics=_value_semantics(column),
-            evidence=Evidence.INFERRED,
+    columns: list[ColumnCatalog] = []
+    for column in table.columns:
+        is_fk = (table.name, column.name) in fk_columns
+        semantic = _semantic_for(column, is_fk=is_fk)
+        hint = semantic_hint(column.comment)
+        # 注释只补命名/类型判不出的列（UNKNOWN），或把宽泛的 TEXT 细化为
+        # 金额/数量/状态/是否/时间/类别；不覆盖主键、外键和数据库枚举这些硬事实。
+        if (
+            hint is not None
+            and hint is not ColumnSemantic.TEXT
+            and semantic in {ColumnSemantic.UNKNOWN, ColumnSemantic.TEXT}
+            and not column.enum_values
+            and not is_fk
+            and not (column.primary_key or column.name in table.primary_key)
+        ):
+            semantic = hint
+        columns.append(
+            ColumnCatalog(
+                name=column.name,
+                type=column.type,
+                nullable=column.nullable,
+                default=column.default,
+                primary_key=column.primary_key or column.name in table.primary_key,
+                unique=column.unique,
+                comment=column.comment,
+                enum_values=list(column.enum_values),
+                semantic_type=semantic,
+                value_semantics=_value_semantics(table.name, column, warnings),
+                evidence=Evidence.INFERRED,
+            )
         )
-        for column in table.columns
-    ]
     return TableCatalog(
         name=table.name,
         columns=columns,
@@ -125,6 +149,7 @@ def _table_catalog(
             for fk in table.foreign_keys
         ],
         comment=table.comment,
+        purpose=(table.comment or "")[:1_000],
         read_write=DataWriteMode.BOTH,
         evidence=Evidence.INFERRED,
     )
@@ -231,13 +256,17 @@ def build_catalog(
     states: list[DataState] | None = None,
     gaps: list[dict[str, Any]] | None = None,
     questions: list[dict[str, Any]] | None = None,
+    ruleset: RuleSet | None = None,
 ) -> DataCatalog:
     warnings = list(ddl.warnings)
     seed = seed or SeedData()
     fk_columns = _fk_columns(ddl)
     tables = [
-        _table_catalog(table, fk_columns=fk_columns) for table in ddl.tables
+        _table_catalog(table, fk_columns=fk_columns, warnings=warnings)
+        for table in ddl.tables
     ]
+    # 规则常量折叠是确定性的：eq/in 的取值直接变成列的取值候选。
+    warnings.extend(fold_rule_constants(tables, ruleset))
     if len(tables) > MAX_TABLES:
         raise ValueError(f"表数量超过上限 {MAX_TABLES}")
     table_index = {table.name: table for table in tables}

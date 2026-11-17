@@ -277,9 +277,11 @@ PYTHONPATH=. python -m astsight cases approve \
 
 ```bash
 # 6.1 数据目录（DDL → 表/字段/状态）
+# 带 --ruleset 时会把规则里的 eq/in 常量折叠成字段取值候选（可选）
 PYTHONPATH=. python -m astsight data catalog \
   --project /path/to/your-project \
-  --ddl /path/to/your-project/schema.sql
+  --ddl /path/to/your-project/schema.sql \
+  --ruleset /path/to/your-project/ruleset.json
 
 # 6.2 逐用例造数计划
 PYTHONPATH=. python -m astsight data plan \

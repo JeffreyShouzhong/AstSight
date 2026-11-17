@@ -7,6 +7,12 @@ from .apply import (
     parse_sqlite_url,
     teardown_plan,
 )
+from .annotations import (
+    comment_value_pairs,
+    fold_rule_constants,
+    semantic_hint,
+    value_semantics_for,
+)
 from .catalog import CATALOG_SCHEMA_VERSION, build_catalog
 from .dbml import DBMLError, MAX_DBML_BYTES, parse_dbml
 from .ddl import (
@@ -70,7 +76,9 @@ __all__ = [
     "build_data_plan",
     "build_data_plan_bundle",
     "check_type",
+    "comment_value_pairs",
     "dialect_from_url",
+    "fold_rule_constants",
     "load_seed",
     "normalize_dialect",
     "normalize_type",
@@ -80,6 +88,7 @@ __all__ = [
     "parse_enum_values",
     "parse_sqlite_url",
     "reflect_database",
+    "semantic_hint",
     "quote_identifier",
     "render_inserts",
     "render_plan",
@@ -90,4 +99,5 @@ __all__ = [
     "validate_fixtures",
     "validate_fk_closure",
     "validate_plan_fixtures",
+    "value_semantics_for",
 ]

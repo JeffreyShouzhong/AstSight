@@ -39,6 +39,7 @@ def parse_dbml(text: str) -> ParsedDDL:
 
     # 1) 先收集 Enum，列类型可能引用文件末尾定义的枚举。
     enums: dict[str, list[Any]] = {}
+    enum_notes: dict[str, dict[str, str]] = {}
     raw_tables: list[tuple[str, str]] = []
     raw_refs: list[str] = []
     cursor = 0
@@ -69,6 +70,9 @@ def parse_dbml(text: str) -> ParsedDDL:
                     result.warnings.append("dbml_enum_name_missing")
                 else:
                     enums[name.lower()] = _enum_values(body)
+                    notes = _enum_value_notes(body)
+                    if notes:
+                        enum_notes[name.lower()] = notes
             cursor = end + 1
             continue
         if keyword == "note":
@@ -102,7 +106,9 @@ def parse_dbml(text: str) -> ParsedDDL:
         if name in tables:
             result.warnings.append(f"table_duplicate:{name}")
             continue
-        table, table_refs = _parse_table(name, body, enums, result.warnings)
+        table, table_refs = _parse_table(
+            name, body, enums, enum_notes, result.warnings
+        )
         tables[name] = table
         inline_refs.extend(
             (name, column, value) for column, value in table_refs
@@ -129,6 +135,7 @@ def _parse_table(
     name: str,
     body: str,
     enums: dict[str, list[Any]],
+    enum_notes: dict[str, dict[str, str]],
     warnings: list[str],
 ) -> tuple[ParsedTable, list[tuple[str, str]]]:
     table = ParsedTable(name=name)
@@ -146,7 +153,7 @@ def _parse_table(
         if not text:
             continue
         settings_text = ", ".join(groups)
-        column = _parse_column(text, settings_text, enums)
+        column = _parse_column(text, settings_text, enums, enum_notes)
         if column is None:
             warnings.append(f"dbml_column_unparsed:{name}:{line[:60]}")
             continue
@@ -167,7 +174,10 @@ def _parse_table(
 
 
 def _parse_column(
-    text: str, settings_text: str, enums: dict[str, list[Any]]
+    text: str,
+    settings_text: str,
+    enums: dict[str, list[Any]],
+    enum_notes: dict[str, dict[str, str]],
 ) -> ParsedColumn | None:
     name, index = _read_token(text, 0)
     if not name:
@@ -175,9 +185,18 @@ def _parse_column(
     raw_type = text[index:].strip()
     if not raw_type:
         return None
-    type_text = _resolve_enum_type(normalize_type(raw_type), enums)
+    normalized = normalize_type(raw_type)
+    enum_key = _enum_lookup_key(normalized, enums)
+    type_text = _resolve_enum_type(normalized, enums)
     column = ParsedColumn(name=name, type=type_text)
     column.enum_values = _type_enum_values(type_text)
+    notes = enum_notes.get(enum_key) if enum_key else None
+    if notes:
+        column.value_meanings = {
+            str(value): notes[str(value)]
+            for value in column.enum_values
+            if str(value) in notes
+        }
     for setting in _split_settings(settings_text):
         key, _, value = setting.partition(":")
         key = key.strip().lower()
@@ -426,15 +445,23 @@ def _dedupe_foreign_keys(tables: list[ParsedTable]) -> None:
         table.foreign_keys = unique
 
 
+def _enum_lookup_key(type_text: str, enums: dict[str, list[Any]]) -> str:
+    key = type_text.lower()
+    if key in enums:
+        return key
+    if "." in key:
+        short = key.rsplit(".", 1)[-1]
+        if short in enums:
+            return short
+    return ""
+
+
 def _resolve_enum_type(
     type_text: str, enums: dict[str, list[Any]]
 ) -> str:
     if _ENUM_TYPE_RE.match(type_text):
         return type_text
-    key = type_text.lower()
-    values = enums.get(key)
-    if values is None and "." in key:
-        values = enums.get(key.rsplit(".", 1)[-1])
+    values = enums.get(_enum_lookup_key(type_text, enums))
     if values is None:
         return type_text
     body = ", ".join(_sql_quote(value) for value in values)
@@ -460,6 +487,27 @@ def _enum_values(body: str) -> list[Any]:
             continue
         values.append(value)
     return values
+
+
+def _enum_value_notes(body: str) -> dict[str, str]:
+    """提取 `Enum` 值上的 `[note: '...']`，作为取值含义候选。"""
+    notes: dict[str, str] = {}
+    for raw_line in body.splitlines():
+        line = raw_line.strip().rstrip(",")
+        if not line:
+            continue
+        text, groups = _pop_settings(line)
+        value = _literal(text)
+        if value in (None, ""):
+            continue
+        for setting in _split_settings(", ".join(groups)):
+            key, _, note = setting.partition(":")
+            if key.strip().lower() != "note":
+                continue
+            meaning = _literal(note.strip())
+            if meaning not in (None, ""):
+                notes[str(value)] = str(meaning)[:500]
+    return notes
 
 
 def _table_name(header: str) -> str:

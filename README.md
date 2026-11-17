@@ -170,7 +170,8 @@ PYTHONPATH=. python -m astsight cases approve \
 
 # 6. 造数计划（有前置状态用例时需要）
 PYTHONPATH=. python -m astsight data catalog --project /path/to/project \
-  --ddl /path/to/project/schema.sql
+  --ddl /path/to/project/schema.sql \
+  --ruleset /path/to/project/ruleset.json   # 可选：折叠规则里的 eq/in 常量
 PYTHONPATH=. python -m astsight data plan --project /path/to/project \
   --catalog /path/to/project/.astsight/data/data_catalog.json \
   --cases /path/to/project/caseset.json \
@@ -233,11 +234,13 @@ pytest 生成与执行、`agent run` 编排均已落地，示例项目 38 条用
 主要边界：
 
 - 断言覆盖状态码、响应字段、header、OpenAPI schema 和只读数据库行；L3/L4 关系断言
-  支持 `$ref`、当前响应 `$field` 与受限算术；规则中明确声明的 relations 由框架自动物化，
-  复杂自然语言公式仍不能可靠自动推导。
+  支持 `$ref`、当前响应 `$field` 与受限聚合/算术；规则中明确声明的 relations 由框架
+  自动物化。复杂自然语言公式仍不能可靠自动推导，用
+  `tools/eval_relation_extraction.py` 跟踪抽取质量，而不是宣称“已解决”。
 - 造数支持 SQLite / PostgreSQL / MySQL；三者共用同一套 fixture 校验与事务语义，
   驱动分别为 stdlib `sqlite3`、`psycopg`、`PyMySQL`。数据目录可从 DDL、DBML 或
-  真实库反射生成（只读结构，不导出数据），多 schema 使用 `schema.table` 限定名。
+  真实库反射生成（只读结构，不导出数据），多 schema 使用 `schema.table` 限定名；
+  注释、DBML Enum note 与规则常量会先给出确定性的取值语义候选，证据固定为 `inferred`。
 - HTTP 是主路径；gRPC 仅 unary。Dubbo 2.7+ 消费端 Mock 由 Java agent 的 Filter
   拦截，已在 Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 个组合验证；真实
   `ReferenceConfig` 代理在普通 classpath 与 Spring Boot fat jar 下都验证过桩

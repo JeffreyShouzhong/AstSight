@@ -442,6 +442,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     data_catalog.add_argument("--context", default=None, help="rules context 目录/JSON")
     data_catalog.add_argument(
+        "--ruleset",
+        default=None,
+        help="规则库 JSON；eq/in 常量会折叠为字段取值候选（确定性，不调用模型）",
+    )
+    data_catalog.add_argument(
         "--out", default=None, help="输出文件或目录（默认 .astsight/data）"
     )
     data_catalog.add_argument("--json", action="store_true")
@@ -1249,6 +1254,9 @@ def _data_catalog(args) -> int:
         if args.context:
             context = load_rules_context(args.context)
             context_id = str(context.get("context_id") or "")
+        ruleset = _load_optional_ruleset(project, args.ruleset)
+        if args.ruleset and ruleset is None:
+            raise ValueError(f"规则库不存在: {args.ruleset}")
         catalog = build_catalog(
             project=project.name,
             ddl=parsed,
@@ -1256,6 +1264,7 @@ def _data_catalog(args) -> int:
             context_id=context_id,
             dialect=dialect,
             sources=sources,
+            ruleset=ruleset,
         )
         errors = validate_catalog(catalog)
         if errors:
@@ -1278,6 +1287,11 @@ def _data_catalog(args) -> int:
                 "tables": len(catalog.tables),
                 "foreign_keys": len(catalog.foreign_keys),
                 "tables_order": catalog.tables_order,
+                "semantic_values": sum(
+                    len(column.value_semantics)
+                    for table in catalog.tables
+                    for column in table.columns
+                ),
                 "gaps": len(catalog.gaps),
                 "warnings": catalog.warnings,
             },

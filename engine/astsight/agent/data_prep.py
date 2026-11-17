@@ -49,6 +49,7 @@ def _catalog_payload(catalog: DataCatalog) -> dict[str, Any]:
             {
                 "name": table.name,
                 "comment": table.comment,
+                "purpose": table.purpose,
                 "primary_key": list(table.primary_key),
                 "columns": [
                     {
@@ -59,6 +60,14 @@ def _catalog_payload(catalog: DataCatalog) -> dict[str, Any]:
                         "enum_values": list(column.enum_values),
                         "comment": column.comment,
                         "semantic_type": column.semantic_type.value,
+                        "value_semantics": [
+                            {
+                                "value": value.value,
+                                "meaning": value.meaning,
+                                "rule_keys": list(value.rule_keys),
+                            }
+                            for value in column.value_semantics
+                        ],
                     }
                     for column in table.columns
                 ],

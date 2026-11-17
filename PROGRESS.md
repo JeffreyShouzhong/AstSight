@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（已推送；本轮提交见 `git log`）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近两个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -17,11 +17,12 @@
 > 自动注入 → 执行 → 报告一次跑完，目标端口零建连；全量测试与 agent e2e
 > 结果见“本轮完成”
 >
-> 2026-11-17 起优先做断言质量：已支持同响应字段关系、受限算术表达式、
+> 2026-11-17 起优先做断言质量：已支持同响应字段关系、受限聚合/算术表达式、
 > `db_row.wait_ms` 落库轮询与跨步骤规则关系；规则关系已结构化，并由框架按
 > A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。数据目录的
-> 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射。
-> 下一步扩展受控聚合与复杂公式抽取。
+> 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射，
+> 并会从注释、DBML Enum note 与规则常量确定性地给出取值语义候选。
+> 公式抽取已有离线评估集与脚本，下一步用评估结果决定哪些公式值得进规则层。
 
 ## 当前状态
 
@@ -68,6 +69,51 @@
 | 关系覆盖门禁 | ✅ 2026-11-17 | A/B 规则关系未物化且未列入 `uncovered_requirements[].relation_keys` 时导入阻断；未知键、跨规则误引、目标响应字段未声明均显式报错 |
 | 跨步骤规则关系 | ✅ 2026-11-17 | `RuleRelation` 新增 `$step` 语义引用（`"<别名>.<字段>"`）；用例 `relation_bindings` 把别名绑定到更早步骤，框架生成 `$ref` 断言挂到最后一步；缺绑定、绑定最后一步/不存在步骤、单请求用例使用 `$step` 均阻断导入 |
 | DB 反射与 DBML | ✅ 2026-11-17 | `data catalog` 支持 `--dbml` 与 `--db-url`（SQLite/PostgreSQL/MySQL 只读反射），与 `--ddl` 三选一；`--schema` 支持多 schema，表名用 `schema.table`；`--include/--exclude` glob 过滤；DBML 支持 Table/Enum/Ref/行内 ref/indexes |
+| 受控聚合运算 | ✅ 2026-11-17 | `$op` 新增 `avg/min/max/count_distinct/pluck`，断言与规则关系共用 `OP_ARITY`；`pluck` 只接受单个字段名；空列表/缺字段/类型错误运行期显式失败；`assert_expression_ops` 由白名单生成；A1 提示词升至 9 |
+| 公式抽取评估 | ✅ 2026-11-17 | `engine/eval/relation_formulas.json` 10 条标注（含 2 条负例）；`tools/eval_relation_extraction.py` 统计 precision/recall/expression_accuracy 并列出漏抽/误抽/表达式选错；基线 P=1.00 / R=1.00 / expr=0.90（8/8 召回、0 误抽、1 条把 `$request` 写成 `$step`）；打分逻辑 6 条单测 |
+| 数据目录语义候选 | ✅ 2026-11-17 | `data/annotations.py`：注释关键词补 `semantic_type`；注释「值=含义」、DBML Enum note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量进入 `value_semantics`；表注释写入 `purpose`；冲突候选丢弃并告警；`data catalog --ruleset` |
+
+## 本轮完成（受控聚合与语义候选，2026-11-17）
+
+1. **受控聚合与投影**：`cases/expressions.py` 的 `OP_ARITY` 新增
+   `avg/min/max/count_distinct/pluck`；`pluck` 把列表元素的单个字段投影成列表，
+   再交给聚合运算（如「总价 = sum(items.price)」「均分 = avg(reviews.score)」）。
+   `pluck` 第二参数只接受字段名；表达式、路径、动态节点均报
+   `expression.pluck_field_invalid` / `relation.pluck_field_invalid`。
+2. **执行与失败关闭**：生成的 `conftest.py` 只执行固定运算；空列表、非列表、
+   `pluck` 缺字段、类型错误都抛 `AssertionError`，不静默跳过。
+   `count_distinct` 按类型区分（`True` 与 `1` 不同），字典/列表按 JSON 内容归一。
+   强度推导不变：同响应关系 L3，引用两个及以上步骤 L4。
+3. **可发现性**：`context.assert_expression_ops` 改为直接由 `OP_ARITY` 生成，避免
+   文档与实现漂移；A1/A4 提示词补充聚合与 `pluck` 示例，并明确“文档没给字段就写
+   gap，不要猜”；A1 提示词版本 8 → 9。
+4. **公式抽取评估**：新增 10 条中文公式标注（求和、均价、最大、去重数量、长度、
+   除法、请求回显、跨步骤一致，以及 2 条“没有公式”的负例）。
+   `tools/eval_relation_extraction.py` 逐条跑 A1，按「目标字段 + 关系运算 +
+   表达式运算集合 + 取值来源（response/request/step）」打分，输出
+   precision/recall/expression_accuracy 与漏抽、误抽、表达式选错。
+   评估真实调用模型，不随测试自动执行。2026-11-17 用当前 DeepSeek 配置跑基线：
+   **8/8 关系全部召回，precision 1.00 / recall 1.00 / expression_accuracy 0.90**，
+   0 误抽；唯一不严格项是 `echo_request_order_id` 把“创建请求里的字段”写成了
+   `$step` 而不是 `$request`。基线原始结果在
+   `engine/eval/baselines/2026-11-17-deepseek-flash.json`（含模型参数与逐条明细）。
+5. **C5a 确定性语义候选**：新增 `data/annotations.py`。注释关键词补结构语义；
+   注释里的 `0=待支付`、`PAID=已支付`、`待支付(0)` 等解析为取值语义；DBML
+   `Enum` 值上的 `[note: '...']` 同步进入 `value_semantics`；`CHECK IN`/`ENUM`
+   与规则 `eq/in` 常量折叠为列候选，保留 `rule_keys`。表注释写入 `purpose`。
+6. **冲突与边界**：注释/规则取值与数据库枚举冲突时丢弃并写入
+   `comment_value_unknown` / `constant_fold_enum_mismatch`；同名列跨表出现时放弃
+   规则折叠并告警 `constant_fold_ambiguous`，不猜表。所有候选证据固定为
+   `inferred`，不自动升级；业务含义仍以需求原文和人工审核为准。
+7. **CLI 与提示词输入**：`data catalog` 新增 `--ruleset`，输出增加
+   `semantic_values` 计数；C5a 提示词输入补 `value_semantics` 与 `purpose`，并说明
+   候选可修正但不得与数据库枚举冲突。
+8. **验证**：新增 7 条标注/目录测试、3 条断言测试、1 条 CLI 测试、6 条评估打分测试；
+   全量 Python **462 passed, 37 skipped**（上轮 445/37，新增 17 条通过）。
+   文档同步 README、使用文档、C1 文档、能力设计、决策记录（v4.29）与 ROADMAP。
+9. **过程说明**：评估脚本会真实调用模型。首次试跑时按当前环境的 `ANTHROPIC_*`
+   配置触发过一次非预期调用，已立即终止；随后显式运行评估集得到上述基线。
+   评估结果只代表当前模型与提示词版本，不写成通用结论。
 
 ## 本轮完成（DB 反射与 DBML，2026-11-17）
 

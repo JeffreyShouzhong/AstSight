@@ -52,6 +52,8 @@ class ParsedColumn:
     unique: bool = False
     comment: str = ""
     enum_values: list[Any] = field(default_factory=list)
+    # DBML `Enum` 值上的 note；键统一为 str(value)，与注释解析共用。
+    value_meanings: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

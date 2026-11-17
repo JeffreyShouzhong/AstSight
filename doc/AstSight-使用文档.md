@@ -816,14 +816,28 @@ PYTHONPATH=. python -m astsight data catalog \
 - `--dialect`：DDL/DBML 的目标方言（默认 `sqlite`）；`--db-url` 时从 URL 推断，显式冲突会报错；
 - `--schema`：反射的 schema（PostgreSQL）或 database（MySQL），多个用逗号分隔；
 - `--include` / `--exclude`：按表名 glob 过滤反射结果，可重复；
-- `--context`：C1 规则上下文，用于字段语义对齐。
+- `--context`：C1 规则上下文，用于字段语义对齐；
+- `--ruleset`：规则库 JSON。规则里 `eq/in` 的常量会按字段名唯一匹配折叠成该列的
+  取值候选（`rule_keys` 保留依据）；同名列表跨表出现时放弃折叠并告警，不猜表。
+
+即使不调用模型，目录也会先做一轮确定性语义候选：
+
+- 表/列注释（DDL `COMMENT`、DBML `Note`、真实库注释）里的关键词用于补
+  `semantic_type`（金额/数量/状态/是否/时间/类型等）；
+- 注释里的「值=含义」（如 `0=待支付；1=已支付`）与 DBML `Enum` 值上的
+  `[note: '...']` 进入 `value_semantics`；
+- `CHECK ... IN (...)`、`ENUM(...)` 与规则常量提供取值集合；
+- 与数据库枚举冲突的注释/规则取值会被丢弃并写入 `warnings`，不会静默采纳。
+
+这些候选的证据一律是 `inferred`；业务含义仍以需求原文与人工审核为准。
 
 反射只读 `pg_catalog` / `information_schema` / `sqlite_master`，不导出数据。
 PostgreSQL 需要 `psycopg`，MySQL 需要 `PyMySQL`；成功反射的表会带上主键、唯一约束、
 外键、注释和枚举值。选择一个以上 schema 时，表名统一写成 `schema.table`，造数 SQL
 会按方言分别引用；被过滤掉表的外键会同时移除，并在 `warnings` 里记录。
 
-无模型时仍产出骨架，缺失语义标 `unmapped`。
+无模型时仍产出骨架：注释/枚举/规则常量能推出的语义先填上，仍缺失的列标
+`field_semantics_unmapped` 并进入 `gaps`。
 
 需要模型补字段语义和业务态候选时：
 
