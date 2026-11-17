@@ -863,8 +863,8 @@ PYTHONPATH=. python -m astsight data catalog \
 - `operator="transition"` 的约束按 `[迁移前, 迁移后]` 生成状态转移候选：迁移前值进
   `table_values`，迁移后值进 `target_state`；允许单表，也可以和另一张表的 `eq/in`
   约束组合；
-- 约束字段必须唯一映射到某张表的某一列，同名跨表出现时写
-  `rule_state_field_ambiguous` 并放弃；
+- 约束字段必须映射到某张表的某一列；同名跨表时先用同组其他能唯一映射的字段
+  收窄候选表，收窄后仍不唯一才写 `rule_state_field_ambiguous` 并放弃；
 - 只支持单列主键和单列外键；复合主键/外键、循环依赖会写 `rule_state_invalid`；
 - 主键、外键和被外键牵连的父表由框架补确定性占位值；其它 NOT NULL 列用类型占位，
   每条都写 `state_placeholder` gap；

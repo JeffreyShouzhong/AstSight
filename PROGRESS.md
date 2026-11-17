@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近九个提交）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -81,7 +81,27 @@
 | 非枚举常量组 | ✅ 2026-11-17 | 同一扫描器新增 Java `static final`（含 interface 隐式常量）、Go `const`（含 `iota`/简单 `iota` 运算）与 TS `as const` 对象；常量组要求组名以状态/类型/编码等后缀结尾；重复定义取值一致时稳定选一份；`.go` 纳入扫描；测试 473 passed / 37 skipped |
 | 跨表状态候选 | ✅ 2026-11-17 | `data/states.py`：同一条件下覆盖 ≥2 张表的 `eq/in` 约束 → `DataState` 骨架；`in` 按组合展开（单组上限 20）；主键/外键/父表/NOT NULL 用确定性占位值补齐，逐条写 `state_placeholder` gap；复用 `validate_plan_fixtures`，不合法候选丢弃并告警；`data catalog --rule-states` |
 | 状态转移候选 | ✅ 2026-11-17 | `operator="transition"` 按 `[迁移前, 迁移后]` 生成 `transition_*` 状态：迁移前进 `table_values`、迁移后进 `target_state`；target 同样校验表/列/类型/枚举/NOT NULL；可与同条件另一张表的 `eq/in` 组合；A1 提示词升至 11 |
-| 示例端到端验收 | ✅ 2026-11-17 | partner 示例跑通 `catalog --ruleset --rule-states --code` → `data semantics --ruleset` → `data plan`：4/4 plan 生成、0 rejected；修复示例语义草稿的过期 `rule_key`；新增示例资产一致性测试；测试 486 passed / 37 skipped |
+| 示例端到端验收 | ✅ 2026-11-17 | partner 示例跑通 `catalog --ruleset --rule-states --code` → `data semantics --ruleset` → `data plan`：4/4 plan 生成、0 rejected；修复示例语义草稿的过期 `rule_key`；新增示例资产一致性测试 |
+| 同组字段消歧 | ✅ 2026-11-17 | `resolve_field_group`：同一 condition 内用唯一字段收窄同名字段，仍不唯一才告警放弃；规则折叠与状态候选共用；示例 `audit_step` 正确落到 `partner`，`semantic_values` 10 → 12；测试 488 passed / 37 skipped |
+
+## 本轮完成（同组字段消歧，2026-11-17）
+
+1. **消歧规则**：同一 `condition` 内先解析所有约束字段；能唯一映射的字段给出表提示，
+   同名跨表字段只在提示表里取候选；收窄到一张表才使用，否则继续视为歧义。
+   只做表级收窄，不在候选列之间猜。
+2. **规则折叠**：`fold_rule_constants` 按 condition 分组后使用同一消歧逻辑；
+   `eq/in` 字段仍多候选才写 `constant_fold_ambiguous`，`between/min/max` 等不折叠
+   的字段只参与表提示，不再制造无关告警。
+3. **状态候选**：`_propose_one` 与 `_propose_transitions` 同样使用组内消歧；
+   收窄后仍多候选才写 `rule_state_field_ambiguous`。
+4. **示例效果**：partner 示例的 `audit_step` 同时存在于 `partner` 与
+   `partner_audit_log`，但同组 `status`/`audit_status` 唯一指向 `partner`，现在
+   正确折叠到 `partner`；目录 `semantic_values` 从 10 增至 12，`audit_step`
+   歧义告警消失。
+5. **验证**：新增 2 条测试（规则折叠消歧、跨表状态消歧）；全量 Python
+   **488 passed, 37 skipped**（上轮 486/37，新增 2 条通过）。
+6. **边界**：消歧只依据同 condition 内的字段，不做跨规则推断；同名候选仍多时
+   继续告警放弃，不按字段顺序或表名排序硬选。
 
 ## 本轮完成（示例端到端验收，2026-11-17）
 

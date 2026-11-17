@@ -1896,8 +1896,9 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
    `CHECK IN`/`ENUM`、规则 `eq/in` 常量，以及 Java/Python/Go/TS 枚举与
    Java `static final`、Go `const`、TS `as const` 常量组进入 `value_semantics`，
    `source` 记录 `comment`/`dbml`/`enum`/`rule`/`llm`/`code:<路径>`
-   （模型只能沿用已知来源或标 `llm`）。规则折叠按字段名唯一匹配，跨表重名时放弃
-   并告警。代码枚举/常量组只在三种情形映射：数据库枚举值全部能在代码里找到、
+   （模型只能沿用已知来源或标 `llm`）。规则折叠先在同一 condition 内用唯一字段
+   收窄同名字段，仍不唯一才放弃并告警。代码枚举/常量组只在三种情形映射：
+   数据库枚举值全部能在代码里找到、
    列注释点明枚举类型、或「表名+status/type/code」命名唯一对应；常量组还要求组名
    以枚举类后缀结尾，且多处定义取值一致时按路径稳定选一份。多候选时先按取值类型与
    列类型排序，仍并列才放弃并写 `code_enum_ambiguous`。所有候选证据固定为

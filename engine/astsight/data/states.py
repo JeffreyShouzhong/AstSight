@@ -25,7 +25,7 @@ from contracts import (
     TableCatalog,
 )
 
-from .annotations import coerce_constant, resolve_field_targets
+from .annotations import coerce_constant, resolve_field_group
 from .validate import check_type, validate_plan_fixtures
 
 MAX_STATES = 200
@@ -103,16 +103,28 @@ def _propose_transitions(
             return
         before: dict[str, dict[str, Any]] = {}
         target: dict[str, dict[str, Any]] = {}
+        eq_items = eq_groups.get(condition, [])
+        all_constraints = [
+            *transitions,
+            *(constraint for constraint, _values in eq_items),
+        ]
+        resolved, ambiguous = resolve_field_group(
+            tables, [constraint.field for constraint in all_constraints]
+        )
+        for field, count in ambiguous:
+            proposal.warnings.append(
+                f"rule_state_field_ambiguous:{field}:{count}"
+            )
+        if ambiguous:
+            return
+        resolved_by_constraint = {
+            id(constraint): matches
+            for constraint, matches in zip(all_constraints, resolved)
+        }
         for constraint in transitions:
-            matches = resolve_field_targets(tables, constraint.field)
+            matches = resolved_by_constraint[id(constraint)]
             if not matches:
                 continue
-            if len(matches) > 1:
-                proposal.warnings.append(
-                    f"rule_state_field_ambiguous:"
-                    f"{constraint.field}:{len(matches)}"
-                )
-                return
             table, column = matches[0]
             raw_before = str(constraint.values[0]).strip()
             raw_after = str(constraint.values[1]).strip()
@@ -139,9 +151,9 @@ def _propose_transitions(
             before[table.name][column.name] = before_value
             target.setdefault(table.name, {})[column.name] = after_value
 
-        for constraint, values in eq_groups.get(condition, []):
-            matches = resolve_field_targets(tables, constraint.field)
-            if len(matches) != 1:
+        for constraint, values in eq_items:
+            matches = resolved_by_constraint[id(constraint)]
+            if not matches:
                 continue
             table, column = matches[0]
             value = coerce_constant(values[0], column)
@@ -189,15 +201,18 @@ def _propose_one(
     proposal: StateProposal,
 ) -> None:
     options: list[tuple[TableCatalog, ColumnCatalog, list[Any]]] = []
-    for constraint, values in constraints:
-        matches = resolve_field_targets(tables, constraint.field)
+    resolved, ambiguous = resolve_field_group(
+        tables, [constraint.field for constraint, _values in constraints]
+    )
+    for field, count in ambiguous:
+        proposal.warnings.append(
+            f"rule_state_field_ambiguous:{field}:{count}"
+        )
+    if ambiguous:
+        return
+    for (constraint, values), matches in zip(constraints, resolved):
         if not matches:
             continue
-        if len(matches) > 1:
-            proposal.warnings.append(
-                f"rule_state_field_ambiguous:{constraint.field}:{len(matches)}"
-            )
-            return
         table, column = matches[0]
         coerced: list[Any] = []
         seen: set[tuple[str, str]] = set()

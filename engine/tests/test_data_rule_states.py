@@ -266,6 +266,62 @@ def test_single_table_constraints_do_not_create_cross_table_state() -> None:
     assert catalog.states == []
 
 
+def test_unique_fields_narrow_ambiguous_column_to_one_table() -> None:
+    ddl = """
+    CREATE TABLE orders (
+      id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL,
+      code TEXT NOT NULL
+    );
+    CREATE TABLE order_items (
+      id INTEGER PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id),
+      qty INTEGER NOT NULL
+    );
+    CREATE TABLE audit_log (
+      id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL
+    );
+    """
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=_ruleset(
+            _rule(
+                RuleConstraint(
+                    field="orders.code",
+                    operator="eq",
+                    values=["X-1"],
+                    condition="创建订单",
+                ),
+                RuleConstraint(
+                    field="order_items.qty",
+                    operator="eq",
+                    values=["2"],
+                    condition="创建订单",
+                ),
+                RuleConstraint(
+                    field="status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="创建订单",
+                ),
+            )
+        ),
+        rule_states=True,
+    )
+    assert len(catalog.states) == 1
+    state = catalog.states[0]
+    assert state.table_values["orders"][0]["status"] == "pending"
+    assert state.table_values["orders"][0]["code"] == "X-1"
+    assert state.table_values["order_items"][0]["qty"] == 2
+    assert "audit_log" not in state.table_values
+    assert not any(
+        warning.startswith("rule_state_field_ambiguous:")
+        for warning in catalog.warnings
+    )
+
+
 def test_ambiguous_field_blocks_state_generation() -> None:
     ddl = """
     CREATE TABLE a (id INTEGER PRIMARY KEY, status TEXT NOT NULL);

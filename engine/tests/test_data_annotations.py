@@ -191,6 +191,56 @@ def test_rule_constants_fold_into_value_semantics() -> None:
     assert "constant_fold_ambiguous:status:2" in catalog.warnings
 
 
+def test_same_group_unique_fields_disambiguate_ambiguous_column() -> None:
+    ruleset = RuleSet(
+        ruleset_id="rules-disambiguate",
+        rules=[
+            _rule(
+                RuleConstraint(
+                    field="partner.status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="注册成功",
+                ),
+                RuleConstraint(
+                    field="partner.audit_status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="注册成功",
+                ),
+                RuleConstraint(
+                    field="audit_step",
+                    operator="eq",
+                    values=["1"],
+                    condition="注册成功",
+                ),
+            )
+        ],
+    )
+    catalog = _catalog(
+        """
+        CREATE TABLE partner (
+          id INTEGER PRIMARY KEY,
+          status TEXT,
+          audit_status TEXT,
+          audit_step INTEGER
+        );
+        CREATE TABLE partner_audit_log (
+          id INTEGER PRIMARY KEY,
+          audit_step INTEGER
+        );
+        """,
+        ruleset=ruleset,
+    )
+    partner = catalog.table_index()["partner"].column_index()
+    assert [
+        (item.value, item.source) for item in partner["audit_step"].value_semantics
+    ] == [(1, "rule")]
+    log = catalog.table_index()["partner_audit_log"].column_index()
+    assert log["audit_step"].value_semantics == []
+    assert "constant_fold_ambiguous:audit_step:2" not in catalog.warnings
+
+
 def test_rule_constant_conflicting_with_enum_is_not_folded() -> None:
     ruleset = RuleSet(
         ruleset_id="rules-fold-enum",

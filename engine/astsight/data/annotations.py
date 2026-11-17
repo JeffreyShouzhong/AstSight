@@ -251,47 +251,57 @@ def fold_rule_constants(
 ) -> list[str]:
     """把规则里的 `eq/in` 常量折叠成列的取值候选。
 
-    只认能唯一映射到某张表某一列的字段；同名列跨表出现时放弃折叠并告警，
-    不用「猜表」的方式制造候选。
+    同一 condition 内先看能唯一映射的字段落在哪些表，再用这些表收窄同名字段；
+    收窄后仍不唯一才放弃并告警，不用「猜表」的方式制造候选。
     """
     if ruleset is None:
         return []
     table_list = list(tables)
     warnings: list[str] = []
     for rule in ruleset.rules:
+        groups: dict[str, list[Any]] = {}
         for constraint in rule.constraints:
-            if constraint.operator not in {RuleOperator.EQ, RuleOperator.IN}:
-                continue
-            if not constraint.values:
-                continue
-            matches = resolve_field_targets(table_list, constraint.field)
-            if not matches:
-                continue
-            if len(matches) > 1:
-                warnings.append(
-                    f"constant_fold_ambiguous:{constraint.field}:{len(matches)}"
-                )
-                continue
-            table, column = matches[0]
-            for raw in constraint.values:
-                text = str(raw).strip()
-                if not text or text.upper() in {"NULL", "NONE"}:
+            groups.setdefault(constraint.condition or "", []).append(constraint)
+        for constraints in groups.values():
+            resolved, _ambiguous = resolve_field_group(
+                table_list, [item.field for item in constraints]
+            )
+            for constraint, matches in zip(constraints, resolved):
+                if constraint.operator not in {RuleOperator.EQ, RuleOperator.IN}:
                     continue
-                if len(text) > MAX_VALUE_CHARS:
-                    continue
-                value = coerce_constant(text, column)
-                if column.enum_values and not any(
-                    str(item) == str(value) for item in column.enum_values
-                ):
+                if len(matches) > 1:
                     warnings.append(
-                        "constant_fold_enum_mismatch:"
-                        f"{table.name}.{column.name}:{text}"
+                        f"constant_fold_ambiguous:"
+                        f"{constraint.field}:{len(matches)}"
                     )
                     continue
-                meaning = _rule_meaning(constraint.condition, rule.text)
-                merge_value(
-                    table.name, column, value, meaning, rule.rule_key, warnings
-                )
+                if not constraint.values or len(matches) != 1:
+                    continue
+                table, column = matches[0]
+                for raw in constraint.values:
+                    text = str(raw).strip()
+                    if not text or text.upper() in {"NULL", "NONE"}:
+                        continue
+                    if len(text) > MAX_VALUE_CHARS:
+                        continue
+                    value = coerce_constant(text, column)
+                    if column.enum_values and not any(
+                        str(item) == str(value) for item in column.enum_values
+                    ):
+                        warnings.append(
+                            "constant_fold_enum_mismatch:"
+                            f"{table.name}.{column.name}:{text}"
+                        )
+                        continue
+                    meaning = _rule_meaning(constraint.condition, rule.text)
+                    merge_value(
+                        table.name,
+                        column,
+                        value,
+                        meaning,
+                        rule.rule_key,
+                        warnings,
+                    )
     return list(dict.fromkeys(warnings))
 
 
@@ -327,6 +337,36 @@ def resolve_field_targets(
     if not _FIELD_LEAF_RE.match(leaf):
         return []
     return list(targets.get(leaf.lower(), []))
+
+
+def resolve_field_group(
+    tables: Iterable[TableCatalog],
+    fields: list[str],
+) -> tuple[
+    list[list[tuple[TableCatalog, ColumnCatalog]]],
+    list[tuple[str, int]],
+]:
+    """同一 condition 内解析字段：唯一字段给表提示，用来收窄同名字段。
+
+    返回 ``(每个字段的候选列表, 仍歧义的 (字段, 候选数))``；只做表级收窄，
+    收窄后仍多候选就保留多候选，由调用方告警放弃。
+    """
+    table_list = list(tables)
+    initial = [resolve_field_targets(table_list, field) for field in fields]
+    hints = {
+        matches[0][0].name for matches in initial if len(matches) == 1
+    }
+    resolved: list[list[tuple[TableCatalog, ColumnCatalog]]] = []
+    ambiguous: list[tuple[str, int]] = []
+    for field, matches in zip(fields, initial):
+        if len(matches) > 1 and hints:
+            narrowed = [item for item in matches if item[0].name in hints]
+            if len(narrowed) == 1:
+                matches = narrowed
+        if len(matches) > 1:
+            ambiguous.append((field, len(matches)))
+        resolved.append(matches)
+    return resolved, ambiguous
 
 
 def coerce_constant(text: str, column: ColumnCatalog) -> Any:
@@ -411,6 +451,7 @@ __all__ = [
     "comment_value_pairs",
     "fold_rule_constants",
     "merge_value",
+    "resolve_field_group",
     "resolve_field_targets",
     "semantic_hint",
     "value_semantics_for",
