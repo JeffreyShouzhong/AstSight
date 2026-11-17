@@ -18,6 +18,8 @@
 - `catalog.seed_states[]`：seed 已提供的初始数据状态；`rule_*` 开头的状态是框架
   从规则跨表约束生成的骨架，`gaps` 里的 `state_placeholder` 值只是占位，不是业务事实，
   可以修正或补全，但不要当成已确认数据；
+- `catalog.state_paths[]`：规则推导出的多步迁移路径（table/column + steps），只用于
+  理解状态流转，不是可直接执行的 fixtures；不要把它当成已确认的业务状态机；
 - `rules[]`：已导入的业务规则（含 `rule_key` / `rule_id` / `text`）；
 - `documents[]`：需求原文 section；
 - `schema`：输出 JSON Schema。

@@ -1918,6 +1918,15 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
    枚举校验。生成的状态可直接被用例 `preconditions.state_key` 引用，`data plan`
    展开成 fixtures；SQLite e2e 覆盖规则状态 → 计划 → 建表/apply/teardown。
    清理语句由 `render_teardown` 按逆拓扑顺序生成，执行层不再二次反转。
+   审核时用 `data states` 查看 state_key、target_state、占位 gap 与 fixture
+   校验错误，支持 `--json`。
+
+   **多步迁移路径**（`DataCatalog.state_paths`）：把同一 `(table, column)` 上的
+   transition 边按 `before == 上一步 after` 连成路径，最多 5 步、50 条，生成
+   `StatePath`（`path_key/table/column/steps`）。`operator="transition"` 与
+   `from_*/to_*` 成对字段都会贡献边；成对字段以去掉前缀的 base 名作为 column。
+   路径只描述规则推导出的流转，不生成 SQL 或多行 fixtures；循环路径靠边去重和
+   步数上限收敛。C5a 提示词把 `state_paths` 标为“理解用、不是可执行状态”。
 6. **确定性校验（LLM 之后）**：表/列白名单、类型/枚举/NOT NULL、FK 闭包、拓扑顺序、`preconditions` 全覆盖、行数/列数上限；未知表/列直接拒绝，失败用例写入 `rejected`，不生成计划
 7. **SQL 渲染**：模型**不输出 SQL**；`data/render.py` 只从通过校验的 fixtures 生成参数化 `INSERT`/`DELETE`，标识符按白名单校验，值只走 `params`
 8. **隔离与回收**：每个用例一个 `data_state` fixture，请求前在事务内 apply，用例结束（含失败/异常）按主键 teardown；`run_scope` 记录到计划里用于多 run 审计。`keep-data` 调试模式保留数据

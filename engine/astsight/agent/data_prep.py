@@ -92,6 +92,15 @@ def _catalog_payload(catalog: DataCatalog) -> dict[str, Any]:
             }
             for state in catalog.states
         ],
+        "state_paths": [
+            {
+                "path_key": path.path_key,
+                "table": path.table,
+                "column": path.column,
+                "steps": [step.model_dump(mode="json") for step in path.steps],
+            }
+            for path in catalog.state_paths
+        ],
         "gaps": catalog.gaps,
     }
 

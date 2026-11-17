@@ -80,6 +80,7 @@ def test_cross_table_rule_generates_state_with_fk_closure() -> None:
     }
     assert catalog.sources["rule_states"] == {
         "proposed": 1,
+        "paths": 0,
         "placeholders": 1,
     }
     assert any(
@@ -641,3 +642,162 @@ def test_data_catalog_cli_rule_states(tmp_path: Path, capsys) -> None:
     catalog = json.loads(Path(payload["catalog"]).read_text(encoding="utf-8"))
     assert len(catalog["states"]) == 1
     assert catalog["states"][0]["state_key"].startswith("rule_BR_01_")
+
+
+def test_multi_step_transition_paths_are_built() -> None:
+    ddl = """
+    CREATE TABLE orders (
+      id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL
+    );
+    """
+    ruleset = RuleSet(
+        ruleset_id="rules-paths",
+        project="demo",
+        rules=[
+            _rule(
+                RuleConstraint(
+                    field="orders.status",
+                    operator="transition",
+                    values=["pending", "paid"],
+                    condition="支付订单",
+                ),
+                rule_id="BR-01",
+            ),
+            _rule(
+                RuleConstraint(
+                    field="orders.status",
+                    operator="transition",
+                    values=["paid", "shipped"],
+                    condition="发货",
+                ),
+                rule_id="BR-02",
+            ),
+        ],
+    )
+    catalog = build_catalog(
+        project="demo", ddl=parse_ddl(ddl), ruleset=ruleset, rule_states=True
+    )
+    assert len(catalog.state_paths) == 1
+    path = catalog.state_paths[0]
+    assert path.table == "orders"
+    assert path.column == "status"
+    assert [(step.from_value, step.to_value) for step in path.steps] == [
+        ("pending", "paid"),
+        ("paid", "shipped"),
+    ]
+    assert [step.rule_key for step in path.steps] == ["RK-BR-01", "RK-BR-02"]
+
+
+def test_paired_columns_also_form_multi_step_paths() -> None:
+    ddl = """
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY,
+      from_status TEXT,
+      to_status TEXT NOT NULL
+    );
+    """
+    ruleset = RuleSet(
+        ruleset_id="rules-pair-paths",
+        project="demo",
+        rules=[
+            _rule(
+                RuleConstraint(
+                    field="from_status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="支付",
+                ),
+                RuleConstraint(
+                    field="to_status",
+                    operator="eq",
+                    values=["paid"],
+                    condition="支付",
+                ),
+                rule_id="BR-01",
+            ),
+            _rule(
+                RuleConstraint(
+                    field="from_status",
+                    operator="eq",
+                    values=["paid"],
+                    condition="发货",
+                ),
+                RuleConstraint(
+                    field="to_status",
+                    operator="eq",
+                    values=["shipped"],
+                    condition="发货",
+                ),
+                rule_id="BR-02",
+            ),
+        ],
+    )
+    catalog = build_catalog(
+        project="demo", ddl=parse_ddl(ddl), ruleset=ruleset, rule_states=True
+    )
+    assert len(catalog.state_paths) == 1
+    path = catalog.state_paths[0]
+    assert path.table == "events"
+    assert path.column == "status"
+    assert [(step.from_value, step.to_value) for step in path.steps] == [
+        ("pending", "paid"),
+        ("paid", "shipped"),
+    ]
+
+
+def test_data_states_cli_lists_paths(tmp_path: Path, capsys) -> None:
+    ddl = """
+    CREATE TABLE orders (
+      id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL
+    );
+    """
+    ruleset = RuleSet(
+        ruleset_id="rules-cli-paths",
+        project="demo",
+        rules=[
+            _rule(
+                RuleConstraint(
+                    field="orders.status",
+                    operator="transition",
+                    values=["pending", "paid"],
+                    condition="支付",
+                ),
+                rule_id="BR-01",
+            ),
+            _rule(
+                RuleConstraint(
+                    field="orders.status",
+                    operator="transition",
+                    values=["paid", "shipped"],
+                    condition="发货",
+                ),
+                rule_id="BR-02",
+            ),
+        ],
+    )
+    catalog = build_catalog(
+        project="demo", ddl=parse_ddl(ddl), ruleset=ruleset, rule_states=True
+    )
+    path = tmp_path / "catalog.json"
+    path.write_text(catalog.model_dump_json(), encoding="utf-8")
+    code = main(
+        [
+            "data",
+            "states",
+            "--project",
+            str(tmp_path),
+            "--catalog",
+            str(path),
+            "--json",
+        ]
+    )
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["paths"] == 1
+    assert payload["paths"][0]["column"] == "status"
+    assert [step["to_value"] for step in payload["paths"][0]["steps"]] == [
+        "paid",
+        "shipped",
+    ]

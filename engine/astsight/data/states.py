@@ -22,6 +22,8 @@ from contracts import (
     RuleConstraint,
     RuleOperator,
     RuleSet,
+    StatePath,
+    StatePathStep,
     TableCatalog,
 )
 
@@ -30,12 +32,15 @@ from .validate import check_type, validate_plan_fixtures
 
 MAX_STATES = 200
 MAX_STATE_COMBINATIONS = 20
+MAX_STATE_PATHS = 50
+MAX_PATH_STEPS = 5
 _PLACEHOLDER_TIMESTAMP = "2026-01-01T00:00:00"
 
 
 @dataclass
 class StateProposal:
     states: list[DataState] = field(default_factory=list)
+    paths: list[StatePath] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     gaps: list[dict[str, Any]] = field(default_factory=list)
 
@@ -58,6 +63,7 @@ def propose_rule_states(
             _propose_one(
                 rule, condition, constraints, table_list, proposal
             )
+    _build_paths(table_list, ruleset, proposal)
     proposal.warnings = list(dict.fromkeys(proposal.warnings))
     return proposal
 
@@ -502,6 +508,271 @@ def _build_state(
         )
     for warning in warnings:
         proposal.warnings.append(f"{key}:{warning}")
+
+
+@dataclass(frozen=True)
+class _Edge:
+    table: str
+    column: str
+    before_key: str
+    after_key: str
+    before_value: Any
+    after_value: Any
+    rule_key: str
+    condition: str
+
+
+def _build_paths(
+    tables: list[TableCatalog],
+    ruleset: RuleSet,
+    proposal: StateProposal,
+) -> None:
+    edges: dict[tuple[str, str, str, str], _Edge] = {}
+    for rule in ruleset.rules:
+        _collect_transition_edges(rule, tables, edges, proposal)
+        _collect_pair_edges(rule, tables, edges, proposal)
+    grouped: dict[tuple[str, str], list[_Edge]] = {}
+    for edge in edges.values():
+        grouped.setdefault((edge.table, edge.column), []).append(edge)
+    paths: list[StatePath] = []
+    for (table, column), group in sorted(grouped.items()):
+        for edges_path in _find_multi_step_paths(group, proposal):
+            paths.append(_state_path(table, column, edges_path))
+            if len(paths) >= MAX_STATE_PATHS:
+                proposal.warnings.append(f"state_path_limit:{MAX_STATE_PATHS}")
+                proposal.paths = paths
+                return
+    proposal.paths = paths
+
+
+def _collect_transition_edges(
+    rule: Rule,
+    tables: list[TableCatalog],
+    edges: dict[tuple[str, str, str, str], _Edge],
+    proposal: StateProposal,
+) -> None:
+    groups: dict[str, list[RuleConstraint]] = {}
+    for constraint in rule.constraints:
+        if constraint.operator != RuleOperator.TRANSITION:
+            continue
+        if len(constraint.values) < 2:
+            continue
+        groups.setdefault(constraint.condition or "", []).append(constraint)
+    for condition, transitions in groups.items():
+        others = [
+            constraint
+            for constraint in rule.constraints
+            if (constraint.condition or "") == condition
+            and constraint.operator in {RuleOperator.EQ, RuleOperator.IN}
+            and constraint.values
+        ]
+        all_constraints = [*transitions, *others]
+        resolved, ambiguous = resolve_field_group(
+            tables, [constraint.field for constraint in all_constraints]
+        )
+        for field, count in ambiguous:
+            proposal.warnings.append(
+                f"state_path_field_ambiguous:{field}:{count}"
+            )
+        resolved_by_constraint = {
+            id(constraint): matches
+            for constraint, matches in zip(all_constraints, resolved)
+        }
+        for constraint in transitions:
+            matches = resolved_by_constraint[id(constraint)]
+            if len(matches) != 1:
+                continue
+            table, column = matches[0]
+            before = _transition_value(str(constraint.values[0]).strip(), column)
+            after = _transition_value(str(constraint.values[1]).strip(), column)
+            _add_edge(
+                edges,
+                _Edge(
+                    table.name,
+                    column.name,
+                    str(before),
+                    str(after),
+                    before,
+                    after,
+                    rule.rule_key,
+                    condition,
+                ),
+            )
+
+
+def _collect_pair_edges(
+    rule: Rule,
+    tables: list[TableCatalog],
+    edges: dict[tuple[str, str, str, str], _Edge],
+    proposal: StateProposal,
+) -> None:
+    groups: dict[str, list[RuleConstraint]] = {}
+    for constraint in rule.constraints:
+        if constraint.operator not in {RuleOperator.EQ, RuleOperator.IN}:
+            continue
+        if len(constraint.values) != 1 or _pair_key(constraint.field) is None:
+            continue
+        groups.setdefault(constraint.condition or "", []).append(constraint)
+    for condition in groups:
+        all_constraints = [
+            (constraint, [str(value).strip() for value in constraint.values])
+            for constraint in rule.constraints
+            if (constraint.condition or "") == condition
+            and constraint.operator in {RuleOperator.EQ, RuleOperator.IN}
+            and constraint.values
+        ]
+        resolved, ambiguous = resolve_field_group(
+            tables, [constraint.field for constraint, _values in all_constraints]
+        )
+        for field, count in ambiguous:
+            proposal.warnings.append(
+                f"state_path_field_ambiguous:{field}:{count}"
+            )
+        resolved_by_constraint = {
+            id(constraint): matches
+            for (constraint, _values), matches in zip(all_constraints, resolved)
+        }
+        pairs: dict[tuple[str, str], dict[str, tuple[ColumnCatalog, str]]] = {}
+        for constraint, _values in all_constraints:
+            parsed = _pair_key(constraint.field)
+            matches = resolved_by_constraint[id(constraint)]
+            if parsed is None or len(matches) != 1:
+                continue
+            side, base = parsed
+            table, column = matches[0]
+            pairs.setdefault((table.name, base), {})[side] = (
+                column,
+                str(constraint.values[0]).strip(),
+            )
+        for (table_name, base), sides in pairs.items():
+            if "before" not in sides or "after" not in sides:
+                continue
+            before_column, before_raw = sides["before"]
+            after_column, after_raw = sides["after"]
+            before = _transition_value(before_raw, before_column)
+            after = _transition_value(after_raw, after_column)
+            _add_edge(
+                edges,
+                _Edge(
+                    table_name,
+                    base,
+                    str(before),
+                    str(after),
+                    before,
+                    after,
+                    rule.rule_key,
+                    condition,
+                ),
+            )
+
+
+def _add_edge(
+    edges: dict[tuple[str, str, str, str], _Edge],
+    edge: _Edge,
+) -> None:
+    edges.setdefault(
+        (edge.table, edge.column, edge.before_key, edge.after_key), edge
+    )
+
+
+def _find_multi_step_paths(
+    edges: list[_Edge],
+    proposal: StateProposal,
+) -> list[list[_Edge]]:
+    adjacency: dict[str, list[_Edge]] = {}
+    incoming: set[str] = set()
+    for edge in edges:
+        adjacency.setdefault(edge.before_key, []).append(edge)
+        incoming.add(edge.after_key)
+    starts = [edge for edge in edges if edge.before_key not in incoming]
+    if not starts:
+        starts = list(edges)
+    paths: list[list[_Edge]] = []
+    seen: set[tuple[tuple[str, str, str], ...]] = set()
+
+    def signature(path: list[_Edge]) -> tuple[tuple[str, str, str], ...]:
+        return tuple(
+            (edge.rule_key, edge.before_key, edge.after_key) for edge in path
+        )
+
+    def walk(path: list[_Edge], used: set[tuple[str, str, str]]) -> None:
+        if len(path) >= MAX_PATH_STEPS:
+            if len(path) >= 2:
+                key = signature(path)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(list(path))
+            return
+        last = path[-1]
+        candidates = [
+            edge
+            for edge in adjacency.get(last.after_key, [])
+            if (edge.rule_key, edge.before_key, edge.after_key) not in used
+        ]
+        if not candidates:
+            if len(path) >= 2:
+                key = signature(path)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(list(path))
+            return
+        for edge in candidates:
+            marker = (edge.rule_key, edge.before_key, edge.after_key)
+            used.add(marker)
+            path.append(edge)
+            walk(path, used)
+            path.pop()
+            used.remove(marker)
+
+    for start in starts:
+        marker = (start.rule_key, start.before_key, start.after_key)
+        walk([start], {marker})
+        if len(paths) >= MAX_STATE_PATHS:
+            proposal.warnings.append(f"state_path_limit:{MAX_STATE_PATHS}")
+            break
+    return paths
+
+
+def _state_path(
+    table: str,
+    column: str,
+    edges: list[_Edge],
+) -> StatePath:
+    payload = {
+        "table": table,
+        "column": column,
+        "steps": [
+            {
+                "rule_key": edge.rule_key,
+                "condition": edge.condition,
+                "from": edge.before_key,
+                "to": edge.after_key,
+            }
+            for edge in edges
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:6]
+    label = "".join(
+        char if char.isalnum() else "_" for char in f"{table}_{column}"
+    )
+    return StatePath(
+        path_key=f"path_{label}_{digest}",
+        table=table,
+        column=column,
+        steps=[
+            StatePathStep(
+                rule_key=edge.rule_key,
+                condition=edge.condition,
+                from_value=edge.before_value,
+                to_value=edge.after_value,
+            )
+            for edge in edges
+        ],
+        source="rule",
+        evidence=Evidence.INFERRED,
+    )
 
 
 def _validate_target(

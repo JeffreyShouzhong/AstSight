@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十二个提交）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十四个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -84,7 +84,38 @@
 | 示例端到端验收 | ✅ 2026-11-17 | partner 示例跑通 `catalog --ruleset --rule-states --code` → `data semantics --ruleset` → `data plan`：4/4 plan 生成、0 rejected；修复示例语义草稿的过期 `rule_key`；新增示例资产一致性测试 |
 | 同组字段消歧 | ✅ 2026-11-17 | `resolve_field_group`：同一 condition 内用唯一字段收窄同名字段，仍不唯一才告警放弃；规则折叠与状态候选共用；示例 `audit_step` 正确落到 `partner`，`semantic_values` 10 → 12 |
 | 成对字段迁移 | ✅ 2026-11-17 | `from_*/to_*`、`old_*/new_*`、`before_*/after_*` 生成 `transition_*` 候选；行内保存两列、`target_state` 声明 to 值；`NULL` 转 null；父表被引用列非主键时补占位值；示例 BR-27 生成 1 条转移候选 |
-| 状态造数闭环 | ✅ 2026-11-17 | e2e：规则生成的跨表状态/成对字段状态作为 `preconditions.state_key` → `data plan` → SQLite `apply`/`teardown`；修复 `apply._run` 二次反转 delete 导致外键失败；新增 2 条 e2e 测试；全量 494 passed / 37 skipped |
+| 状态造数闭环 | ✅ 2026-11-17 | e2e：规则生成的跨表状态/成对字段状态作为 `preconditions.state_key` → `data plan` → SQLite `apply`/`teardown`；修复 `apply._run` 二次反转 delete 导致外键失败；新增 2 条 e2e 测试 |
+| 状态审查命令 | ✅ 2026-11-17 | `data states`：列出 state_key、规则 key、各表行数、target_state、占位 gap 与 fixture 校验错误；`--state` 过滤、`--json`；分类计数 rule/transition/seed |
+| 多步迁移路径 | ✅ 2026-11-17 | `DataCatalog.state_paths` + `StatePath/StatePathStep`：同一 (table,column) 的 transition 边按 before=上一步 after 连成路径，最多 5 步/50 条；transition 与 from/to 成对字段都贡献边；`data states` 展示路径；只读描述，不生成 fixtures；测试 499 passed / 37 skipped |
+
+## 本轮完成（多步迁移路径，2026-11-17）
+
+1. **契约**：新增 `StatePathStep` / `StatePath`，`DataCatalog.state_paths` 保存
+   `path_key`、`table`、`column`、`steps`、`source`、`evidence`；旧目录缺省为空。
+2. **建边**：`operator="transition"` 生成 `(table, column, before → after)`；
+   `from_*/to_*`、`old_*/new_*`、`before_*/after_*` 成对字段以去掉前缀的 base 名
+   作为 column。同一 condition 内先用唯一字段消歧再建边。
+3. **连路径**：同一 `(table, column)` 内按 `before == 上一步 after` 连边，最多 5 步；
+   按边签名去重，只记录无法继续延伸的路径；起点是没有入边的 before，环形图从
+   任意边起步并靠边去重收敛；最多 50 条，超出写 `state_path_limit`。
+4. **产物边界**：路径只描述规则推导出的状态流转，不生成 SQL、不展开成多行
+   fixtures，也不自动生成断言；C5a 提示词标记为“理解用、不是可执行状态”。
+5. **展示**：`data states` 输出 `paths` 和每条路径的 `from → to`、规则 key、
+   condition；`--json` 包含 `state_paths`。
+6. **验证**：新增 3 条测试（transition 多步路径、成对字段路径、CLI 展示）；
+   全量 Python **499 passed, 37 skipped**（上轮 496/37，新增 3 条通过）。
+
+## 本轮完成（状态审查命令，2026-11-17）
+
+1. **命令**：新增 `data states --project ... --catalog ... [--state KEY] [--json]`，
+   直接读取目录，不需要重新生成。
+2. **内容**：每个状态输出 `state_key`、`rule_keys`、各表行数、`target_state`、
+   关联的 `state_placeholder` / `state_value_combinations_truncated` gap，以及
+   `validate_plan_fixtures` 的校验错误；顶部汇总 rule/transition/seed 数量。
+3. **边界**：只读展示，不修改目录；`--state` 不存在时显式失败；`--json` 便于接平台
+   或脚本。占位值原样展示，不隐藏、不包装成已确认数据。
+4. **验证**：新增 2 条 CLI 测试（正常列出、未知 state）；全量 Python
+   **496 passed, 37 skipped**（上轮 494/37，新增 2 条通过）。
 
 ## 本轮完成（状态造数闭环，2026-11-17）
 

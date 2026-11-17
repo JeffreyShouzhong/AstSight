@@ -338,6 +338,7 @@ def build_catalog(
     if rule_states:
         sources_out["rule_states"] = {
             "proposed": len(state_proposal.states),
+            "paths": len(state_proposal.paths),
             "placeholders": sum(
                 1
                 for gap in state_proposal.gaps
@@ -357,6 +358,9 @@ def build_catalog(
         "foreign_keys": [fk.model_dump(mode="json") for fk in foreign_keys],
         "order": order,
         "seed": seed.tables,
+        "state_paths": [
+            path.model_dump(mode="json") for path in state_proposal.paths
+        ],
     }
     return DataCatalog(
         schema_version=CATALOG_SCHEMA_VERSION,
@@ -371,6 +375,7 @@ def build_catalog(
         tables_order=order,
         field_semantics=list(field_semantics or []),
         states=states_out,
+        state_paths=list(state_proposal.paths),
         seeds=[
             {"table": table, "rows": len(rows)}
             for table, rows in sorted(seed.tables.items())

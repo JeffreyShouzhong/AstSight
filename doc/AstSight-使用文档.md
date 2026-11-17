@@ -915,6 +915,24 @@ PYTHONPATH=. python -m astsight data semantics \
 `state_unknown`。draft 里的 `rule_keys` 也必须来自**当前** `ruleset.json`，
 规则重抽后旧 key 会失效，需要同步更新示例或重新生成 draft。
 
+查看目录里的业务态候选：
+
+```bash
+PYTHONPATH=. python -m astsight data states \
+  --project $PROJECT \
+  --catalog .astsight/data/data_catalog.json \
+  --state rule_BR_01_1a2b3c   # 可选：只看一个状态
+```
+
+输出 `state_key`、规则 key、各表行数、`target_state`、占位 gap 和 fixture
+校验错误。加 `--json` 输出结构化结果，适合接平台或脚本。规则状态、迁移状态和
+seed 状态都会列出来，占位值会逐条说明，不会被当成已确认数据。
+
+如果规则能连成多步迁移（如 `pending → paid → shipped`），目录还会生成
+`state_paths`，`data states` 会按 `path_key` 列出每一步的 `from → to`、规则 key
+和 condition。路径只是描述规则推导出的状态流转，**不是可直接执行的 fixtures**，
+也不会自动展开成多行造数。
+
 ### 10.2 C5b 逐用例计划
 
 在用例批准后生成：
