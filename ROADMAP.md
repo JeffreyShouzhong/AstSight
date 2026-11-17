@@ -38,11 +38,11 @@
 `db_row.wait_ms` 支持显式异步落库轮询。规则库可声明原文明确的关系配方
 （`$response` / `$request` / `$step` / `$op`），A4 只选择 `relation_key` 并为 `$step`
 绑定具体步骤名，由框架确定性生成断言；未物化且未声明未覆盖的关系会阻断导入。
-受控运算已扩展到 `avg/min/max/count_distinct/pluck`，并配有标注评估集与
-`tools/eval_relation_extraction.py`，可回归公式抽取的
-precision/recall/expression_accuracy。
-**下一步**：用评估集跟踪更长、含条件的自然语言公式，决定哪些公式值得进入规则层，
-哪些只能落成 gap。
+受控运算已扩展到 `avg/min/max/count_distinct/pluck`，并配有 20 条标注评估集与
+`tools/eval_relation_extraction.py`，覆盖条件公式、百分比、混合运算与跨步骤/请求
+混合；v10 基线 14/14 严格命中、P/R/expression_accuracy 均为 1.00。
+**下一步**：评估操作数顺序与更长的多条件公式，决定哪些公式值得进入规则层，
+哪些只能落成 gap；同时评估是否需要新增“上一个动作的请求字段”节点。
 这是“AI 测试能顶事”最关键的一步——只有 L1 时，框架只能判断“接口有没有按契约返回”，判断不了“业务对不对”。
 
 ### 2. 造数深度：方言已通，下一步反射与跨库 schema

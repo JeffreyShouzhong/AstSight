@@ -10,13 +10,18 @@ from astsight.evaluation import aggregate, load_corpus, score_case, signatures
 from contracts import RuleRelation
 
 
-def _expected(ops: list[str], sources: list[str] | None = None) -> dict:
+def _expected(
+    ops: list[str],
+    sources: list[str] | None = None,
+    paths: list[str] | None = None,
+) -> dict:
     return {
         "assertion_kind": "body_field",
         "target": "total",
         "op": "eq",
         "ops": ops,
         "sources": sources if sources is not None else ["response"],
+        "paths": paths if paths is not None else [],
     }
 
 
@@ -56,6 +61,14 @@ def test_score_case_reports_expression_mismatch_not_silent_match() -> None:
     )
     assert source_wrong["strict"] == 0
     assert source_wrong["expression_mismatches"]
+
+    # 来源类型相同、但引用了错误的字段路径，也不能算严格命中。
+    path_wrong = score_case(
+        [_expected([], ["response"], ["response:total"])],
+        [_expected([], ["response"], ["response:amount"])],
+    )
+    assert path_wrong["strict"] == 0
+    assert path_wrong["expression_mismatches"]
 
 
 def test_empty_expected_requires_no_prediction() -> None:
@@ -110,6 +123,7 @@ def test_signatures_read_ops_from_rule_relations() -> None:
             "op": "eq",
             "ops": ["pluck", "sum"],
             "sources": ["response"],
+            "paths": ["response:items"],
         }
     ]
 

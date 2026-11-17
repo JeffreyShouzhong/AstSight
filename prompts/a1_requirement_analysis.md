@@ -496,17 +496,27 @@ A 级的意思是"可判定"，不只是"有出处"。以下任一不满足，�
 }
 ```
 
-- `$response` 表示被测接口响应字段，`$request` 表示请求字段；`$op` 只允许
-  `len/sum/avg/min/max/count_distinct/pluck/add/sub/mul/div`：
+- `$response` 表示**当前被测接口**的响应字段，`$request` 表示**本次请求**的字段；
+  `$op` 只允许 `len/sum/avg/min/max/count_distinct/pluck/add/sub/mul/div`：
   - `len/sum/avg/min/max/count_distinct` 接收一个列表参数，对列表整体聚合；
   - `pluck` 接收 `[列表, "字段名"]`，把列表里每项的某个字段投影出来，
     例如 `{"$op": "sum", "args": [{"$op": "pluck", "args": [{"$response": "items"}, "price"]}]}`
     表示“总价 = 明细价格之和”。`pluck` 的第二个参数只能是单个字段名，不能是表达式。
   - 文档只写“平均/最大/最小/去重后数量”而没有给出具体字段时，写 `gap`，不要猜字段。
-- 文档明确写出**两个动作/接口之间**的字段关系时（如“查询返回的订单号与创建时一致”），
-  用 `$step` 写语义别名：`{"$step": "create.order_id"}`。别名取自文档里的动作语义
-  （`create` / `query` / `cancel` 等），只作为占位；具体步骤名由 A4 在用例中绑定。
-  不要为一个接口内部的字段关系使用 `$step`，那种情况用 `$response`。
+- **`$request` 与 `$step` 不要混用**：
+  - `"$request": "quantity"` 只表示**本次调用**的请求字段；文档说“本次请求里的 X”
+    才用它。
+  - `$step` 只表示**另一个动作/接口的响应字段**，例如“查询返回的订单号与创建订单时
+    返回的订单号一致”写成 `{"$step": "create.order_id"}`。别名取自文档里的动作语义
+    （`create` / `query` / `cancel` 等），具体步骤名由 A4 绑定。
+  - 当前表达式**没有“上一个动作的请求字段”节点**。文档写“创建请求里的 X”时，
+    如果 X 不是本次请求字段，不要用 `$step` 冒充，写 `gap` 或 `question` 说明
+    无法表达；不要把“创建请求”当成“创建响应”。
+- 百分比与混合公式按原文顺序展开，不要自行约分或改变常量：
+  `佣金 = 总额 × 费率 ÷ 100` 写成 `{"$op": "div", "args": [{"$op": "mul", "args": [{"$response": "total"}, {"$response": "rate"}]}, 100]}`。
+- 只有当条件能折叠成常量、或条件不影响公式本身时才输出关系。例如“使用优惠券时
+  应付 = 总额 − 优惠；未使用时优惠为 0”可以写成减法关系；“VIP 打九折”这类没有
+  具体字段取值的条件规则写 `gap` / `question`，不要自己补系数。
 - 数据库一致性用 `assertion_kind="db_row"`，`target="表.列"`；`where` 中同样可以引用
   `$response` / `$request` / `$step`。
 - `evidence` 必须是同一规则 `source.quote` 中的连续原文；框架会逐字校验。

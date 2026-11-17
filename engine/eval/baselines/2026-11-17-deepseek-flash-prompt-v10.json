@@ -1,0 +1,569 @@
+{
+  "corpus": "engine/eval/relation_formulas.json",
+  "name": "relation-formula-extraction",
+  "llm": {
+    "provider": "anthropic",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com/anthropic",
+    "auth_style": "bearer",
+    "timeout": 120.0,
+    "max_tokens": 16384,
+    "temperature": 0.0,
+    "max_retries": 1
+  },
+  "summary": {
+    "cases": 20,
+    "precision": 1.0,
+    "recall": 1.0,
+    "expression_accuracy": 1.0,
+    "expected": 14,
+    "predicted": 14,
+    "matched": 14,
+    "strict": 14,
+    "unexpected": 0
+  },
+  "cases": [
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "sum_pluck_total",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "pluck",
+            "sum"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:items"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "avg_pluck_score",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "average_score",
+          "op": "eq",
+          "ops": [
+            "avg",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:reviews"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "max_pluck_price",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "highest_price",
+          "op": "eq",
+          "ops": [
+            "max",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:items"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "distinct_sku_count",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "distinct_sku_count",
+          "op": "eq",
+          "ops": [
+            "count_distinct",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:items"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "len_items",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "item_count",
+          "op": "eq",
+          "ops": [
+            "len"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:items"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "div_unit_price",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "unit_price",
+          "op": "eq",
+          "ops": [
+            "div"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:quantity",
+            "response:total"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "echo_request_order_id",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "order_id",
+          "op": "eq",
+          "ops": [],
+          "sources": [
+            "request"
+          ],
+          "paths": [
+            "request:order_id"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "cross_step_order_id",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "order_id",
+          "op": "eq",
+          "ops": [],
+          "sources": [
+            "step"
+          ],
+          "paths": [
+            "step:order_id"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "descriptive_no_formula",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "vague_no_formula",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "previous_request_unsupported",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "conditional_coupon_sub",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "pay_amount",
+          "op": "eq",
+          "ops": [
+            "sub"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:discount",
+            "response:total"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "percentage_commission",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "commission",
+          "op": "eq",
+          "ops": [
+            "div",
+            "mul"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:rate",
+            "response:total"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "mixed_arithmetic_net",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "net_amount",
+          "op": "eq",
+          "ops": [
+            "mul",
+            "sub"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:discount",
+            "response:price",
+            "response:quantity"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "step_minus_request",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "sub"
+          ],
+          "sources": [
+            "request",
+            "step"
+          ],
+          "paths": [
+            "request:discount",
+            "step:total"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "request_times_price",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "mul"
+          ],
+          "sources": [
+            "request"
+          ],
+          "paths": [
+            "request:price",
+            "request:quantity"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "sum_two_lists",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "add",
+            "pluck",
+            "sum"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:items"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "vip_discount_unmapped",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "shipping_by_region",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "threshold_discount_no_fields",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    }
+  ]
+}

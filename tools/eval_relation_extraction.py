@@ -87,9 +87,11 @@ def _print_table(results: list[dict[str, Any]], summary: dict[str, Any]) -> None
             print(
                 f"  EXPR  {result['id']}: expected "
                 f"ops={item['expected'].get('ops')} "
-                f"sources={item['expected'].get('sources')}; got "
+                f"sources={item['expected'].get('sources')} "
+                f"paths={item['expected'].get('paths')}; got "
                 f"ops={item['predicted'].get('ops')} "
-                f"sources={item['predicted'].get('sources')}"
+                f"sources={item['predicted'].get('sources')} "
+                f"paths={item['predicted'].get('paths')}"
             )
         for error in result["validation_errors"]:
             print(f"  INVALID {result['id']}: {error}")

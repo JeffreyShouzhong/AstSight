@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近三个提交）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近四个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -22,8 +22,9 @@
 > A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。数据目录的
 > 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射，
 > 并会从注释、DBML Enum note、规则常量与 Java/Python/TS 枚举确定性地给出取值语义
-> 候选（每条带 `source`）。公式抽取已有离线评估集与脚本，下一步用评估结果决定
-> 哪些公式值得进规则层。
+> 候选（每条带 `source`）。公式抽取已有 20 条离线评估集与脚本，v10 基线
+> 14/14 严格命中、P/R/表达式准确率均为 1.00；下一步用评估结果决定哪些公式值得
+> 进规则层。
 
 ## 当前状态
 
@@ -71,9 +72,32 @@
 | 跨步骤规则关系 | ✅ 2026-11-17 | `RuleRelation` 新增 `$step` 语义引用（`"<别名>.<字段>"`）；用例 `relation_bindings` 把别名绑定到更早步骤，框架生成 `$ref` 断言挂到最后一步；缺绑定、绑定最后一步/不存在步骤、单请求用例使用 `$step` 均阻断导入 |
 | DB 反射与 DBML | ✅ 2026-11-17 | `data catalog` 支持 `--dbml` 与 `--db-url`（SQLite/PostgreSQL/MySQL 只读反射），与 `--ddl` 三选一；`--schema` 支持多 schema，表名用 `schema.table`；`--include/--exclude` glob 过滤；DBML 支持 Table/Enum/Ref/行内 ref/indexes |
 | 受控聚合运算 | ✅ 2026-11-17 | `$op` 新增 `avg/min/max/count_distinct/pluck`，断言与规则关系共用 `OP_ARITY`；`pluck` 只接受单个字段名；空列表/缺字段/类型错误运行期显式失败；`assert_expression_ops` 由白名单生成；A1 提示词升至 9 |
-| 公式抽取评估 | ✅ 2026-11-17 | `engine/eval/relation_formulas.json` 10 条标注（含 2 条负例）；`tools/eval_relation_extraction.py` 统计 precision/recall/expression_accuracy 并列出漏抽/误抽/表达式选错；基线 P=1.00 / R=1.00 / expr=0.90（8/8 召回、0 误抽、1 条把 `$request` 写成 `$step`）；打分逻辑 6 条单测 |
+| 公式抽取评估 | ✅ 2026-11-17 | `engine/eval/relation_formulas.json` 20 条标注（14 条公式 + 6 条负例）；`tools/eval_relation_extraction.py` 按目标/运算/来源/字段路径打分；v10 基线 P=1.00 / R=1.00 / expr=1.00（14/14 严格命中、0 误抽、6 条负例全部没补公式）；打分逻辑 6 条单测 |
 | 数据目录语义候选 | ✅ 2026-11-17 | `data/annotations.py`：注释关键词补 `semantic_type`；注释「值=含义」、DBML Enum note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量进入 `value_semantics`；表注释写入 `purpose`；冲突候选丢弃并告警；`data catalog --ruleset` |
 | 代码枚举常量 | ✅ 2026-11-17 | `data/codeconst.py`：静态扫描 Java/Python/TS 枚举（Python 用 ast，不执行代码）；按数据库枚举值、注释点名、表名+状态/类型命名三种路径映射；`ValueSemantics.source` 记录来源；`data catalog --code`；冲突/多候选/类型不符均告警，不猜 |
+
+## 本轮完成（公式抽取评估 v10，2026-11-17）
+
+1. **提示词纠偏**：A1 关系约束明确区分 `$request`（本次请求字段）与 `$step`
+   （另一个动作的**响应**字段），并写清当前表达式没有“上一个动作的请求字段”节点；
+   遇到“创建请求里的字段”这类表述必须写 `gap`/`question`，不能用 `$step` 冒充。
+   增加百分比、混合运算、条件公式的处理边界：条件能折叠成常量才输出关系，
+   “VIP 打九折”这类没有具体字段的规则写 gap，不自补系数。A1 提示词版本 9 → 10。
+2. **评估集扩展**：从 10 条扩到 20 条，新增条件公式（优惠券减免）、百分比佣金、
+   `price * quantity - discount` 混合运算、跨步骤减请求字段、请求字段相乘、
+   两个列表求和，以及 4 条新负例（上一个动作请求字段、VIP 折扣、按地区运费、
+   满减无字段）。原有“响应与创建请求一致”改写为“与本次请求一致”，避免语义歧义。
+3. **打分更严**：关系签名新增 `paths`，比较 `response:/request:/step:` 字段路径；
+   `$step` 只比较字段部分、忽略 A4 才绑定的步骤别名，避免惩罚等价别名。
+   现在会抓“来源类型对但字段引错”的情况。
+4. **基线结果**：DeepSeek + A1 提示词 v10 跑 20 条，**14/14 关系严格命中，
+   P=1.00 / R=1.00 / expression_accuracy=1.00，0 误抽，6 条负例全部没有补公式**。
+   原始结果在 `engine/eval/baselines/2026-11-17-deepseek-flash-prompt-v10.json`；
+   上一版 10 条 v9 基线保留在 `2026-11-17-deepseek-flash.json` 便于对比。
+5. **验证**：评估打分测试 6 条通过（新增字段路径错例）；全量 Python
+   **470 passed, 37 skipped**。文档同步 C1 使用文档、决策记录（v4.31）与 ROADMAP。
+6. **边界**：评估仍不比较表达式操作数顺序（如 `sub(a,b)` 与 `sub(b,a)`），只比较
+   目标、关系运算、运算集合、来源类型与字段路径；操作数顺序要靠规则原文人工审核。
 
 ## 本轮完成（代码枚举常量，2026-11-17）
 

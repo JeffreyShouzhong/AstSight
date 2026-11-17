@@ -20,7 +20,7 @@ from ..persistence import save_json_atomic
 from ..profile import load_spec, parse_operations
 
 RULES_CONTEXT_SCHEMA_VERSION = 1
-RULES_PROMPT_VERSION = "9"
+RULES_PROMPT_VERSION = "10"
 DEFAULT_RULES_OUT = ".astsight/rules"
 
 

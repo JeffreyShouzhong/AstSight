@@ -17,6 +17,9 @@
           ],
           "sources": [
             "response"
+          ],
+          "paths": [
+            "response:items"
           ]
         }
       ]
@@ -35,6 +38,9 @@
           ],
           "sources": [
             "response"
+          ],
+          "paths": [
+            "response:reviews"
           ]
         }
       ]
@@ -53,6 +59,9 @@
           ],
           "sources": [
             "response"
+          ],
+          "paths": [
+            "response:items"
           ]
         }
       ]
@@ -71,6 +80,9 @@
           ],
           "sources": [
             "response"
+          ],
+          "paths": [
+            "response:items"
           ]
         }
       ]
@@ -88,6 +100,9 @@
           ],
           "sources": [
             "response"
+          ],
+          "paths": [
+            "response:items"
           ]
         }
       ]
@@ -105,13 +120,17 @@
           ],
           "sources": [
             "response"
+          ],
+          "paths": [
+            "response:quantity",
+            "response:total"
           ]
         }
       ]
     },
     {
       "id": "echo_request_order_id",
-      "requirement": "查询订单时，响应中的 order_id 必须与创建请求里的 order_id 一致。",
+      "requirement": "查询订单时，响应中的 order_id 必须与本次请求里的 order_id 一致。",
       "expected": [
         {
           "assertion_kind": "body_field",
@@ -120,6 +139,9 @@
           "ops": [],
           "sources": [
             "request"
+          ],
+          "paths": [
+            "request:order_id"
           ]
         }
       ]
@@ -135,6 +157,9 @@
           "ops": [],
           "sources": [
             "step"
+          ],
+          "paths": [
+            "step:order_id"
           ]
         }
       ]
@@ -147,6 +172,158 @@
     {
       "id": "vague_no_formula",
       "requirement": "订单总额与订单明细存在关联，具体计算方式由业务方后续补充。",
+      "expected": []
+    },
+    {
+      "id": "previous_request_unsupported",
+      "requirement": "查询订单时，响应中的 order_id 必须与创建请求里的 order_id 一致。",
+      "expected": [],
+      "note": "当前表达式没有‘上一个动作的请求字段’节点，应写 gap 而不是用 $step 冒充"
+    },
+    {
+      "id": "conditional_coupon_sub",
+      "requirement": "使用优惠券时，响应中的 pay_amount 必须等于 total 减去 discount；未使用优惠券时 discount 为 0。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "pay_amount",
+          "op": "eq",
+          "ops": [
+            "sub"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:discount",
+            "response:total"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "percentage_commission",
+      "requirement": "响应中的 commission 必须等于 total 乘以 rate 再除以 100。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "commission",
+          "op": "eq",
+          "ops": [
+            "mul",
+            "div"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:rate",
+            "response:total"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mixed_arithmetic_net",
+      "requirement": "响应中的 net_amount 必须等于 price 乘以 quantity 再减去 discount。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "net_amount",
+          "op": "eq",
+          "ops": [
+            "mul",
+            "sub"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:discount",
+            "response:price",
+            "response:quantity"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "step_minus_request",
+      "requirement": "查询订单时，响应中的 total 必须等于创建订单时返回的 total 减去本次请求里的 discount。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "sub"
+          ],
+          "sources": [
+            "request",
+            "step"
+          ],
+          "paths": [
+            "request:discount",
+            "step:total"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "request_times_price",
+      "requirement": "创建订单的响应中，total 必须等于本次请求里的 quantity 乘以 price。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "mul"
+          ],
+          "sources": [
+            "request"
+          ],
+          "paths": [
+            "request:price",
+            "request:quantity"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sum_two_lists",
+      "requirement": "响应中的 total 必须等于 items 中 price 之和加上 items 中 tax 之和。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "add",
+            "sum",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ],
+          "paths": [
+            "response:items"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vip_discount_unmapped",
+      "requirement": "如果用户是 VIP，则订单打九折。",
+      "expected": []
+    },
+    {
+      "id": "shipping_by_region",
+      "requirement": "运费根据收货地区不同而不同。",
+      "expected": []
+    },
+    {
+      "id": "threshold_discount_no_fields",
+      "requirement": "满 100 元减 20 元。",
       "expected": []
     }
   ]

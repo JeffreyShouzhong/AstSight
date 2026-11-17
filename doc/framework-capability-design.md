@@ -588,10 +588,11 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 支持 `$ref` 引用更早步骤；`body_field.expect` 还支持 `$field` 引用当前响应字段，
 以及 `len/sum/avg/min/max/count_distinct/pluck/add/sub/mul/div` 受限运算，
 用固定 AST 解析，不执行任意 Python；空列表、缺投影字段和类型错误显式失败。
-离线评估集与脚本（`engine/eval/relation_formulas.json`、
+离线评估集与脚本（`engine/eval/relation_formulas.json` 20 条、
 `tools/eval_relation_extraction.py`）用于在提示词/模型变更后对比公式抽取的
-precision/recall/expression_accuracy（含 `response/request/step` 来源判定），
-不随测试自动调用模型。
+precision/recall/expression_accuracy，比较目标字段、关系运算、运算集合、
+`response/request/step` 来源与字段路径；不比较操作数顺序。脚本不随测试自动
+调用模型。
 `db_row.wait_ms` 支持 0–60000ms 的显式轮询，默认 0 只查询一次；轮询会结束当前只读
 事务，确保 MySQL `REPEATABLE READ` 的下一轮能看到新提交。
 同响应关系式与步骤引用均推导为 L3，引用两个及以上不同步骤为 L4。`assert_strength`

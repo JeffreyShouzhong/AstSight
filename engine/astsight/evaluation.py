@@ -17,6 +17,7 @@ from .rules.relations import iter_relation_nodes, relation_dynamic_kind
 def relation_signature(relation: Any) -> dict[str, Any]:
     ops: list[str] = []
     sources: set[str] = set()
+    paths: set[str] = set()
     for value in (getattr(relation, "expect", None), getattr(relation, "where", None)):
         try:
             nodes = list(iter_relation_nodes(value))
@@ -24,8 +25,15 @@ def relation_signature(relation: Any) -> dict[str, Any]:
             continue
         for node, _where in nodes:
             kind = relation_dynamic_kind(node)
-            if kind in {"response", "request", "step"}:
+            if kind in {"response", "request"}:
                 sources.add(kind)
+                paths.add(f"{kind}:{node.get(f'${kind}')}")
+                continue
+            if kind == "step":
+                sources.add(kind)
+                # 步骤别名由 A4 绑定，评估只比较字段路径，避免惩罚等价别名。
+                _alias, _, field = str(node.get("$step") or "").partition(".")
+                paths.add(f"step:{field}")
                 continue
             if kind != "op":
                 continue
@@ -38,6 +46,7 @@ def relation_signature(relation: Any) -> dict[str, Any]:
         "op": str(getattr(relation, "op", "")),
         "ops": sorted(ops),
         "sources": sorted(sources),
+        "paths": sorted(paths),
     }
 
 
@@ -88,6 +97,7 @@ def score_case(
             sorted(got.get("ops") or []) == sorted(want.get("ops") or [])
             and sorted(got.get("sources") or [])
             == sorted(want.get("sources") or [])
+            and sorted(got.get("paths") or []) == sorted(want.get("paths") or [])
         ):
             strict += 1
         else:
