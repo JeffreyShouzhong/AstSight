@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Iterable
 
@@ -221,6 +222,7 @@ def render_rule_set_markdown(ruleset: RuleSet, *, title: str | None = None) -> s
         ["A 级（有出处、可判定）", a_ratio],
         ["B 级（需推断或缺值）", str(b_level)],
         ["无原文落地（ungrounded）", str(ungrounded)],
+        ["结构化关系断言", str(sum(len(rule.relations) for rule in rules))],
         ["契约规则（CR）", str(len(ruleset.contract_rules))],
         ["冲突", str(len(ruleset.conflicts))],
         ["其中资损", str(severity_count.get(ConflictSeverity.LOSS, 0))],
@@ -248,6 +250,45 @@ def render_rule_set_markdown(ruleset: RuleSet, *, title: str | None = None) -> s
                 ]
                 for rule in rules
             ),
+        )
+    )
+    lines.append("")
+
+    relation_rows = [
+        [
+            rule.rule_id or rule.rule_key,
+            relation.relation_key,
+            _cell(relation.description, 180),
+            _cell(
+                json.dumps(
+                    relation.expect,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                160,
+            ),
+            f"{relation.assertion_kind}/{relation.op}",
+            _cell(relation.target, 100),
+            _cell(relation.evidence, 160),
+        ]
+        for rule in rules
+        for relation in rule.relations
+    ]
+    lines.append("## 2.1 关系断言")
+    lines.append("")
+    lines.extend(
+        _table(
+            [
+                "规则",
+                "relation_key",
+                "关系",
+                "表达式",
+                "断言",
+                "目标",
+                "原文依据",
+            ],
+            relation_rows,
+            empty_text="未抽取结构化关系。",
         )
     )
     lines.append("")

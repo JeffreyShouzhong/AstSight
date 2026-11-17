@@ -23,6 +23,7 @@ from .contract import build_contract_rules
 from .diff import RuleDiff, diff_rules
 from .draft import RuleDraft
 from .grounding import rule_value_tokens
+from .relations import relation_key, relation_literal_tokens, validate_relation
 from .validate import RuleValidation, build_rule_set, contract_rule_key, rule_fingerprint, rule_key, validate_rule_draft
 
 SUPPORTED_RULESET_SCHEMA = 2
@@ -126,6 +127,42 @@ def validate_rule_set(ruleset: RuleSet) -> list[str]:
                 errors.append(
                     f"{where}: 结构化约束值不在 quote 中: {missing}"
                 )
+        relation_keys: set[str] = set()
+        for relation_index, relation in enumerate(rule.relations):
+            relation_where = f"{where}.relations[{relation_index}]"
+            if not relation.relation_key:
+                errors.append(f"{relation_where}: relation_key 为空")
+                continue
+            expected_relation_key = relation_key(rule.rule_key, relation)
+            if relation.relation_key != expected_relation_key:
+                errors.append(
+                    f"{relation_where}: relation_key 与内容不一致"
+                )
+            if relation.relation_key in relation_keys:
+                errors.append(
+                    f"{relation_where}: 重复 relation_key {relation.relation_key}"
+                )
+            relation_keys.add(relation.relation_key)
+            if normalize_text(relation.evidence) not in normalize_text(
+                rule.source.quote
+            ):
+                errors.append(f"{relation_where}: evidence 不在 quote 中")
+            for code, message in validate_relation(relation):
+                errors.append(f"{relation_where}: {code}: {message}")
+            if rule.status is RuleStatus.ACTIVE:
+                missing = [
+                    token
+                    for token in [
+                        *relation_literal_tokens(relation.expect),
+                        *relation_literal_tokens(relation.where),
+                    ]
+                    if normalize_text(token)
+                    not in normalize_text(rule.source.quote)
+                ]
+                if missing:
+                    errors.append(
+                        f"{relation_where}: 关系字面量不在 quote 中: {missing}"
+                    )
         expected_fp = rule_fingerprint(rule)
         if rule.fingerprint and rule.fingerprint != expected_fp:
             errors.append(f"{where}: fingerprint 与内容不一致")

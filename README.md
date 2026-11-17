@@ -25,9 +25,12 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、Open
 ```
 
 > 目前支持状态码、响应字段、header、OpenAPI 响应 schema 和只读数据库行断言；
-> 强度 L1–L4 按内容自动推导。L3/L4 需要用例显式引用步骤响应，尚不能从需求文本
-> 自动推导业务关系——剩余边界列在[路线图](ROADMAP.md)上。我们把「尚未实现」写清楚，
-> 而不是藏起来——这是刻意的诚实。
+> 强度 L1–L4 按内容自动推导。关系断言可引用当前响应字段、更早步骤响应并执行受限算术，
+> `db_row.wait_ms` 支持异步落库轮询，规则中显式声明的结构化关系（含跨步骤语义引用）
+> 会由框架自动物化；
+> 尚不能从任意自然语言自动推导复杂业务公式——
+> 剩余边界列在[路线图](ROADMAP.md)上。我们把「尚未实现」写清楚，而不是藏起来——
+> 这是刻意的诚实。
 
 这是一份真实运行报告（示例项目 [partner_onboarding](engine/examples/partner_onboarding)，
 38 个用例全部通过、门禁 PASS）：
@@ -229,7 +232,8 @@ pytest 生成与执行、`agent run` 编排均已落地，示例项目 38 条用
 主要边界：
 
 - 断言覆盖状态码、响应字段、header、OpenAPI schema 和只读数据库行；L3/L4 关系断言
-  需要用例显式写 `$ref`，框架尚不能从需求文本自动推导业务不变量。
+  支持 `$ref`、当前响应 `$field` 与受限算术；规则中明确声明的 relations 由框架自动物化，
+  复杂自然语言公式仍不能可靠自动推导。
 - 造数支持 SQLite / PostgreSQL / MySQL；三者共用同一套 fixture 校验与事务语义，
   驱动分别为 stdlib `sqlite3`、`psycopg`、`PyMySQL`。
 - HTTP 是主路径；gRPC 仅 unary。Dubbo 2.7+ 消费端 Mock 由 Java agent 的 Filter

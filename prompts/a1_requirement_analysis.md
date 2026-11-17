@@ -476,6 +476,37 @@ A 级的意思是"可判定"，不只是"有出处"。以下任一不满足，�
 }
 ```
 
+### 关系约束（`relations`）
+
+只有文档**明确写出**两个值之间的相等、大小或计算关系时才输出 `relations`。
+不要从业务流程“顺手补公式”；文档没给公式就写 `gap` / `question`。
+
+```json
+{
+  "relation_id": "RR-01",
+  "assertion_kind": "body_field",
+  "target": "total",
+  "op": "eq",
+  "expect": {
+    "$op": "len",
+    "args": [{"$response": "items"}]
+  },
+  "description": "返回的 total 等于 items 的数量",
+  "evidence": "total 必须等于 items 的数量"
+}
+```
+
+- `$response` 表示被测接口响应字段，`$request` 表示请求字段；`$op` 只允许
+  `len/sum/add/sub/mul/div`。
+- 文档明确写出**两个动作/接口之间**的字段关系时（如“查询返回的订单号与创建时一致”），
+  用 `$step` 写语义别名：`{"$step": "create.order_id"}`。别名取自文档里的动作语义
+  （`create` / `query` / `cancel` 等），只作为占位；具体步骤名由 A4 在用例中绑定。
+  不要为一个接口内部的字段关系使用 `$step`，那种情况用 `$response`。
+- 数据库一致性用 `assertion_kind="db_row"`，`target="表.列"`；`where` 中同样可以引用
+  `$response` / `$request` / `$step`。
+- `evidence` 必须是同一规则 `source.quote` 中的连续原文；框架会逐字校验。
+- 固定值断言继续放 `constraints`，不是 `relations`。
+
 ### 字段约束
 
 | 字段                             | 约束                                                                                                                          |
@@ -489,6 +520,9 @@ A 级的意思是"可判定"，不只是"有出处"。以下任一不满足，�
 | `constraints[].values`         | 最多 20 项；数字、枚举、错误码都写成字符串或数字；`between` 用两个值表示区间                                                                               |
 | `constraints[].exhaustive`     | 仅 `in/not_in` 使用，**且必须显式给出**                                                                                                |
 | `constraints[].error_code`     | 同一字段/条件下应一致；不一致会被框架标为确定性冲突                                                                                                  |
+| `relations`                    | 最多 20 项；只写原文明确关系，表达式只允许 `$response/$request/$step/$op`                                                                              |
+| `relations[].evidence`         | 必须是规则 `source.quote` 的连续子串                                                                                                  |
+| `relations[].target`           | `body_field` 为响应顶层字段；`db_row` 为 `table.column`                                                                               |
 | `source.doc`                   | 必须是输入中的文档路径                                                                                                                 |
 | `source.section`               | 必须是输入中的 section `path` 或 `number`                                                                                           |
 | `source.quote`                 | 必须是 section 原文连续子串；不得改写、拼接或省略                                                                                               |

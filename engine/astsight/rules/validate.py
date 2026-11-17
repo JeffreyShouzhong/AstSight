@@ -27,6 +27,7 @@ from .conflicts import detect_constraint_conflicts
 from .context import resolve_section
 from .draft import RuleDraft
 from .grounding import classify_grounding, rule_value_tokens
+from .relations import relation_key, validate_relation
 
 _RULE_ID_RE = re.compile(r"^BR-\d{2,}$")
 _MAX_RULES = 500
@@ -152,7 +153,7 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
             continue
 
         grounding = classify_grounding(
-            rule_value_tokens(item.text, item.constraints),
+            rule_value_tokens(item.text, item.constraints, item.relations),
             quote,
             section_text,
         )
@@ -177,6 +178,42 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
                 f"{where}: A 级规则中的数字/枚举未在 quote 原文落地，降为 B"
             )
             authority = RuleAuthority.B
+        relation_errors = False
+        relations = []
+        seen_relation_keys: set[str] = set()
+        for relation_index, relation in enumerate(item.relations):
+            relation_where = f"{where}.relations[{relation_index}]"
+            evidence = normalize_text(relation.evidence)
+            if evidence not in quote:
+                result.errors.append(
+                    f"{relation_where}: evidence 不在规则 quote 原文中"
+                )
+                relation_errors = True
+                continue
+            errors = validate_relation(relation)
+            for code, message in errors:
+                result.errors.append(f"{relation_where}: {code}: {message}")
+            if errors:
+                relation_errors = True
+                continue
+            key = relation_key(rule_key(item.source.doc, canonical_section, item.text), relation)
+            if key in seen_relation_keys:
+                result.errors.append(
+                    f"{relation_where}: relation_key 重复: {key}"
+                )
+                relation_errors = True
+                continue
+            seen_relation_keys.add(key)
+            relations.append(
+                relation.model_copy(
+                    update={
+                        "relation_id": relation.relation_id or f"RR-{relation_index + 1:02d}",
+                        "relation_key": key,
+                    }
+                )
+            )
+        if relation_errors:
+            continue
         key = rule_key(item.source.doc, canonical_section, item.text)
         if key in seen:
             result.errors.append(f"{where}: rule_key 与 rules[{seen[key]}] 重复: {key}")
@@ -206,6 +243,7 @@ def validate_rule_draft(draft: RuleDraft, context: dict[str, Any]) -> RuleValida
             entities=list(dict.fromkeys(item.entities)),
             fields=list(dict.fromkeys(item.fields)),
             constraints=list(item.constraints),
+            relations=relations,
             source=RuleSource(
                 doc=item.source.doc,
                 section=canonical_section,

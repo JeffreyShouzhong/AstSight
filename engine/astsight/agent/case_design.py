@@ -16,6 +16,7 @@ from ..cases.draft import CaseDraft
 from ..cases.validate import ValidationResult, validate_draft
 from ..llm import LLMClient, LLMError
 from ..rules import rule_set_hash
+from ..rules.relations import relation_step_aliases
 from .errors import AgentError
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +53,22 @@ def _rule_view(ruleset: RuleSet) -> list[dict[str, Any]]:
                 "type": rule.type.value,
                 "entities": list(rule.entities),
                 "fields": list(rule.fields),
+                "relations": [
+                    {
+                        "relation_id": relation.relation_id,
+                        "relation_key": relation.relation_key,
+                        "assertion_kind": relation.assertion_kind,
+                        "target": relation.target,
+                        "op": relation.op,
+                        "expect": relation.expect,
+                        "where": relation.where,
+                        "wait_ms": relation.wait_ms,
+                        "step_aliases": relation_step_aliases(relation),
+                        "description": relation.description,
+                        "evidence": relation.evidence,
+                    }
+                    for relation in rule.relations
+                ],
                 "authority": rule.authority.value,
                 "source_kind": rule.source.kind.value,
                 "priority": rule.priority.value,

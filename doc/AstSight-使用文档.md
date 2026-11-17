@@ -560,6 +560,8 @@ PYTHONPATH=. python -m astsight cases prepare \
 - code 用例至少 1 条 `change_refs`；
 - `preconditions[].state_key` 必须存在于 `data_catalog.states`；
 - `mock_bindings` 是 `{dep_id: branch}`，dep 和 branch 都必须存在；
+- `relation_refs` 选择要物化的规则关系；含 `$step` 的关系还必须用
+  `relation_bindings` 把语义别名绑定到更早的步骤名，否则导入阻断；
 - 断言值必须来自规则原文或契约；`response_fields` 已包含 4xx/5xx 错误体字段，
   断言未声明字段会产生 `assertion.response_field_unknown` warning；
 - `uncovered_requirements[].rule_keys` 填写该 section 下明确未覆盖的 A/B 级规则；
@@ -622,11 +624,38 @@ PYTHONPATH=. python -m astsight cases prepare \
 
 约束与执行语义：
 
+- `body_field.expect` 支持受限关系表达式：`{"$field": "items"}` 引用当前响应字段，
+  `{"$ref": "first.id"}` 引用更早步骤字段，表达式运算只允许
+  `len` / `sum` / `add` / `sub` / `mul` / `div`。例如：
+
+  ```json
+  {
+    "kind": "body_field",
+    "target": "total",
+    "op": "eq",
+    "expect": {"$op": "len", "args": [{"$field": "items"}]}
+  }
+  ```
+
+  表达式由生成器翻译为固定的取值与运算代码，不执行任意 Python。`$field` / `$op`
+  仅允许出现在响应断言中，不得用于请求体、query、path 参数或 header。
+- 规则库的 `rules[].relations` 可声明带原文证据的关系配方，表达式使用
+  `$response` / `$request` / `$step` / `$op`。A4 在用例 `relation_refs` 中选择关系，
+  框架会自动生成带 `relation_ref` 的 `body_field` 或 `db_row` 断言，模型不需要重复手写表达式。
+  关系无法映射时，必须在 `uncovered_requirements[].relation_keys` 中列明；
+  A/B 规则关系既未物化也未声明会阻断提案导入。
+- 跨步骤关系用 `$step` 写语义别名，例如规则里声明
+  `{"$step": "create.order_id"}`，A4 在用例中绑定具体步骤名：
+  `"relation_bindings": {"RR-...": {"create": "create_order"}}`。框架会把别名替换成
+  `{"$ref": "create_order.order_id"}` 并挂在用例最后一步；绑定缺失、绑定到最后一步
+  或绑定不存在的步骤都会阻断导入。
 - `body_schema` 使用 OpenAPI 中该状态码的 JSON Schema（本地 `$ref` 已内联）；
   该状态码没有 JSON Schema 时校验报错。生成的 pytest 需要 `jsonschema`。
 - `db_row` 只执行只读 `SELECT`；表名/列名先做标识符白名单校验，值全部参数化。
   声明了 `db_row` 的项目应通过 `--data-catalog` 提供目录，导入时会校验
   表、列和 `where` 列是否存在；缺目录只产生 `assertion.db_catalog_missing` warning。
+- `db_row.wait_ms` 可设为 0–60000，0 表示只查询一次；异步落库场景可设置等待时间，
+  框架会轮询到断言通过或超时。只有需求/设计明确最终一致时才应使用非零值。
 - 生成用例运行时若未设置 `ASTSIGHT_DB_URL`，`db_row` 断言会 skip 为
   `data_unavailable`，不会伪装成通过。
 - 失败场景可加 `db_row` 断言验证“没有副作用”，例如创建失败后
@@ -636,7 +665,7 @@ PYTHONPATH=. python -m astsight cases prepare \
 
 - L1：仅状态码、字段存在、`body_schema` 结构校验；
 - L2：`body_field` / `header` / `db_row` 的确定值比较；
-- L3：断言引用了更早步骤的响应（`$ref`）；
+- L3：同响应字段关系（`$field` / 受限运算），或断言引用了更早步骤的响应（`$ref`）；
 - L4：同时引用两个及以上不同步骤（跨响应不变量）。
 
 声明值与推导值不一致会产生 `assert_strength.mismatch` warning，导入以推导值为准。

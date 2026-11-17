@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（v4.21，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例、v4.21 Dubbo 消费端 Filter 首版、v4.24 `agent run` Dubbo 全链路）
+# AstSight — 能力设计规格说明书（v4.27，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例、v4.21 Dubbo 消费端 Filter 首版、v4.24 `agent run` Dubbo 全链路、v4.25 断言关系表达式与落库轮询、v4.26 规则关系自动物化、v4.27 跨步骤规则关系）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -245,8 +245,9 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 | 实体 | 关键字段 | 说明 |
 | --- | --- | --- |
 | `RuleSet` | schema_version, ruleset_id, project, version, generated_at, prompt{name, version, model}, documents[], rules[], contract_rules[], questions[], gaps[], conflicts[] | 当前规则库快照；`ruleset_id` = 文档 hash + 契约源 hash + prompt 版本 |
-| `Rule` | rule_key, rule_id, text, type, entities[], fields[], constraints[], source{doc, version(sha256), doc_version, section, kind}, authority, impact, priority, reasoning, fingerprint | BR 业务规则；字段对齐 a1 提示词输出契约（`version` 回填为文档 hash） |
+| `Rule` | rule_key, rule_id, text, type, entities[], fields[], constraints[], relations[], source{doc, version(sha256), doc_version, section, kind}, authority, impact, priority, reasoning, fingerprint | BR 业务规则；字段对齐 a1 提示词输出契约（`version` 回填为文档 hash） |
 | `RuleConstraint` | field, operator(eq/ne/in/not_in/min/max/between/pattern/required/forbidden/transition/other), values[], condition, error_code, exhaustive | 结构化约束；只用于 quote 落地与确定性冲突检测，不是运行时表达式 |
+| `RuleRelation` | relation_id, relation_key, assertion_kind(body_field/db_row), target, op, expect, where, wait_ms, description, evidence | 原文明确的关系配方；`$response/$request/$step` 表示取值来源，`$op` 仅为受限运算；`relation_key` 由框架计算，A4 只选择该键 |
 | `ContractRule` | rule_key, rule_id, transport, endpoint, field, constraint, source, authority=A | CR 契约规则；由契约源（HTTP：OpenAPI / Spring MVC 注解；gRPC：proto/descriptor；Dubbo：接口源码）确定性生成，不调用 LLM |
 | `RuleQuestion` | id, text, reason, impact | 文档没写清、必须人工澄清的问题；不参与判定 |
 | `RuleGap` | kind(implicit/quantity/cross_system), desc, reason, related_interfaces[] | 抽不出的规则；不占 BR 编号，不计入覆盖率分母 |
@@ -266,7 +267,7 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
   `priority` 原样保留。`source.kind` 只有 `explicit` / `inferred` 两值；`reasoning` 仅 P0
   与高风险规则输出（提示词声明下游可忽略），框架保留用于审核阅读与审计，不进入
   fingerprint、不进入执行。
-- `Rule.fingerprint` 覆盖 `text / type / fields / constraints / source(doc, section, kind) /
+- `Rule.fingerprint` 覆盖 `text / type / fields / constraints / relations / source(doc, section, kind) /
   authority / priority`；不覆盖 `rule_id / reasoning / source.version / source.doc_version /
   生成时间`。空约束不写入 fingerprint payload，兼容加结构化约束之前保存的规则库。
   文档 hash 变化但规则文本与 section 未变时不算规则变更，只记 `doc_version_drift`。
@@ -355,7 +356,8 @@ rules import --context <analysis_id> --draft rules.draft.json
 | D | 历史缺陷归纳 | 仅作回归断言 | 必须标 provenance，且不能替代 A/B |
 
 **规则值落地校验（确定性）**：规则 `text` 中的数字、反引号内容、错误码，以及结构化
-`constraints.values` / `constraints.error_code`，必须能在 `source.quote` 中逐字找到。
+`constraints.values` / `constraints.error_code` 与关系表达式的字面量，必须能在
+`source.quote` 中逐字找到；`RuleRelation.evidence` 也必须是 quote 连续子串。
 值只在 `source.section` 其他位置出现时标 `ungrounded`（A 级同时降 B）；section 中完全
 不存在则视为编造并拒绝导入。该检查只保证“值有出处”，不证明语义正确——语义仍由用例审核确认。
 
@@ -364,6 +366,13 @@ exhaustive`）只用于确定性比较，不是运行时表达式。框架对同
 约束做范围、枚举、必填/禁止、错误码冲突检测，生成 `RuleConflict(origin="framework")`；
 模型自报的冲突标 `origin="model"`，二者可合并为 `model+framework`。冲突只记录，不改变
 规则状态，也不阻断导入。
+
+**关系约束**：`Rule.relations` 只接受原文明确写出的关系，不由模型补公式。
+`$response` / `$request` 分别表示当前响应与请求字段，`$step` 表示另一动作的响应字段，
+`$op` 仅允许 `len/sum/add/sub/mul/div`。A4 在用例中只选择 `relation_refs`，框架把它们
+转换成带 `relation_ref` 的 `body_field` 或 `db_row` 断言；`$step` 的语义别名由 A4 在
+`relation_bindings` 中绑定到更早的用例步骤名，框架生成 `$ref` 并挂到最后一步。
+A/B 规则关系未物化且未进入 `uncovered_requirements[].relation_keys` 时用例导入阻断。
 
 **冲突处理**：规则阶段不设人工裁决。`RuleConflict` 进入 A4 输入和用例审核文件；
 A4 不得自行合并或改写冲突规则，引用冲突规则的用例带 `rule.conflict` warning；
@@ -570,17 +579,24 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 | --- | --- | --- | --- |
 | L1 | 状态码 / 字段存在 / 结构 | `status==200`、`data.id != null`、`body_schema` | 崩溃、契约破坏 |
 | L2 | 确定值 / 字段值 | `total == 108.00`、`db_row.status == "active"` | 计算错误（数据一变就误报） |
-| L3 | 关系式 | `{"$ref": "create.order_id"}` 与前一步响应比较 | 计算口径错误 |
+| L3 | 关系式 | `{"$ref": "create.order_id"}` 跨步骤比较，或 `total == len(items)` 同响应关系 | 计算口径错误 |
 | L4 | 跨实体不变量 | 同时引用两个步骤的响应做一致性校验 | 资损、状态错乱 |
 
 **实现现状**：codegen 支持状态码、`body_field`、`header`、OpenAPI `body_schema`
 和只读 `db_row` 断言；`body_field` / `db_row` 的 `expect` 与 `db_row.where`
-支持 `$ref` 引用更早步骤，因此 L3/L4 由步骤引用表达。`assert_strength` 按断言
-内容自动推导（L3：存在引用；L4：引用两个及以上不同步骤），不信任草案声明值；
-不一致时产生 `assert_strength.mismatch` warning。
+支持 `$ref` 引用更早步骤；`body_field.expect` 还支持 `$field` 引用当前响应字段，
+以及 `len/sum/add/sub/mul/div` 受限运算，用固定 AST 解析，不执行任意 Python。
+`db_row.wait_ms` 支持 0–60000ms 的显式轮询，默认 0 只查询一次；轮询会结束当前只读
+事务，确保 MySQL `REPEATABLE READ` 的下一轮能看到新提交。
+同响应关系式与步骤引用均推导为 L3，引用两个及以上不同步骤为 L4。`assert_strength`
+按断言内容自动推导，不信任草案声明值；不一致时产生 `assert_strength.mismatch` warning。
 
-框架不自动把业务关系“翻译”成 L3/L4：草案若只能给出 L1/L2 而需求要求更高强度，
-必须在 `assumptions` 或 `uncovered_requirements` 中显式说明，**不得把降级断言标成已覆盖**。
+规则库 `relations` 已成为 L3/L4 的设计期事实源：A4 只选择 `relation_refs`，框架把
+`$response` 转为 `$field`、保留 `$request`，并生成带 `relation_ref` 的断言。跨步骤关系
+在规则里用 `$step` 写语义别名，A4 用 `relation_bindings` 把它绑定到用例中更早的具体
+步骤名，框架生成 `$ref` 断言并挂到最后一步。A/B 规则关系没有被任何用例物化、也没有
+写入 `uncovered_requirements[].relation_keys` 时，用例导入阻断；不得用 L1/L2 断言冒充
+关系已覆盖。
 
 #### 3.2.6 门禁
 
@@ -589,6 +605,7 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 | 用例库可加载 | schema / fingerprint 版本受支持，fingerprint 重算一致 | 否则拒绝加载 |
 | 两级用例完整性 | business：`rule_refs`+`requirement_refs` 非空；code：`rule_refs`+`change_refs` 非空 | 缺失拒绝导入 |
 | 规则引用有效 | `rule_key` 可解析；非 `ungrounded`；C/D 不得单独作 oracle | approve 时阻断；引用冲突规则只告警 |
+| 规则关系覆盖 | 每个 A/B `relation_key` 已物化，或列入 `uncovered_requirements[].relation_keys` | 否则用例导入 blocker |
 | 规则漂移 | 引用 `rule_drift` 规则的用例标 `stale` | full/delta 默认阻断，可 `--allow-stale-cases` |
 | 无可执行用例 | `cases` 模式 blocker | 不编码、不执行 |
 | 待审 proposal | warning + `degraded` | `--fail-on-pending-proposals` 升级为 blocker |

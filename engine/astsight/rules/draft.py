@@ -13,6 +13,7 @@ from contracts import (
     Priority,
     RuleAuthority,
     RuleConstraint,
+    RuleRelation,
     RuleSourceKind,
     RuleType,
 )
@@ -49,6 +50,7 @@ class DraftRule(BaseModel):
     entities: list[str] = Field(default_factory=list, max_length=50)
     fields: list[str] = Field(default_factory=list, max_length=50)
     constraints: list[RuleConstraint] = Field(default_factory=list, max_length=50)
+    relations: list[RuleRelation] = Field(default_factory=list, max_length=20)
     source: DraftRuleSource
     authority: RuleAuthority = Field(default=RuleAuthority.B)
     impact: str = Field(default="", max_length=1_000)

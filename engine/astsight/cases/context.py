@@ -402,6 +402,7 @@ def build_context(
             "body_schema": ["matches"],
             "db_row": ["exists", "absent", "eq", "ne", "gte", "lte", "count_eq"],
         },
+        "assert_expression_ops": ["len", "sum", "add", "sub", "mul", "div"],
     }
 
 

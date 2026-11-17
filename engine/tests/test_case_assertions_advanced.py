@@ -4,20 +4,28 @@ from __future__ import annotations
 import importlib.util
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 from astsight.cases.context import build_context
-from astsight.cases.draft import CaseDraft
+from astsight.cases.draft import CaseDraft, UncoveredRequirement
 from astsight.cases.strength import derive_assert_strength
 from astsight.cases.templates import generate_cases
 from astsight.cases.validate import validate_draft
 from astsight.codegen import generate_pytest
 from astsight.data.catalog import build_catalog
 from astsight.data.ddl import parse_ddl
-from contracts import AssertStrength, Assertion
+from contracts import (
+    AssertStrength,
+    Assertion,
+    Rule,
+    RuleRelation,
+    RuleSet,
+    RuleSource,
+)
 
 API_DOC = """# 订单服务
 
@@ -39,6 +47,9 @@ SPEC = {
                 "properties": {
                     "order_id": {"type": "integer"},
                     "status": {"type": "string"},
+                    "total": {"type": "integer"},
+                    "items": {"type": "array"},
+                    "echo": {"type": "string"},
                 },
             }
         }
@@ -315,6 +326,362 @@ def test_assert_strength_is_derived_from_content(tmp_path: Path) -> None:
     )
 
 
+def test_same_response_relation_is_generated_and_evaluated(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    expression = {
+        "$op": "sub",
+        "args": [
+            {"$field": "balance_before"},
+            {"$field": "amount"},
+        ],
+    }
+    result = validate_draft(
+        _draft(
+            context,
+            _case(
+                [
+                    {"kind": "status_code", "op": "eq", "expect": 201},
+                    {
+                        "kind": "body_field",
+                        "target": "order_id",
+                        "op": "eq",
+                        "expect": expression,
+                    },
+                ]
+            ),
+        ),
+        context,
+        project=tmp_path,
+    )
+    assert result.errors == []
+    case = result.resolved[0].case
+    assert case.assert_strength is AssertStrength.L3
+
+    generated = generate_pytest([case], tmp_path / "generated")
+    assert generated.errors == []
+    source = next(
+        path
+        for path in generated.files
+        if path.name.startswith("test_post_")
+    ).read_text(encoding="utf-8")
+    assert "step_tools.expr(" in source
+
+    module = _load_conftest(tmp_path / "generated" / "conftest.py")
+    actual = module._resolve_expression(
+        expression,
+        {},
+        {"balance_before": 100, "amount": 25},
+        None,
+    )
+    assert actual == 75
+    with pytest.raises(AssertionError, match="missing response field"):
+        module._resolve_expression(
+            {"$field": "missing.value"},
+            {},
+            {"missing": {}},
+            None,
+        )
+
+
+def test_relation_expression_supports_len_and_multiple_step_refs(
+    tmp_path: Path,
+) -> None:
+    conftest_path = _generate_one(
+        tmp_path,
+        [
+            {"kind": "status_code", "op": "eq", "expect": 201},
+            {
+                "kind": "body_field",
+                "target": "order_id",
+                "op": "eq",
+                "expect": {
+                    "$op": "len",
+                    "args": [{"$field": "items"}],
+                },
+            },
+        ],
+    )
+    module = _load_conftest(conftest_path)
+    assert (
+        module._resolve_expression(
+            {"$op": "len", "args": [{"$field": "items"}]},
+            {},
+            {"items": [1, 2, 3]},
+            None,
+        )
+        == 3
+    )
+
+    strength = derive_assert_strength(
+        [
+            Assertion(
+                kind="body_field",
+                target="total",
+                op="eq",
+                expect={
+                    "$op": "add",
+                    "args": [
+                        {"$ref": "first.amount"},
+                        {"$ref": "second.amount"},
+                    ],
+                },
+            )
+        ],
+        steps=2,
+    )
+    assert strength is AssertStrength.L4
+
+
+def test_relation_expression_rejects_invalid_shape_and_request_use(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    invalid_assert = _draft(
+        context,
+        _case(
+            [
+                {"kind": "status_code", "op": "eq", "expect": 201},
+                {
+                    "kind": "body_field",
+                    "target": "order_id",
+                    "op": "eq",
+                    "expect": {
+                        "$op": "sub",
+                        "args": [{"$field": "amount"}],
+                    },
+                },
+            ]
+        ),
+    )
+    result = validate_draft(invalid_assert, context, project=tmp_path)
+    assert any(
+        error.code == "expression.args_invalid" for error in result.errors
+    )
+
+    invalid_request = _draft(
+        context,
+        _case(
+            [{"kind": "status_code", "op": "eq", "expect": 201}],
+            case_key="field_ref_in_request",
+            body={"customer_id": {"$field": "status"}},
+        ),
+    )
+    result = validate_draft(invalid_request, context, project=tmp_path)
+    assert any(
+        error.code == "expression.field_not_allowed" for error in result.errors
+    )
+
+
+def test_rule_relations_are_materialized_from_keys(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    source = RuleSource(
+        doc="docs/api.md",
+        section="订单服务 > POST /orders",
+        quote="customer_id",
+    )
+    rule = Rule(
+        rule_key="RK-relation-test",
+        rule_id="BR-01",
+        text="总额与明细一致，回显字段与请求一致",
+        authority="B",
+        source=source,
+        relations=[
+            RuleRelation(
+                relation_key="RR-total-items",
+                assertion_kind="body_field",
+                target="total",
+                op="eq",
+                expect={
+                    "$op": "len",
+                    "args": [{"$response": "items"}],
+                },
+                description="总额等于明细数量",
+                evidence="customer_id",
+            ),
+            RuleRelation(
+                relation_key="RR-echo-request",
+                assertion_kind="body_field",
+                target="echo",
+                op="eq",
+                expect={"$request": "customer_id"},
+                description="echo 回显请求 customer_id",
+                evidence="customer_id",
+            ),
+        ],
+    )
+    ruleset = RuleSet(
+        ruleset_id="rules-relations",
+        rules=[rule],
+    )
+    result = validate_draft(
+        _draft(
+            context,
+            _case(
+                [{"kind": "status_code", "op": "eq", "expect": 201}],
+                rule_refs=[{"rule_key": rule.rule_key, "rule_id": rule.rule_id}],
+                relation_refs=["RR-total-items", "RR-echo-request"],
+            ),
+        ),
+        context,
+        project=tmp_path,
+        ruleset=ruleset,
+    )
+    assert result.errors == []
+    case = result.resolved[0].case
+    generated_relations = [
+        assertion
+        for assertion in case.asserts
+        if assertion.relation_ref
+    ]
+    assert {item.relation_ref for item in generated_relations} == {
+        "RR-total-items",
+        "RR-echo-request",
+    }
+    assert case.assert_strength is AssertStrength.L3
+
+    generated = generate_pytest([case], tmp_path / "generated")
+    assert generated.errors == []
+    module = _load_conftest(tmp_path / "generated" / "conftest.py")
+    assert (
+        module._resolve_expression(
+            generated_relations[0].expect,
+            {},
+            {"total": 2, "items": [1, 2]},
+            {"customer_id": "cust_1"},
+        )
+        == 2
+    )
+    assert (
+        module._resolve_expression(
+            generated_relations[1].expect,
+            {},
+            {"echo": "cust_1"},
+            {"customer_id": "cust_1"},
+        )
+        == "cust_1"
+    )
+
+
+def test_rule_relation_must_be_covered_or_declared_uncovered(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    rule = Rule(
+        rule_key="RK-relation-unaccounted",
+        rule_id="BR-01",
+        text="总额等于明细数量",
+        authority="B",
+        source=RuleSource(
+            doc="docs/api.md",
+            section="订单服务 > POST /orders",
+            quote="customer_id",
+        ),
+        relations=[
+            RuleRelation(
+                relation_key="RR-unaccounted",
+                target="total",
+                op="eq",
+                expect={
+                    "$op": "len",
+                    "args": [{"$response": "items"}],
+                },
+                description="总额等于明细数量",
+                evidence="customer_id",
+            )
+        ],
+    )
+    ruleset = RuleSet(ruleset_id="rules-relations", rules=[rule])
+    draft = _draft(
+        context,
+        _case(
+            [{"kind": "status_code", "op": "eq", "expect": 201}],
+            rule_refs=[{"rule_key": rule.rule_key, "rule_id": rule.rule_id}],
+        ),
+    )
+    result = validate_draft(draft, context, project=tmp_path, ruleset=ruleset)
+    assert any(error.code == "relation.unaccounted" for error in result.errors)
+
+    draft.uncovered_requirements.append(
+        UncoveredRequirement(
+            doc="docs/api.md",
+            section="订单服务 > POST /orders",
+            reason="缺少 items 的可控数据",
+            rule_keys=[rule.rule_key],
+            relation_keys=["RR-unaccounted"],
+        )
+    )
+    declared = validate_draft(draft, context, project=tmp_path, ruleset=ruleset)
+    assert not any(
+        error.code == "relation.unaccounted" for error in declared.errors
+    )
+
+
+def test_db_rule_relation_uses_response_and_request_refs(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    rule = Rule(
+        rule_key="RK-db-relation",
+        rule_id="BR-01",
+        text="数据库状态与响应一致",
+        authority="B",
+        source=RuleSource(
+            doc="docs/api.md",
+            section="订单服务 > POST /orders",
+            quote="customer_id",
+        ),
+        relations=[
+            RuleRelation(
+                relation_key="RR-db-status",
+                assertion_kind="db_row",
+                target="partners.status",
+                op="eq",
+                expect={"$response": "status"},
+                where={"mobile": {"$request": "customer_id"}},
+                wait_ms=500,
+                description="落库状态与响应一致",
+                evidence="customer_id",
+            )
+        ],
+    )
+    ruleset = RuleSet(ruleset_id="rules-db", rules=[rule])
+    result = validate_draft(
+        _draft(
+            context,
+            _case(
+                [{"kind": "status_code", "op": "eq", "expect": 201}],
+                rule_refs=[{"rule_key": rule.rule_key, "rule_id": rule.rule_id}],
+                relation_refs=["RR-db-status"],
+            ),
+        ),
+        context,
+        project=tmp_path,
+        ruleset=ruleset,
+        data_catalog=_catalog(),
+    )
+    assert result.errors == []
+    assertion = next(
+        item for item in result.resolved[0].case.asserts
+        if item.relation_ref == "RR-db-status"
+    )
+    assert assertion.kind == "db_row"
+    assert assertion.wait_ms == 500
+    assert assertion.expect == {"$field": "status"}
+    assert assertion.where == {"mobile": {"$request": "customer_id"}}
+
+    generated = generate_pytest(
+        [result.resolved[0].case], tmp_path / "generated"
+    )
+    assert generated.errors == []
+    source = next(
+        path
+        for path in generated.files
+        if path.name.startswith("test_post_")
+    ).read_text(encoding="utf-8")
+    assert "db_tools.check('partners', 'status'" in source
+    assert "wait_ms=500" in source
+
+
 def test_declared_strength_mismatch_warns_and_derived_wins(tmp_path: Path) -> None:
     context = _context(tmp_path)
     result = validate_draft(
@@ -443,6 +810,99 @@ def test_db_tools_skips_when_url_missing(tmp_path: Path) -> None:
     with pytest.raises(pytest.skip.Exception, match="data_unavailable"):
         tools.check("partners", None, "exists", None, {})
     assert tools._conn is None
+
+
+def test_db_row_wait_ms_polls_until_row_is_visible(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _draft(
+        context,
+        _case(
+            [
+                {"kind": "status_code", "op": "eq", "expect": 201},
+                {
+                    "kind": "db_row",
+                    "target": "partners",
+                    "op": "exists",
+                    "where": {"mobile": "13800138000"},
+                    "wait_ms": 1000,
+                },
+            ]
+        ),
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    assert result.errors == []
+    assertion = result.resolved[0].case.asserts[1]
+    assert assertion.wait_ms == 1000
+
+    generated = generate_pytest(
+        [result.resolved[0].case], tmp_path / "generated"
+    )
+    assert generated.errors == []
+    source = next(
+        path
+        for path in generated.files
+        if path.name.startswith("test_post_")
+    ).read_text(encoding="utf-8")
+    assert "wait_ms=1000" in source
+
+    db_file = tmp_path / "delayed.db"
+    conn = sqlite3.connect(db_file)
+    conn.execute("CREATE TABLE partners (id INTEGER PRIMARY KEY, mobile TEXT)")
+    conn.commit()
+    conn.close()
+
+    def insert_row() -> None:
+        delayed = sqlite3.connect(db_file)
+        try:
+            delayed.execute(
+                "INSERT INTO partners (mobile) VALUES ('13800138000')"
+            )
+            delayed.commit()
+        finally:
+            delayed.close()
+
+    worker = threading.Timer(0.12, insert_row)
+    worker.start()
+    module = _load_conftest(tmp_path / "generated" / "conftest.py")
+    module.DB_URL = f"sqlite:///{db_file.as_posix()}"
+    tools = module._DbTools()
+    try:
+        tools.check(
+            "partners",
+            None,
+            "exists",
+            None,
+            {"mobile": "13800138000"},
+            wait_ms=1000,
+        )
+    finally:
+        worker.join(timeout=2)
+        tools.close()
+
+
+def test_wait_ms_is_rejected_outside_db_row(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    result = validate_draft(
+        _draft(
+            context,
+            _case(
+                [
+                    {
+                        "kind": "body_field",
+                        "target": "status",
+                        "op": "eq",
+                        "expect": "ok",
+                        "wait_ms": 100,
+                    }
+                ]
+            ),
+        ),
+        context,
+        project=tmp_path,
+    )
+    assert any(
+        error.code == "assertion.wait_not_supported" for error in result.errors
+    )
 
 
 def test_schema_tools_runtime(tmp_path: Path) -> None:

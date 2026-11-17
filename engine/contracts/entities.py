@@ -206,6 +206,17 @@ class Assertion(BaseModel):
     where: dict[str, Any] = Field(
         default_factory=dict, description="db_row 的 WHERE 等值条件"
     )
+    wait_ms: int = Field(
+        default=0,
+        ge=0,
+        le=60_000,
+        description="db_row 最多等待写库生效的毫秒数；0 表示只查询一次",
+    )
+    relation_ref: str = Field(
+        default="",
+        max_length=64,
+        description="由框架从规则关系生成断言时写入的 relation_key",
+    )
 
 
 class CaseStep(BaseModel):
@@ -239,6 +250,10 @@ class TestCase(BaseModel):
     transport: Transport = Field(default=Transport.HTTP)
     coverage_role: CoverageRole = Field(default=CoverageRole.PRIMARY)
     rule_refs: list[RuleRef] = Field(default_factory=list)
+    relation_refs: list[str] = Field(
+        default_factory=list,
+        description="用例选择覆盖的规则关系 relation_key；框架据此生成断言",
+    )
     change_refs: list[ChangeRef] = Field(default_factory=list)
     preconditions: list[Precondition] = Field(default_factory=list)
     endpoint: str = Field(description="接口标识，如 'GET /api/v1/products'")

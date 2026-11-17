@@ -112,15 +112,20 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
   修复不得删除/削弱断言，身份字段不可改；`deprecate` 仍然只能人工批准。
 - **多请求限于单用例内串行**：`steps[]` 按顺序共享同一个 `client`/Mock 会话执行，
   支持 `{"$ref": "<step>.<field>"}` 读取更早步骤的响应（body/query/path_params/断言
-  expect/`db_row.where`，不支持 header；`body_schema` 不解析引用）。不生成跨用例捕获、
+  expect/`db_row.where`，不支持 header；`body_schema` 不解析引用）。`body_field.expect`
+  还支持当前响应 `$field` 与 `len/sum/add/sub/mul/div` 受限运算。不生成跨用例捕获、
   鉴权链路、并发或重试编排；需要数据库前置状态的用例仍用 `preconditions[].state_key`
   引用 `data_catalog`，由 C5b 生成单用例 fixture。无 catalog/plan 或未配置
   `ASTSIGHT_DB_URL` 时标 `blocked`，不伪造可执行用例。
 - **断言覆盖到结构与持久化**：支持 `status_code`、`body_field`、`header`（含 `contains`）、
   OpenAPI `body_schema`（本地 `$ref` 内联）和只读 `db_row`（含 `count_eq`）。失败场景可断言
   `db_row/absent` 验证无副作用。`assert_strength` 按内容推导：L1 状态/存在/结构、L2 确定值、
-  L3 `$ref` 关系、L4 引用两个及以上步骤；声明不一致会 warning，导入以推导值为准。
-  `db_row` 需要 `ASTSIGHT_DB_URL`，未配置时显式 skip `data_unavailable`。
+  L3 同响应关系或步骤引用、L4 引用两个及以上步骤；声明不一致会 warning，导入以推导值为准。
+  `db_row` 需要 `ASTSIGHT_DB_URL`，未配置时显式 skip `data_unavailable`；异步落库可设置
+  `wait_ms` 轮询，默认 0 只查询一次。规则库可用 `relations` 声明带原文证据的关系配方，
+  A4 只选 `relation_refs`，框架生成 `$response/$request` 断言；跨步骤关系用 `$step`
+  声明语义别名，A4 在 `relation_bindings` 中绑定更早的步骤名后生成 `$ref` 断言；
+  未物化且未声明的 A/B 规则关系会阻断。
 - **自动“矫正”仅两件事**：生成后 `compile` 自检 + 执行前 `pytest --collect-only`；执行后只对
   连接/超时类环境抖动重试（默认 1 次，上限 3），**不修改业务代码，不猜失败原因**。
 - **造数方言限于 SQLite/PostgreSQL/MySQL**：C5a/C5b 生成目录与逐用例计划，三者共用
@@ -1068,8 +1073,8 @@ python -m pytest -q
   `prompts/a5_diagnose_repair.md`；下一步是真实需求文档上的规则抽取质量与覆盖评估。
 - C5 已打通 SQLite/PostgreSQL/MySQL：下一步补 DB 反射/DBML、跨库 schema 限定名与更复杂的
   跨表业务态；方言只覆盖用例级 fixture，不承担建库/迁移。
-- 关系断言：L3/L4 目前需要草案显式写 `$ref`；下一步可基于规则表达式自动生成跨字段/
-  跨步骤不变量，并补异步落库的 `db_row` 轮询。
+- 关系断言：已支持规则结构化关系自动物化、`$ref`、跨步骤 `$step` 绑定、同响应
+  `$field`、受限算术与 `db_row` 异步轮询；下一步扩展受控聚合与复杂公式抽取。
 - 文档接入扩展：PDF/Word、跨文档冲突识别。
 - 用例库并发写保护与数据库后端（当前为单进程 JSON + 原子替换）。
 - 路由插件扩到 Spring（当前 Spring 路由只有 CodeGraph 单源、证据 `inferred`）。

@@ -15,9 +15,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from contracts import RuleConstraint
+from contracts import RuleConstraint, RuleRelation
 
 from ..cases.requirements import normalize_text
+from .relations import relation_literal_tokens
 
 _NUMBER_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
 _BACKTICK_RE = re.compile(r"`([^`]{1,120})`")
@@ -69,11 +70,17 @@ def _constraint_tokens(constraint: RuleConstraint) -> list[str]:
 def rule_value_tokens(
     text: str,
     constraints: Iterable[RuleConstraint] | None = None,
+    relations: Iterable[RuleRelation] | None = None,
 ) -> list[str]:
     """提取规则文本/结构化约束中所有必须可核对的值。"""
     tokens = _text_tokens(text)
     for constraint in constraints or []:
         tokens.extend(_constraint_tokens(constraint))
+    for relation in relations or []:
+        tokens.extend(_text_tokens(relation.description))
+        tokens.extend(_text_tokens(relation.evidence))
+        tokens.extend(relation_literal_tokens(relation.expect))
+        tokens.extend(relation_literal_tokens(relation.where))
     return _dedupe(tokens)
 
 

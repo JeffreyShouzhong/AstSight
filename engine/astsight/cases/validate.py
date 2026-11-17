@@ -43,8 +43,16 @@ from .draft import (
     case_fingerprint,
     to_test_case,
 )
+from .expressions import (
+    field_paths,
+    has_dynamic,
+    is_step_ref,
+    iter_dynamic_nodes,
+    validate_dynamic,
+)
 from ..persistence import sha256_json
 from .requirements import normalize_text
+from .relations import materialize_rule_relations
 from .strength import derive_assert_strength
 
 _PATH_PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
@@ -240,7 +248,7 @@ def _expected_status_codes(assertion: Any) -> list[int]:
 def _iter_ref_nodes(value: Any, location: str):
     """深度遍历请求值/期望值中的 ``{"$ref": "step.field"}``。"""
     if isinstance(value, dict):
-        if "$ref" in value:
+        if is_step_ref(value):
             yield value, location
             return
         for key, item in value.items():
@@ -266,13 +274,29 @@ def _check_step_refs(
     value: Any,
     *,
     allowed_steps: set[str],
+    allow_response_expr: bool = False,
     location: str,
     case_key: str,
     endpoint: str,
     path: str,
     result: ValidationResult,
 ) -> None:
-    for node, where in _iter_ref_nodes(value, location):
+    for code, message in validate_dynamic(
+        value, allow_response_expr=allow_response_expr
+    ):
+        result.errors.append(
+            _issue(
+                "error",
+                code,
+                message,
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    for node, where in iter_dynamic_nodes(value, location=location):
+        if not is_step_ref(node):
+            continue
         if set(node) != {"$ref"}:
             result.errors.append(
                 _issue(
@@ -431,12 +455,12 @@ def _resolve_case_steps(
         )
         safe_headers: dict[str, str] = {}
         for header_name, header_value in raw.headers.items():
-            if _has_ref(header_value):
+            if has_dynamic(header_value):
                 result.errors.append(
                     _issue(
                         "error",
                         "step.header_ref_unsupported",
-                        f"Header {header_name!r} 不支持 $ref；请使用固定字符串",
+                        f"Header {header_name!r} 不支持动态表达式；请使用固定字符串",
                         case_key=case_key,
                         endpoint=canonical,
                         path=step_label,
@@ -449,6 +473,7 @@ def _resolve_case_steps(
                 _check_step_refs(
                     assertion.expect,
                     allowed_steps=allowed,
+                    allow_response_expr=assertion.kind in {"body_field", "db_row"},
                     location=f"steps[{index}].asserts.expect",
                     case_key=case_key,
                     endpoint=canonical,
@@ -459,6 +484,7 @@ def _resolve_case_steps(
                 _check_step_refs(
                     assertion.where,
                     allowed_steps=allowed,
+                    allow_response_expr=True,
                     location=f"steps[{index}].asserts.where",
                     case_key=case_key,
                     endpoint=canonical,
@@ -526,6 +552,30 @@ def _check_assert(
             )
         )
         return
+    wait_ms = int(getattr(assertion, "wait_ms", 0) or 0)
+    if wait_ms and assertion.kind != "db_row":
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.wait_not_supported",
+                "wait_ms 只用于 db_row 异步落库轮询",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    relation_ref = str(getattr(assertion, "relation_ref", "") or "")
+    if relation_ref and assertion.kind not in {"body_field", "db_row"}:
+        result.errors.append(
+            _issue(
+                "error",
+                "relation.assertion_kind_invalid",
+                "relation_ref 只能挂在 body_field 或 db_row 断言",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
 
     if assertion.kind == "body_schema":
         _check_schema_assert(
@@ -645,16 +695,41 @@ def _check_assert(
     if assertion.kind == "body_field" and assertion.target:
         known = _response_fields(profile)
         if known and _top_level(assertion.target) not in known:
-            result.warnings.append(
-                _issue(
-                    "warning",
-                    "assertion.response_field_unknown",
-                    f"响应字段未在 OpenAPI 中声明: {assertion.target}",
-                    case_key=case_key,
-                    endpoint=endpoint,
-                    path=path,
-                )
+            severity = "error" if assertion.relation_ref else "warning"
+            code = (
+                "relation.response_field_unmapped"
+                if assertion.relation_ref
+                else "assertion.response_field_unknown"
             )
+            message = (
+                f"规则关系目标字段未在 OpenAPI 中声明: {assertion.target}"
+                if assertion.relation_ref
+                else f"响应字段未在 OpenAPI 中声明: {assertion.target}"
+            )
+            issue = _issue(
+                severity,
+                code,
+                message,
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+            if severity == "error":
+                result.errors.append(issue)
+            else:
+                result.warnings.append(issue)
+        for field_path in field_paths(assertion.expect):
+            if known and _top_level(field_path) not in known:
+                result.warnings.append(
+                    _issue(
+                        "warning",
+                        "assertion.response_field_unknown",
+                        f"关系式响应字段未在 OpenAPI 中声明: {field_path}",
+                        case_key=case_key,
+                        endpoint=endpoint,
+                        path=path,
+                    )
+                )
 
 
 def _check_schema_assert(
@@ -1671,6 +1746,85 @@ def _check_rule_coverage(
         )
 
 
+def _check_relation_coverage(
+    draft: CaseDraft,
+    *,
+    ruleset: RuleSet | None,
+    result: ValidationResult,
+) -> None:
+    if ruleset is None:
+        return
+    relation_index = {
+        relation.relation_key: rule
+        for rule in ruleset.rules
+        for relation in rule.relations
+        if relation.relation_key
+    }
+    covered: set[str] = set()
+    for resolved in result.resolved:
+        for assertion in [
+            *resolved.case.asserts,
+            *(
+                assertion
+                for step in resolved.case.steps
+                for assertion in step.asserts
+            ),
+        ]:
+            if not assertion.relation_ref:
+                continue
+            if assertion.relation_ref not in relation_index:
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "relation.unknown",
+                        f"断言引用未知 relation_key: {assertion.relation_ref}",
+                        case_key=resolved.case_key,
+                        endpoint=resolved.endpoint,
+                    )
+                )
+            else:
+                covered.add(assertion.relation_ref)
+    declared = {
+        key
+        for item in draft.uncovered_requirements
+        for key in item.relation_keys
+    }
+    for key in sorted(declared - set(relation_index)):
+        result.errors.append(
+            _issue(
+                "error",
+                "relation.uncovered_unknown",
+                f"uncovered_requirements 引用未知 relation_key: {key}",
+                path="uncovered_requirements",
+            )
+        )
+    for key in sorted(declared & covered):
+        result.warnings.append(
+            _issue(
+                "warning",
+                "relation.declared_but_covered",
+                f"关系已生成断言，却仍声明未覆盖: {key}",
+                path="uncovered_requirements",
+            )
+        )
+    for key, rule in relation_index.items():
+        if rule.status is not RuleStatus.ACTIVE:
+            continue
+        if rule.authority not in {RuleAuthority.A, RuleAuthority.B}:
+            continue
+        if key in covered or key in declared:
+            continue
+        result.errors.append(
+            _issue(
+                "error",
+                "relation.unaccounted",
+                f"规则关系未被用例物化，也未声明未覆盖: "
+                f"{rule.rule_id} / {key}",
+                path="uncovered_requirements",
+            )
+        )
+
+
 def validate_draft(
     draft: CaseDraft,
     context: dict[str, Any],
@@ -1705,6 +1859,12 @@ def validate_draft(
                 "draft.schema_version",
                 f"不支持的草案 schema_version={draft.schema_version}",
             )
+        )
+    materialized = materialize_rule_relations(draft, ruleset)
+    draft = materialized.draft
+    for message in materialized.errors:
+        result.errors.append(
+            _issue("error", "relation.materialization_failed", message)
         )
     if ruleset is not None:
         if draft.ruleset_id and draft.ruleset_id != ruleset.ruleset_id:
@@ -2046,17 +2206,21 @@ def validate_draft(
             scope_docs=scope_docs,
         )
         if not canonical_draft.steps:
-            for location, value in (
-                ("body", case.body),
-                ("query", case.query),
-                ("path_params", case.path_params),
+            for location, value, allow_response_expr in (
+                ("body", case.body, False),
+                ("query", case.query, False),
+                ("path_params", case.path_params, False),
                 *(
-                    (f"asserts[{i}].expect", assertion.expect)
+                    (
+                        f"asserts[{i}].expect",
+                        assertion.expect,
+                        assertion.kind in {"body_field", "db_row"},
+                    )
                     for i, assertion in enumerate(case.asserts)
                     if assertion.kind != "body_schema"
                 ),
                 *(
-                    (f"asserts[{i}].where", assertion.where)
+                    (f"asserts[{i}].where", assertion.where, True)
                     for i, assertion in enumerate(case.asserts)
                     if assertion.kind == "db_row" and assertion.where
                 ),
@@ -2064,18 +2228,19 @@ def validate_draft(
                 _check_step_refs(
                     value,
                     allowed_steps=set(),
+                    allow_response_expr=allow_response_expr,
                     location=location,
                     case_key=key,
                     endpoint=canonical_endpoint,
                     path=pseudo_path,
                     result=result,
                 )
-            if _has_ref(case.headers):
+            if has_dynamic(case.headers):
                 result.errors.append(
                     _issue(
                         "error",
                         "step.header_ref_unsupported",
-                        "Header 值不支持 $ref；请使用固定字符串",
+                        "Header 值不支持 $ref、$field 或表达式；请使用固定字符串",
                         case_key=key,
                         endpoint=canonical_endpoint,
                         path=pseudo_path,
@@ -2204,6 +2369,7 @@ def validate_draft(
         )
 
     _check_rule_coverage(draft, ruleset=ruleset, result=result)
+    _check_relation_coverage(draft, ruleset=ruleset, result=result)
 
     if check_doc_hashes:
         from .context import stale_documents

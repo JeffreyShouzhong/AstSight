@@ -100,22 +100,26 @@
 | `coverage_role` | 必须与画像一致（`primary` / `alias` / `independent`） |
 | `endpoint` | 必须原样取自画像 `endpoint`（`METHOD /path`） |
 | `rule_refs` | 至少 1 条；`rule_key` 必须存在于输入规则库；不得引用 `ungrounded` / `deprecated` 规则；不得只引用 C/D 级规则 |
+| `relation_refs` | 可选；只填输入 `ruleset.rules[].relations[].relation_key`。选中后框架按规则配方生成断言，**不要在 asserts 里重复手写同一关系** |
+| `relation_bindings` | 仅当所选关系含 `$step` 时必填：`{relation_key: {语义别名: 本用例步骤名}}`；绑定的步骤必须早于最后一步；不含 `$step` 的关系不要填 |
 | `requirement_refs` | business 用例至少 1 条；`quote` 必须是所填 `section` 的原文连续子串；流程图/概览里的句子不能挂到功能点 section |
 | `change_refs` | code 用例至少 1 条；`changed_api` 取自 `changed_apis[].handler` |
 | `preconditions` | `state_key` 必须存在于 `data_catalog.states`；没有 catalog 时不要编造 |
 | `category` | 小写标识，如 `positive` / `negative` / `boundary` / `change_regression` |
-| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`（target 为响应状态码，expect 可省略由 OpenAPI 回填），`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`；值必须来自规则原文或契约 |
+| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`（target 为响应状态码，expect 可省略由 OpenAPI 回填），`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`；值必须来自规则原文或契约。关系式只允许 `context.assert_expression_ops` 中的受限运算 |
 | `steps` | 多请求用例；至少 2 步。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中 |
 | `assert_strength` | 按断言内容填写：`L1` 状态码/字段存在/结构；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨两个及以上步骤的不变量。框架会按内容重新推导，不一致时产生 `assert_strength.mismatch` warning 并以推导值为准 |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
 | `path_params` / `query` / `headers` / `body` | 字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
 | `rationale` / `assumptions` / `note` | `rationale` 写该用例证明哪条规则的哪一面；`assumptions` 写契约缺口/歧义假设；`note` 写规则冲突 `topic` |
-| `uncovered_requirements` | 无法构造的 section 必写 `reason`；该 section 下未覆盖的业务规则写 `rule_keys`（不得漏掉 A/B 级规则） |
+| `uncovered_requirements` | 无法构造的 section 必写 `reason`；未覆盖的业务规则写 `rule_keys`，无法映射的关系写 `relation_keys`（不得漏掉 A/B 级） |
 
 失败场景可用 `db_row` 验证“没有副作用”：写入失败后断言目标表不存在对应行，
 例如 `{"kind": "db_row", "target": "partners", "op": "absent", "where": {"mobile": "13800138000"}}`。
 表名、列名和 `where` 键必须来自 context 的 data catalog；没有 catalog 时不要编造，
 否则导入会产生 `assertion.db_catalog_missing` warning 或表/列不存在错误。
+需求明确说明写入是异步/最终一致时，可给 `db_row` 增加 `wait_ms`（0–60000）轮询落库，
+例如 `"wait_ms": 2000`；没有异步依据时保持 0，避免把真实缺失去等成超时。
 
 ### 多请求用例（`steps`）
 
@@ -159,8 +163,24 @@
   `steps[].body`、`query`、`path_params`、断言 `expect` 和 `db_row.where`（含嵌套字段 `a.b`）。
   Header 值不支持 `$ref`；`body_schema` 的 `expect` 不解析引用。跨步骤比较属于关系式，
   内容推导为 `L3`（引用两个及以上不同步骤时为 `L4`）。
+- `body_field.expect` 可引用**当前响应**的同级或嵌套字段，格式 `{"$field": "items"}`；
+  也可与 `$ref` 一起使用受限运算 `len/sum/add/sub/mul/div`。例如：
+  `{"$op": "len", "args": [{"$field": "items"}]}` 验证 `total == len(items)`，
+  `{"$op": "sub", "args": [{"$field": "balance_before"}, {"$field": "amount"}]}`
+  验证余额变化。`$field` 和 `$op` 不得用于请求体、query、path_params 或 header；
+  同响应关系式也推导为 `L3`。只有当规则或契约明确给出该关系时才生成，不得猜测业务公式。
 - 执行时同一用例的步骤共享 `client` 与 Mock 会话；`preconditions` 在第一步前 apply，
   `mock_bindings` 对整个用例生效。
+- 规则带 `relations` 时，A4 必须在能执行该关系的用例里填 `relation_refs`；框架会把
+  `$response` 转为当前响应 `$field`、`$request` 保留为请求引用并生成 L3 断言。
+  若画像/数据目录无法映射，必须在 `uncovered_requirements[].relation_keys` 中列出并写明原因。
+  所有 A/B 级规则关系未被物化且未声明时，导入会阻断。
+- 关系里出现 `{"$step": "create.order_id"}`（输入中的 `step_aliases` 会列出这些别名）时，
+  断言落在**用例最后一步**的响应上，`create` 是语义别名，必须在 `relation_bindings`
+  中绑定到本用例里更早的步骤名：
+  `{"relation_bindings": {"RR-...": {"create": "create_order"}}}`。
+  因此跨步骤关系用例要把“被断言的查询/回显”放在最后一步，创建步骤放前面；
+  绑定缺失、绑定到最后一步或绑定不存在的步骤都会阻断导入。
 - 步骤数与断言数有上限；超过 50 步或单步 50 条断言会被拒绝。不要为了“凑覆盖”
   把无关接口串成一个用例。
 

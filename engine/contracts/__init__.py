@@ -94,6 +94,7 @@ from .rules import (
     RuleConstraint,
     RuleGap,
     RuleQuestion,
+    RuleRelation,
     RuleSet,
     RuleSource,
 )
@@ -179,6 +180,7 @@ __all__ = [
     "RuleGap",
     "RuleOperator",
     "RuleQuestion",
+    "RuleRelation",
     "RuleRef",
     "RuleSet",
     "RuleSource",

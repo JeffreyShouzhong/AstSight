@@ -19,6 +19,7 @@ from urllib.parse import quote
 from contracts import DataPlanBundle, TestCase
 
 from ..artifacts import slugify, utc_now
+from ..cases.expressions import field_paths, has_dynamic, has_relation_expression
 
 GENERATOR = "AstSight M1 pytest-gen"
 
@@ -30,6 +31,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -49,6 +51,7 @@ MOCK_DRAIN_MS = int(os.environ.get("ASTSIGHT_MOCK_DRAIN_MS", "200"))
 MOCK_TTL_MS = int(os.environ.get("ASTSIGHT_MOCK_TTL_MS", "60000"))
 
 DB_URL = os.environ.get("ASTSIGHT_DB_URL", "")
+DB_POLL_MS = max(10, int(os.environ.get("ASTSIGHT_DB_POLL_MS", "50")))
 DATA_PLAN_PATH = os.environ.get(
     "ASTSIGHT_DATA_PLAN_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_plan.json"),
@@ -352,6 +355,61 @@ def _resolve_step_refs(value, responses):
     return value
 
 
+def _path_value(root, path, label="value"):
+    current = root
+    for part in str(path).split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise AssertionError(f"missing {label} field: {path}")
+        current = current[part]
+    return current
+
+
+def _resolve_expression(value, responses, body, request_body):
+    """解析断言右侧的受限表达式，不执行任意 Python。"""
+    if isinstance(value, dict):
+        if set(value) == {"$field"}:
+            return _path_value(body, value["$field"], "response")
+        if set(value) == {"$request"}:
+            return _path_value(request_body, value["$request"], "request")
+        if set(value) == {"$ref"}:
+            return _resolve_step_refs(value, responses)
+        if set(value) == {"$op", "args"}:
+            op = value["$op"]
+            args = [
+                _resolve_expression(item, responses, body, request_body)
+                for item in value["args"]
+            ]
+            try:
+                if op == "len":
+                    return len(args[0])
+                if op == "sum":
+                    return sum(args[0])
+                if op == "add":
+                    return sum(args)
+                if op == "sub":
+                    return args[0] - args[1]
+                if op == "mul":
+                    result = args[0]
+                    for item in args[1:]:
+                        result *= item
+                    return result
+                if op == "div":
+                    return args[0] / args[1]
+            except (TypeError, ValueError, ZeroDivisionError) as exc:
+                raise AssertionError(f"expression {op} failed: {exc}") from exc
+            raise AssertionError(f"unsupported expression op: {op!r}")
+        return {
+            key: _resolve_expression(item, responses, body, request_body)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _resolve_expression(item, responses, body, request_body)
+            for item in value
+        ]
+    return value
+
+
 def _render_step_path(path, params):
     def replace(match):
         name = match.group(1) or match.group(2) or match.group(3)
@@ -396,6 +454,7 @@ def mock_session():
 
 class _StepTools:
     refs = staticmethod(_resolve_step_refs)
+    expr = staticmethod(_resolve_expression)
     path = staticmethod(_render_step_path)
 
 
@@ -427,7 +486,26 @@ class _DbTools:
             self._conn, self._dialect = _connect_db(DB_URL)
         return self._conn, self._dialect
 
-    def check(self, table, column, op, expect, where):
+    def check(self, table, column, op, expect, where, wait_ms=0):
+        wait_ms = max(0, int(wait_ms or 0))
+        deadline = time.monotonic() + wait_ms / 1000.0
+        while True:
+            try:
+                self._check_once(table, column, op, expect, where)
+                return
+            except AssertionError as exc:
+                if wait_ms <= 0 or time.monotonic() >= deadline:
+                    if wait_ms:
+                        raise AssertionError(f"{exc} (waited {wait_ms} ms)") from exc
+                    raise
+                # 结束当前只读事务，让 MySQL REPEATABLE READ 下一轮看到新提交。
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                time.sleep(min(DB_POLL_MS / 1000.0, max(0, deadline - time.monotonic())))
+
+    def _check_once(self, table, column, op, expect, where):
         conn, dialect = self._connection()
         marker = "?" if dialect == "sqlite" else "%s"
         conditions = []
@@ -573,8 +651,19 @@ def _ref_steps(value: Any) -> list[str]:
     return out
 
 
-def _expect_expr(expect: Any, responses_expr: str) -> str:
-    if _value_has_ref(expect):
+def _expect_expr(
+    expect: Any,
+    responses_expr: str,
+    *,
+    body_var: str | None = None,
+    request_expr: str | None = None,
+) -> str:
+    if has_relation_expression(expect):
+        return (
+            f"step_tools.expr({expect!r}, {responses_expr}, "
+            f"{body_var or 'None'}, {request_expr or 'None'})"
+        )
+    if has_dynamic(expect):
         return f"step_tools.refs({expect!r}, {responses_expr})"
     return repr(expect)
 
@@ -585,11 +674,21 @@ def _assert_line(
     resp_var: str = "resp",
     body_var: str = "body",
     responses_expr: str = "{}",
+    request_expr: str | None = None,
 ) -> str:
     kind = assertion.kind
     op = assertion.op
     expect = assertion.expect
-    expect_expr = _expect_expr(expect, responses_expr)
+    uses_response_body = kind == "body_field" or (
+        kind == "db_row"
+        and bool(field_paths(expect) or field_paths(assertion.where))
+    )
+    expect_expr = _expect_expr(
+        expect,
+        responses_expr,
+        body_var=body_var if uses_response_body else None,
+        request_expr=request_expr,
+    )
     if kind == "status_code":
         if op == "in":
             return (
@@ -652,10 +751,16 @@ def _assert_line(
         return f"        schema_tools.check({body_var}, {expect!r})"
     if kind == "db_row":
         table, _, column = (assertion.target or "").partition(".")
-        where_expr = _expect_expr(assertion.where or {}, responses_expr)
+        where_expr = _expect_expr(
+            assertion.where or {},
+            responses_expr,
+            body_var=body_var if uses_response_body else None,
+            request_expr=request_expr,
+        )
+        wait_ms = int(getattr(assertion, "wait_ms", 0) or 0)
         return (
             f"        db_tools.check({table!r}, {column or None!r}, "
-            f"{op!r}, {expect_expr}, {where_expr})"
+            f"{op!r}, {expect_expr}, {where_expr}, wait_ms={wait_ms})"
         )
     return f"        # unsupported assertion: {kind}/{op}"
 
@@ -667,6 +772,16 @@ def _responses_expr(case: TestCase, index: int, needed: set[str]) -> str:
         if step.name in needed
     ]
     return "{" + ", ".join(items) + "}"
+
+
+def _needs_response_body(assertion: Any) -> bool:
+    if assertion.kind in {"body_field", "body_schema"}:
+        return True
+    if assertion.kind != "db_row":
+        return False
+    return bool(
+        field_paths(assertion.expect) or field_paths(assertion.where)
+    )
 
 
 def _request_args(
@@ -688,15 +803,22 @@ def _request_args(
         route = repr(_render_path(path, path_params))
     args = [repr(method), route]
     if query:
-        args.append(f"params={_expect_expr(query, responses_expr)}")
+        args.append(
+            f"params={_expect_expr(query, responses_expr, body_var=None)}"
+        )
     if headers:
         args.append(f"headers={headers!r}")
     if body is not None:
-        args.append(f"json={_expect_expr(body, responses_expr)}")
+        args.append(f"json={_expect_expr(body, responses_expr, body_var=None)}")
     return args
 
 
 def _single_request_lines(case: TestCase) -> list[str]:
+    request_expr = (
+        _expect_expr(case.body, "{}", body_var=None)
+        if case.body is not None
+        else "None"
+    )
     request_args = _request_args(
         method=case.method,
         path=case.path,
@@ -709,16 +831,16 @@ def _single_request_lines(case: TestCase) -> list[str]:
     # 先判状态码再解析 body：服务返回 500/非 JSON 时，失败信息应指向真正的
     # 问题（状态码），而不是被 JSONDecodeError 掩盖成一条无上下文的异常。
     inner = [f"        resp = client.request({', '.join(request_args)})"]
-    body_asserts = [
-        a for a in case.asserts if a.kind in {"body_field", "body_schema"}
-    ]
+    body_asserts = [a for a in case.asserts if _needs_response_body(a)]
     for assertion in case.asserts:
-        if assertion.kind not in {"body_field", "body_schema"}:
-            inner.append(_assert_line(assertion))
+        if not _needs_response_body(assertion):
+            inner.append(_assert_line(assertion, request_expr=request_expr))
     if body_asserts:
         inner.append("        body = resp.json()")
         for assertion in body_asserts:
-            inner.append(_assert_line(assertion))
+            inner.append(
+                _assert_line(assertion, request_expr=request_expr)
+            )
     return inner
 
 
@@ -738,6 +860,11 @@ def _steps_lines(case: TestCase) -> list[str]:
         responses_expr = _responses_expr(case, index, needed)
         resp_var = f"resp_{step.name}"
         body_var = f"body_{step.name}"
+        request_expr = (
+            _expect_expr(step.body, responses_expr, body_var=None)
+            if step.body is not None
+            else "None"
+        )
         request_args = _request_args(
             method=step.method,
             path=step.path,
@@ -752,15 +879,16 @@ def _steps_lines(case: TestCase) -> list[str]:
         )
         body_asserts = [
             assertion for assertion in step.asserts
-            if assertion.kind in {"body_field", "body_schema"}
+            if _needs_response_body(assertion)
         ]
         for assertion in step.asserts:
-            if assertion.kind not in {"body_field", "body_schema"}:
+            if not _needs_response_body(assertion):
                 inner.append(
                     _assert_line(
                         assertion,
                         resp_var=resp_var,
                         responses_expr=responses_expr,
+                        request_expr=request_expr,
                     )
                 )
         if body_asserts or step.name in needed:
@@ -772,6 +900,7 @@ def _steps_lines(case: TestCase) -> list[str]:
                     resp_var=resp_var,
                     body_var=body_var,
                     responses_expr=responses_expr,
+                    request_expr=request_expr,
                 )
             )
     return inner

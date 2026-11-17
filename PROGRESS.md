@@ -1,6 +1,6 @@
 # AstSight 项目进度
 
-> 最后更新：2026-11-16
+> 最后更新：2026-11-17
 > 分支：`feat/postgres-mysql-data`（已推送；本轮提交见 `git log`）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
@@ -16,6 +16,11 @@
 > 的 Dubbo 全链路（HTTP 入口 → Dubbo 下游）已打通：画像 → `dubbo_routes` →
 > 自动注入 → 执行 → 报告一次跑完，目标端口零建连；全量测试与 agent e2e
 > 结果见“本轮完成”
+>
+> 2026-11-17 起优先做断言质量：已支持同响应字段关系、受限算术表达式、
+> `db_row.wait_ms` 落库轮询与跨步骤规则关系；规则关系已结构化，并由框架按
+> A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。下一步扩展
+> 受控聚合与复杂公式抽取。
 
 ## 当前状态
 
@@ -55,6 +60,64 @@
 | Dubbo 真实代理 e2e | ✅ 2026-11-16 | `java/samples/dubbo-consumer` 用 `ReferenceConfig` 直连 URL（`check=false`、`lazy=true`，不启注册中心/provider），经真实消费端代理调用；Python 计数端口断言 accept 与收到字节数均为 0；普通 classpath 与 Spring Boot fat jar 均返回桩、心跳 `filter_instantiated>0`；修复 fat jar 下 `java.lang` 模块打开范围与 bridge 跨加载器可见性 |
 | Dubbo 全链路 e2e | ✅ 2026-11-16 | `java/samples/spring-boot-dubbo`（HTTP `/orders/{id}` → `@DubboReference` 字段 → `OrderApi`）+ `test_java_agent_dubbo_flow_e2e.py`：`run_flow` 完成画像 → `dubbo_routes` → `agent_rewrite` 注入（`JAVA_TOOL_OPTIONS` + `token_env`）→ 执行 → 报告；HTTP 响应体为桩数据，证据 `adapter=dubbo-filter`/`mode=agent_filter`，目标端口零建连零字节，门禁 pass（`filter_not_in_chain` 不阻断，`serialization_verified=false` 告警）；注解字段供画像读取，运行期由 `ReferenceConfig` 填同一字段，dep_id 一致 |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
+| 同响应关系断言 | ✅ 2026-11-17 | `body_field.expect` 新增 `$field` 与受限 `$op`（`len/sum/add/sub/mul/div`）；表达式经白名单 AST 校验，生成器只执行固定运算；同响应关系推导为 L3，两个及以上步骤引用仍为 L4 |
+| 落库轮询 | ✅ 2026-11-17 | `db_row.wait_ms`（0–60000ms）显式轮询；默认 0 保持单次查询；每轮结束只读事务，兼容 MySQL `REPEATABLE READ`；延迟写库 SQLite 测试通过 |
+| 规则关系模型 | ✅ 2026-11-17 | `Rule.relations[]` / A1 `relations[]`：`$response/$request/$op` 受限配方；`relation_key` 框架计算；`evidence` 必须是规则 quote 连续原文；字面量纳入 grounding |
+| 关系自动物化 | ✅ 2026-11-17 | A4 只填 `relation_refs`，框架生成带 `relation_ref` 的 `body_field/db_row` 断言；支持响应、请求、算术、DB where、`wait_ms` 组合 |
+| 关系覆盖门禁 | ✅ 2026-11-17 | A/B 规则关系未物化且未列入 `uncovered_requirements[].relation_keys` 时导入阻断；未知键、跨规则误引、目标响应字段未声明均显式报错 |
+| 跨步骤规则关系 | ✅ 2026-11-17 | `RuleRelation` 新增 `$step` 语义引用（`"<别名>.<字段>"`）；用例 `relation_bindings` 把别名绑定到更早步骤，框架生成 `$ref` 断言挂到最后一步；缺绑定、绑定最后一步/不存在步骤、单请求用例使用 `$step` 均阻断导入 |
+
+## 本轮完成（跨步骤规则关系，2026-11-17）
+
+1. **规则侧**：`relations[].expect/where` 新增 `{"$step": "create.order_id"}`，别名只表达
+   语义，不绑定具体步骤；别名必须是 `[a-z][a-z0-9_]{1,63}`，字段路径复用现有校验。
+   `$step` 不需要原文 grounding 字面量，`relation_key` 仍由内容计算。
+2. **绑定与物化**：用例新增 `relation_bindings: {relation_key: {别名: 步骤名}}`；
+   框架校验别名完整、无多余别名、绑定步骤存在且严格早于承载断言的最后一步，
+   再把 `$step` 转成 `{"$ref": "步骤.字段"}`。跨步骤断言固定挂在用例最后一步，
+   强度按内容推导为 L3（多个步骤引用为 L4）。
+3. **失败关闭**：缺少绑定、绑定到最后一步、绑定不存在步骤、给不含 `$step` 的关系写绑定、
+   绑定未在 `relation_refs` 中选择的关系、单请求用例引用 `$step`，全部阻断导入并给出定位。
+4. **提示词与文档**：A1 提示词升至 8，说明何时用 `$step`；A4 提示词说明
+   `relation_bindings` 与“查询步骤放最后”的约束；使用文档、能力设计、
+   决策记录（v4.27）、路线图同步。
+5. **验证**：新增规则侧 `$step` 校验、跨步骤物化与代码生成、绑定错误与单请求用例负例；
+   全量 Python **437 passed, 35 skipped**；示例规则库仍可加载（67 BR / 10 CR），
+   示例 caseset 仍为 38 approved。
+
+## 本轮完成（规则关系自动物化，2026-11-17）
+
+1. **规则契约**：新增 `RuleRelation`，A1 可输出 `relations[]`；关系 identity 为
+   `RR-<sha256>`，`assertion_kind` 支持 `body_field/db_row`，表达式只允许
+   `$response/$request/$op`，运算继续复用 `len/sum/add/sub/mul/div` 白名单。
+2. **原文证据**：`relations[].evidence` 必须能在同一 `source.quote` 中逐字找到；
+   表达式和 where 中的字面量进入规则 grounding，不在原文中的值继续被视为编造。
+3. **自动生成断言**：A4 不再手写关系表达式，只在用例 `relation_refs` 中选择规则关系；
+   框架确定性生成断言并写入 `relation_ref`。`$response` 转当前响应 `$field`，
+   `$request` 在生成代码中解析为请求字段，DB 关系可同时引用响应与请求。
+4. **覆盖对账**：A/B 规则关系必须至少被一条用例物化，或按 `relation_key` 列入
+   `uncovered_requirements` 并说明原因；漏列、未知键和把已覆盖关系重复声明为未覆盖均可见。
+5. **A4 输入与审核**：A4 prompt 输入包含规则 relations；A1 提示词版本升至 7；
+   `ruleset.md` 新增关系断言表；A4 提示词、使用文档和能力设计同步。
+6. **验证**：新增规则关系、自动物化、请求引用、DB 一致性关系和未覆盖门禁测试；
+   全量 Python **432 passed, 35 skipped**。
+
+## 本轮完成（断言关系表达式与落库轮询，2026-11-17）
+
+1. **关系表达式**：新增 `cases/expressions.py`，支持当前响应字段 `$field`、前序步骤
+   `$ref` 和受限运算 `len/sum/add/sub/mul/div`；拒绝任意 Python、未知 op、错误参数个数、
+   深层/超大表达式，以及请求体、query、path 参数和 header 中的动态节点。
+2. **代码生成**：`body_field.expect` 中的关系式生成 `step_tools.expr(...)`；纯 `$ref`
+   保持原生成路径，避免既有用例资产形态漂移。运行时缺失字段/运算类型错误显式失败。
+3. **强度推导**：同响应字段关系和受限运算计入 L3；表达式同时引用两个及以上不同步骤
+   仍推导为 L4。
+4. **落库轮询**：`Assertion.wait_ms` 持久化进 draft/caseset；`db_row` 在等待期内重查，
+   超时报错带实际等待时长。`wait_ms` 用于非 `db_row` 断言时校验失败。
+5. **A4 可发现性**：上下文新增 `assert_expression_ops`，A4 提示词、使用文档、能力设计
+   与路线图同步新增语法、边界和异步落库说明。
+6. **验证**：聚焦断言测试 16 passed；全量 Python **428 passed, 35 skipped**
+   （1 个既有 PytestCollectionWarning，无失败）；示例 `caseset.json` v4 可加载
+   （38 approved / 0 deprecated / 18 history），未因新增字段改变指纹。
 
 ## 本轮完成（`agent run` Dubbo 全链路 e2e，2026-11-16）
 
@@ -602,11 +665,21 @@
    `prop-44d9f59e45cdf922` 已批准。
 6. **OpenAPI 快照漂移警告**：本次为 V1.1 补充了 503 响应并重新生成 `openapi.json`，
    已批准用例仍基于旧快照；运行报告提示 “OpenAPI 契约已变化”，属预期 warning。
-7. **未提交**：工作区有大量修改，`engine/examples/partner_onboarding/` 部分仍为 untracked。
+7. **旧记录已清理**：2026-11-16 的 Dubbo 工作已提交并推送；本条原先的“未提交”
+   已不代表当前状态。2026-11-17 的关系断言改动仍在工作区，验收后提交。
 
 ## 下一步
 
-顺序已确认（详见 `doc/决策记录.md` §17「后续工作」）：
+2026-11-17 优先级调整：断言质量优先于协议扩展。
+
+1. **跨步骤关系（下一项）**：规则关系增加语义步骤引用（如“创建响应 → 查询响应”），
+   A4 绑定具体步骤名后生成 `$ref` / 跨步骤表达式，继续由框架物化而非模型手写。
+2. **复杂公式抽取质量评估**：对真实需求文档标注“明确公式 / 隐含假设 / 缺口”，
+   评估 A1 是否只抽取原文关系；复杂自然语言公式不得静默猜测。
+3. **示例回归**：用合伙人注册/订单类规则补充“总额与明细”“接口状态与落库状态”
+   用例，验证 L2→L3/L4 的实际提升。
+
+Java agent / Dubbo 的历史顺序已完成（详见 `doc/决策记录.md` §17「后续工作」）：
 
 1. **版本矩阵实测**：✅ 已完成（2026-11-16），JDK 8/11/17/21/26 × 16 个客户端
    版本共 80 组合全部通过；Spring Boot 3.5.6 在 JDK 17/21/26 通过。

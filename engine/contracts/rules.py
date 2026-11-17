@@ -104,6 +104,49 @@ class RuleConstraint(BaseModel):
         }
 
 
+class RuleRelation(BaseModel):
+    """规则中的关系断言配方。
+
+    关系由 A1 从需求原文显式提取，A4 只选择关系并绑定到用例；真正的断言
+    由框架按本配方确定性生成。表达式节点只允许 ``$response`` / ``$request`` /
+    ``$step`` / ``$op`` 与字面量，不接受任意代码。``$step`` 表示另一步骤的
+    响应字段，值为 ``"<语义别名>.<字段>"``，具体步骤名由 A4 在用例
+    ``relation_bindings`` 中绑定。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    relation_id: str = Field(default="", max_length=64)
+    relation_key: str = Field(default="", max_length=64)
+    assertion_kind: str = Field(
+        default="body_field",
+        description="body_field 或 db_row",
+    )
+    target: str = Field(min_length=1, max_length=200)
+    op: str = Field(default="eq", max_length=32)
+    expect: Any = Field(default=None)
+    where: dict[str, Any] = Field(default_factory=dict)
+    wait_ms: int = Field(default=0, ge=0, le=60_000)
+    description: str = Field(min_length=1, max_length=500)
+    evidence: str = Field(
+        min_length=1,
+        max_length=500,
+        description="规则 source.quote 中可直接核对的原文片段",
+    )
+
+    def content_payload(self) -> dict[str, Any]:
+        return {
+            "assertion_kind": self.assertion_kind,
+            "target": _norm(self.target),
+            "op": self.op,
+            "expect": self.expect,
+            "where": self.where,
+            "wait_ms": self.wait_ms,
+            "description": _norm(self.description),
+            "evidence": _norm(self.evidence),
+        }
+
+
 class Rule(BaseModel):
     """一条业务规则（BR）。"""
 
@@ -116,6 +159,7 @@ class Rule(BaseModel):
     entities: list[str] = Field(default_factory=list, max_length=50)
     fields: list[str] = Field(default_factory=list, max_length=50)
     constraints: list[RuleConstraint] = Field(default_factory=list, max_length=50)
+    relations: list[RuleRelation] = Field(default_factory=list, max_length=20)
     source: RuleSource
     authority: RuleAuthority = Field(default=RuleAuthority.B)
     impact: str = Field(default="", max_length=1_000)
@@ -141,6 +185,11 @@ class Rule(BaseModel):
         if self.constraints:
             payload["constraints"] = sorted(
                 (item.content_payload() for item in self.constraints),
+                key=_canonical,
+            )
+        if self.relations:
+            payload["relations"] = sorted(
+                (item.content_payload() for item in self.relations),
                 key=_canonical,
             )
         return payload

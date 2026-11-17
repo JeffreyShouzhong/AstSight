@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from astsight.rules.draft import RuleDraft
+from astsight.rules.relations import relation_step_aliases
 from astsight.rules.store import (
     RuleStoreError,
     import_rule_draft,
@@ -13,6 +14,7 @@ from astsight.rules.store import (
     rule_set_hash,
     rule_set_snapshot,
     save_rule_set,
+    validate_rule_set,
 )
 from astsight.rules.validate import rule_fingerprint, rule_key
 from contracts import RuleAuthority, RuleStatus
@@ -21,7 +23,8 @@ DOC = "docs/req.md"
 SECTION = "订单规则"
 SECTION_TEXT = (
     "订单金额必须大于 0，且同一订单最多使用 1 张优惠券。"
-    "支付状态枚举为 `paid`。"
+    "支付状态枚举为 `paid`。订单总额必须等于明细金额之和。"
+    "查询返回的 order_id 必须与创建响应中的 order_id 一致。"
 )
 
 
@@ -189,6 +192,131 @@ def test_structured_constraint_values_must_be_grounded() -> None:
     )
     assert fabricated.validation.errors
     assert any("疑似编造" in error for error in fabricated.validation.errors)
+
+
+def test_rule_relations_are_keyed_and_grounded() -> None:
+    context = _context()
+    relation = {
+        "relation_id": "RR-01",
+        "assertion_kind": "body_field",
+        "target": "total",
+        "op": "eq",
+        "expect": {
+            "$op": "sum",
+            "args": [{"$response": "items"}],
+        },
+        "description": "订单总额等于明细金额之和",
+        "evidence": "订单总额必须等于明细金额之和",
+    }
+    result = import_rule_draft(
+        project="demo",
+        context=context,
+        draft=_draft(
+            _rule(
+                text="订单总额必须等于明细金额之和",
+                source={
+                    "doc": DOC,
+                    "section": SECTION,
+                    "quote": "订单总额必须等于明细金额之和",
+                },
+                relations=[relation],
+            )
+        ),
+    )
+    assert not result.validation.errors, result.validation.errors
+    imported = result.ruleset.rules[0].relations[0]
+    assert imported.relation_id == "RR-01"
+    assert imported.relation_key.startswith("RR-")
+    result.ruleset.rules[0].relations[0].relation_key = "RR-000000000000"
+    assert any(
+        "relation_key 与内容不一致" in error
+        for error in validate_rule_set(result.ruleset)
+    )
+
+    bad_evidence = dict(relation)
+    bad_evidence["evidence"] = "订单总额等于明细"
+    invalid = import_rule_draft(
+        project="demo",
+        context=context,
+        draft=_draft(
+            _rule(
+                text="订单总额必须等于明细金额之和",
+                source={
+                    "doc": DOC,
+                    "section": SECTION,
+                    "quote": "订单总额必须等于明细金额之和",
+                },
+                relations=[bad_evidence],
+            )
+        ),
+    )
+    assert any("evidence" in error for error in invalid.validation.errors)
+
+    fixed = dict(relation)
+    fixed["expect"] = "订单总额必须等于明细金额之和"
+    invalid = import_rule_draft(
+        project="demo",
+        context=context,
+        draft=_draft(
+            _rule(
+                text="订单总额必须等于明细金额之和",
+                source={
+                    "doc": DOC,
+                    "section": SECTION,
+                    "quote": "订单总额必须等于明细金额之和",
+                },
+                relations=[fixed],
+            )
+        ),
+    )
+    assert any("not_dynamic" in error for error in invalid.validation.errors)
+
+
+def test_cross_step_relation_keeps_step_alias_until_a4_binds_it() -> None:
+    context = _context()
+    quote = "查询返回的 order_id 必须与创建响应中的 order_id 一致"
+    relation = {
+        "relation_id": "RR-02",
+        "assertion_kind": "body_field",
+        "target": "order_id",
+        "op": "eq",
+        "expect": {"$step": "create.order_id"},
+        "description": "查询返回的订单号与创建一致",
+        "evidence": quote,
+    }
+    result = import_rule_draft(
+        project="demo",
+        context=context,
+        draft=_draft(
+            _rule(
+                text=quote,
+                source={"doc": DOC, "section": SECTION, "quote": quote},
+                relations=[relation],
+            )
+        ),
+    )
+    assert not result.validation.errors, result.validation.errors
+    imported = result.ruleset.rules[0].relations[0]
+    assert imported.relation_key.startswith("RR-")
+    assert relation_step_aliases(imported) == ["create"]
+
+    # 别名必须是小写安全标识；大写或空字段直接拒绝。
+    for bad_expect in ({"$step": "Create.order_id"}, {"$step": "create."}):
+        invalid = import_rule_draft(
+            project="demo",
+            context=context,
+            draft=_draft(
+                _rule(
+                    text=quote,
+                    source={"doc": DOC, "section": SECTION, "quote": quote},
+                    relations=[{**relation, "expect": bad_expect}],
+                )
+            ),
+        )
+        assert any(
+            "relation.step_ref_invalid" in error
+            for error in invalid.validation.errors
+        ), bad_expect
 
 
 def test_quote_must_exist_in_section_and_failure_keeps_ruleset_bytes(

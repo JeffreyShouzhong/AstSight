@@ -12,6 +12,8 @@ from typing import Any, Iterable
 
 from contracts import AssertStrength
 
+from .expressions import has_relation_expression
+
 _RANK = {
     AssertStrength.L1: 1,
     AssertStrength.L2: 2,
@@ -41,6 +43,7 @@ def derive_assert_strength(
     steps: int = 1,
 ) -> AssertStrength:
     literal_value = False
+    relation_value = False
     ref_steps: set[str] = set()
     for assertion in assertions:
         kind = str(getattr(assertion, "kind", ""))
@@ -49,7 +52,9 @@ def derive_assert_strength(
         # 只有 body_field / db_row 的 expect 与 db_row 的 where 支持 $ref；
         # header 明确不支持，status_code 也不按引用执行。
         if kind in {"body_field", "db_row"}:
-            ref_steps |= _ref_steps(getattr(assertion, "expect", None))
+            expect = getattr(assertion, "expect", None)
+            ref_steps |= _ref_steps(expect)
+            relation_value = relation_value or has_relation_expression(expect)
         if kind == "db_row":
             ref_steps |= _ref_steps(getattr(assertion, "where", None) or {})
         if kind in {"body_field", "header", "db_row"} and str(
@@ -58,7 +63,7 @@ def derive_assert_strength(
             literal_value = True
     if len(ref_steps) >= 2 and steps >= 2:
         return AssertStrength.L4
-    if ref_steps:
+    if relation_value or ref_steps:
         return AssertStrength.L3
     if literal_value:
         return AssertStrength.L2

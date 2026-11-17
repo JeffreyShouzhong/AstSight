@@ -95,6 +95,19 @@ class DraftCase(BaseModel):
         max_length=MAX_RULE_REFS_PER_CASE,
         description="只写 rule_key/rule_id；authority/source_kind 由 ruleset 回填",
     )
+    relation_refs: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="所选规则关系 relation_key；断言由框架确定性生成",
+    )
+    relation_bindings: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        max_length=50,
+        description=(
+            "跨步骤关系的步骤绑定：relation_key → {语义别名: 用例步骤名}；"
+            "只用于含 $step 的规则关系，绑定的步骤必须早于承载断言的最后一步"
+        ),
+    )
     change_refs: list[ChangeRef] = Field(
         default_factory=list,
         max_length=MAX_CHANGE_REFS_PER_CASE,
@@ -137,6 +150,11 @@ class UncoveredRequirement(BaseModel):
         default_factory=list,
         max_length=50,
         description="该 section 下明确未覆盖的业务规则；用于规则级覆盖对账",
+    )
+    relation_keys: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="明确无法映射到可执行用例的规则关系",
     )
 
 
@@ -299,6 +317,7 @@ def to_test_case(
         transport=draft_case.transport,
         coverage_role=draft_case.coverage_role,
         rule_refs=resolve_rule_refs(draft_case.rule_refs, ruleset),
+        relation_refs=list(dict.fromkeys(draft_case.relation_refs)),
         change_refs=[ref.model_copy() for ref in draft_case.change_refs],
         preconditions=[item.model_copy() for item in draft_case.preconditions],
         endpoint=draft_case.endpoint,
@@ -333,6 +352,10 @@ def _assert_payload(assertion: Assertion) -> dict[str, Any]:
     }
     if assertion.where:
         payload["where"] = assertion.where
+    if assertion.wait_ms:
+        payload["wait_ms"] = assertion.wait_ms
+    if assertion.relation_ref:
+        payload["relation_ref"] = assertion.relation_ref
     return payload
 
 
@@ -396,6 +419,7 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
         ),
         "requirement_refs": refs,
         "rule_keys": sorted({ref.rule_key for ref in case.rule_refs}),
+        **({"relation_refs": sorted(set(case.relation_refs))} if case.relation_refs else {}),
         "preconditions": [
             {
                 "kind": item.kind.value,

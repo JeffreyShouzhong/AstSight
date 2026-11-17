@@ -9,6 +9,7 @@ from astsight.cases.draft import CaseDraft
 from astsight.cases.proposal import _render_review_md
 from astsight.cases.validate import validate_draft
 from astsight.codegen import generate_pytest
+from contracts import AssertStrength, Rule, RuleRelation, RuleSet, RuleSource
 
 API_DOC = """# 订单服务
 
@@ -174,6 +175,49 @@ def _pay_step() -> dict:
             },
         ],
     }
+
+
+def _pay_step_plain() -> dict:
+    """支付步骤：不含手写的 order_id 引用，留给规则关系生成。"""
+    pay = _pay_step()
+    pay["asserts"] = [
+        assertion
+        for assertion in pay["asserts"]
+        if assertion.get("target") != "order_id"
+    ]
+    return pay
+
+
+def _cross_step_ruleset(
+    expect: dict | None = None,
+) -> tuple[Rule, RuleSet]:
+    rule = Rule(
+        rule_key="RK-cross-step",
+        rule_id="BR-01",
+        text="支付返回的订单号必须与创建响应一致",
+        authority="B",
+        source=RuleSource(
+            doc="docs/api.md",
+            section="订单服务 > PATCH /orders/{order_id}",
+            quote="status",
+        ),
+        relations=[
+            RuleRelation(
+                relation_key="RR-cross-order-id",
+                assertion_kind="body_field",
+                target="order_id",
+                op="eq",
+                expect=expect or {"$step": "create.order_id"},
+                description="支付返回的订单号与创建响应一致",
+                evidence="status",
+            )
+        ],
+    )
+    return rule, RuleSet(ruleset_id="rules-cross", rules=[rule])
+
+
+def _rule_refs(rule: Rule) -> list[dict[str, str]]:
+    return [{"rule_key": rule.rule_key, "rule_id": rule.rule_id}]
 
 
 def _draft(context: dict, cases: list[dict]) -> CaseDraft:
@@ -383,6 +427,180 @@ def test_review_markdown_renders_each_step(tmp_path: Path) -> None:
     assert "#### 步骤 2 · `pay` · `PATCH /orders/{order_id}`" in markdown
     assert '"$ref": "create.order_id"' in markdown
     assert "共享 client / Mock 会话 / 前置状态" in markdown
+
+
+def test_cross_step_rule_relation_binds_alias_and_generates_ref(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    rule, ruleset = _cross_step_ruleset()
+    result = validate_draft(
+        _draft(
+            context,
+            [
+                _case(
+                    [_create_step(), _pay_step_plain()],
+                    rule_refs=_rule_refs(rule),
+                    relation_refs=["RR-cross-order-id"],
+                    relation_bindings={
+                        "RR-cross-order-id": {"create": "create"}
+                    },
+                )
+            ],
+        ),
+        context,
+        project=tmp_path,
+        ruleset=ruleset,
+    )
+    assert result.errors == []
+    case = result.resolved[0].case
+    materialized = [
+        assertion
+        for step in case.steps
+        for assertion in step.asserts
+        if assertion.relation_ref == "RR-cross-order-id"
+    ]
+    assert len(materialized) == 1
+    assertion = materialized[0]
+    assert assertion.expect == {"$ref": "create.order_id"}
+    assert assertion in case.steps[-1].asserts
+    assert case.assert_strength is AssertStrength.L3
+
+    codegen = generate_pytest([case], tmp_path / "generated")
+    assert codegen.errors == []
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in codegen.files
+    )
+    assert "body_pay.get('order_id') == step_tools.refs(" in source
+
+
+def test_cross_step_relation_requires_valid_step_binding(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    rule, ruleset = _cross_step_ruleset()
+
+    def run(**overrides):
+        case = _case(
+            [_create_step(), _pay_step_plain()],
+            rule_refs=_rule_refs(rule),
+            relation_refs=["RR-cross-order-id"],
+            **overrides,
+        )
+        return validate_draft(
+            _draft(context, [case]),
+            context,
+            project=tmp_path,
+            ruleset=ruleset,
+        )
+
+    missing = run()
+    assert any(
+        error.code == "relation.materialization_failed"
+        and "缺少别名" in error.message
+        for error in missing.errors
+    )
+
+    unknown = run(
+        relation_bindings={"RR-cross-order-id": {"create": "nope"}}
+    )
+    assert any(
+        "不存在的步骤" in error.message for error in unknown.errors
+    )
+
+    last_step = run(
+        relation_bindings={"RR-cross-order-id": {"create": "pay"}}
+    )
+    assert any(
+        "不早于承载断言的最后一步" in error.message
+        for error in last_step.errors
+    )
+
+    extra_alias = run(
+        relation_bindings={
+            "RR-cross-order-id": {"create": "create", "query": "create"}
+        }
+    )
+    assert any(
+        "未声明的别名" in error.message for error in extra_alias.errors
+    )
+
+
+def test_cross_step_relation_requires_multi_step_case(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    rule, ruleset = _cross_step_ruleset()
+    result = validate_draft(
+        _draft(
+            context,
+            [
+                _case(
+                    [],
+                    body={"customer_id": "cust_1", "quantity": 1},
+                    asserts=[
+                        {"kind": "status_code", "op": "eq", "expect": 201}
+                    ],
+                    rule_refs=_rule_refs(rule),
+                    relation_refs=["RR-cross-order-id"],
+                    relation_bindings={
+                        "RR-cross-order-id": {"create": "create"}
+                    },
+                )
+            ],
+        ),
+        context,
+        project=tmp_path,
+        ruleset=ruleset,
+    )
+    assert any(
+        "必须放在多步骤用例中" in error.message for error in result.errors
+    )
+
+
+def test_relation_bindings_reject_unselected_and_unused_entries(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    # 不含 $step 的关系：给绑定属于误用。
+    rule, ruleset = _cross_step_ruleset(expect={"$response": "order_id"})
+    unbound = validate_draft(
+        _draft(
+            context,
+            [
+                _case(
+                    [_create_step(), _pay_step_plain()],
+                    rule_refs=_rule_refs(rule),
+                    relation_refs=["RR-cross-order-id"],
+                    relation_bindings={
+                        "RR-cross-order-id": {"create": "create"}
+                    },
+                )
+            ],
+        ),
+        context,
+        project=tmp_path,
+        ruleset=ruleset,
+    )
+    assert any(
+        "不含 $step，不需要 relation_bindings" in error.message
+        for error in unbound.errors
+    )
+
+    # 未选择的关系不允许出现绑定。
+    unselected = validate_draft(
+        _draft(
+            context,
+            [
+                _case(
+                    [_create_step(), _pay_step()],
+                    relation_bindings={"RR-other": {"create": "create"}},
+                )
+            ],
+        ),
+        context,
+        project=tmp_path,
+    )
+    assert any(
+        "未在 relation_refs 中选择" in error.message
+        for error in unselected.errors
+    )
 
 
 def test_generated_pytest_renders_sequence_and_refs(tmp_path: Path) -> None:
