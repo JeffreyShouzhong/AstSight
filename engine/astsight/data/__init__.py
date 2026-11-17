@@ -14,6 +14,15 @@ from .annotations import (
     value_semantics_for,
 )
 from .catalog import CATALOG_SCHEMA_VERSION, build_catalog
+from .codeconst import (
+    CodeEnum,
+    CodeFoldResult,
+    CodeScanError,
+    CodeScanResult,
+    EnumConstant,
+    fold_code_enums,
+    scan_code_enums,
+)
 from .dbml import DBMLError, MAX_DBML_BYTES, parse_dbml
 from .ddl import (
     DDLError,
@@ -51,10 +60,15 @@ __all__ = [
     "ApplyError",
     "ApplyResult",
     "CATALOG_SCHEMA_VERSION",
+    "CodeEnum",
+    "CodeFoldResult",
+    "CodeScanError",
+    "CodeScanResult",
     "DBMLError",
     "DDLError",
     "DbTarget",
     "DialectError",
+    "EnumConstant",
     "MAX_DBML_BYTES",
     "ParsedColumn",
     "ParsedDDL",
@@ -78,6 +92,7 @@ __all__ = [
     "check_type",
     "comment_value_pairs",
     "dialect_from_url",
+    "fold_code_enums",
     "fold_rule_constants",
     "load_seed",
     "normalize_dialect",
@@ -88,6 +103,7 @@ __all__ = [
     "parse_enum_values",
     "parse_sqlite_url",
     "reflect_database",
+    "scan_code_enums",
     "semantic_hint",
     "quote_identifier",
     "render_inserts",

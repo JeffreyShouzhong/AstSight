@@ -1890,11 +1890,16 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
 
    **关键红线**：① 结构语义靠分类法，② 取值语义靠 DBML/DB comment/常量折叠，但 **③ 业务语义的根来源是需求文档与业务知识，只存在于需求上下文和已审核用例的假设里，数据库和代码给不了**。DB 能告诉你 `status` 有 0/1/2 三个值，但给不了"status=0 且超时 30 分钟 ⇒ 可取消"这条业务判断——**DBML/DB comment 只是取值语义的输入，不能替代需求原文与人工审核**。枚举取值从语义源取，不从 DB 现有数据猜
 
-   **已落地的确定性候选**（`data/annotations.py`）：注释关键词补 `semantic_type`；
-   注释里的「值=含义」、DBML `Enum` 值 `[note: ...]`、DDL `CHECK IN`/`ENUM` 与规则
-   `eq/in` 常量进入 `value_semantics`；规则折叠按字段名唯一匹配，跨表重名时放弃并告警。
-   所有候选证据固定为 `inferred`，与数据库枚举冲突的项直接丢弃并写入 `warnings`；
-   业务判断仍留给需求原文和人工审核。
+   **已落地的确定性候选**（`data/annotations.py`、`data/codeconst.py`）：注释关键词补
+   `semantic_type`；注释里的「值=含义」、DBML `Enum` 值 `[note: ...]`、DDL
+   `CHECK IN`/`ENUM`、规则 `eq/in` 常量与 Java/Python/TS 枚举常量进入
+   `value_semantics`，`source` 记录 `comment`/`dbml`/`enum`/`rule`/`llm`/
+   `code:<路径>`（模型只能沿用已知来源或标 `llm`）。
+   规则折叠按字段名唯一匹配，跨表重名时放弃并告警。代码枚举只在三种情形映射：
+   数据库枚举值全部能在代码枚举中找到、列注释点明枚举类型、或「表名+status/type/code」
+   命名唯一对应；多候选时先按取值类型与列类型排序，仍并列则放弃并写
+   `code_enum_ambiguous`。所有候选证据固定为 `inferred`，与数据库枚举冲突的项直接
+   丢弃并写入 `warnings`；业务判断仍留给需求原文和人工审核。
 6. **确定性校验（LLM 之后）**：表/列白名单、类型/枚举/NOT NULL、FK 闭包、拓扑顺序、`preconditions` 全覆盖、行数/列数上限；未知表/列直接拒绝，失败用例写入 `rejected`，不生成计划
 7. **SQL 渲染**：模型**不输出 SQL**；`data/render.py` 只从通过校验的 fixtures 生成参数化 `INSERT`/`DELETE`，标识符按白名单校验，值只走 `params`
 8. **隔离与回收**：每个用例一个 `data_state` fixture，请求前在事务内 apply，用例结束（含失败/异常）按主键 teardown；`run_scope` 记录到计划里用于多 run 审计。`keep-data` 调试模式保留数据

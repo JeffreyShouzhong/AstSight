@@ -65,6 +65,7 @@ def _catalog_payload(catalog: DataCatalog) -> dict[str, Any]:
                                 "value": value.value,
                                 "meaning": value.meaning,
                                 "rule_keys": list(value.rule_keys),
+                                "source": value.source,
                             }
                             for value in column.value_semantics
                         ],

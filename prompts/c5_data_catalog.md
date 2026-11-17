@@ -10,8 +10,9 @@
 
 - `catalog.tables[]`：表、列、类型、可空、默认值、主键、枚举、注释；
   - `value_semantics` 首轮来自框架的**确定性候选**：DB 注释（`0=待支付`）、
-    DBML `Enum` note 与规则 `eq/in` 常量折叠；证据固定为 `inferred`，带
-    `rule_keys` 的项说明有规则依据；
+    DBML `Enum` note、规则 `eq/in` 常量与代码枚举（Java/Python/TS）折叠；
+    证据固定为 `inferred`，`source` 标明来源（`comment`/`dbml`/`enum`/`rule`/
+    `llm`/`code:<路径>`），带 `rule_keys` 的项说明有规则依据；
   - `purpose` 是表注释，`semantic_type` 已由命名/类型/注释预填。
 - `catalog.foreign_keys[]`：外键关系；
 - `catalog.seed_states[]`：seed 已提供的初始数据状态；

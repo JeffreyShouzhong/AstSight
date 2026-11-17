@@ -29,6 +29,7 @@ from .annotations import (
     semantic_hint,
     value_semantics_for,
 )
+from .codeconst import CodeEnum, fold_code_enums
 from .ddl import ParsedColumn, ParsedDDL, ParsedTable
 from .seed import SeedData
 
@@ -257,6 +258,7 @@ def build_catalog(
     gaps: list[dict[str, Any]] | None = None,
     questions: list[dict[str, Any]] | None = None,
     ruleset: RuleSet | None = None,
+    code_enums: list[CodeEnum] | None = None,
 ) -> DataCatalog:
     warnings = list(ddl.warnings)
     seed = seed or SeedData()
@@ -265,8 +267,10 @@ def build_catalog(
         _table_catalog(table, fk_columns=fk_columns, warnings=warnings)
         for table in ddl.tables
     ]
-    # 规则常量折叠是确定性的：eq/in 的取值直接变成列的取值候选。
+    # 规则常量与代码枚举都是确定性折叠：先规则、后代码，后者只补含义不覆盖。
     warnings.extend(fold_rule_constants(tables, ruleset))
+    code_fold = fold_code_enums(tables, code_enums or [])
+    warnings.extend(code_fold.warnings)
     if len(tables) > MAX_TABLES:
         raise ValueError(f"表数量超过上限 {MAX_TABLES}")
     table_index = {table.name: table for table in tables}
@@ -320,6 +324,13 @@ def build_catalog(
         seen_states.add(state.state_key)
         states_out.append(state)
     sources_out = dict(sources or {})
+    if code_enums:
+        sources_out["code_enums"] = {
+            "files": sorted({enum.path for enum in code_enums}),
+            "enums": sorted({enum.name for enum in code_enums}),
+            "used": list(code_fold.used),
+            "applied": code_fold.applied,
+        }
     catalog_payload = {
         "dialect": dialect,
         "tables": [table.model_dump(mode="json") for table in tables],

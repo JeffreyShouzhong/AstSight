@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近两个提交）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近三个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -21,8 +21,9 @@
 > `db_row.wait_ms` 落库轮询与跨步骤规则关系；规则关系已结构化，并由框架按
 > A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。数据目录的
 > 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射，
-> 并会从注释、DBML Enum note 与规则常量确定性地给出取值语义候选。
-> 公式抽取已有离线评估集与脚本，下一步用评估结果决定哪些公式值得进规则层。
+> 并会从注释、DBML Enum note、规则常量与 Java/Python/TS 枚举确定性地给出取值语义
+> 候选（每条带 `source`）。公式抽取已有离线评估集与脚本，下一步用评估结果决定
+> 哪些公式值得进规则层。
 
 ## 当前状态
 
@@ -72,6 +73,36 @@
 | 受控聚合运算 | ✅ 2026-11-17 | `$op` 新增 `avg/min/max/count_distinct/pluck`，断言与规则关系共用 `OP_ARITY`；`pluck` 只接受单个字段名；空列表/缺字段/类型错误运行期显式失败；`assert_expression_ops` 由白名单生成；A1 提示词升至 9 |
 | 公式抽取评估 | ✅ 2026-11-17 | `engine/eval/relation_formulas.json` 10 条标注（含 2 条负例）；`tools/eval_relation_extraction.py` 统计 precision/recall/expression_accuracy 并列出漏抽/误抽/表达式选错；基线 P=1.00 / R=1.00 / expr=0.90（8/8 召回、0 误抽、1 条把 `$request` 写成 `$step`）；打分逻辑 6 条单测 |
 | 数据目录语义候选 | ✅ 2026-11-17 | `data/annotations.py`：注释关键词补 `semantic_type`；注释「值=含义」、DBML Enum note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量进入 `value_semantics`；表注释写入 `purpose`；冲突候选丢弃并告警；`data catalog --ruleset` |
+| 代码枚举常量 | ✅ 2026-11-17 | `data/codeconst.py`：静态扫描 Java/Python/TS 枚举（Python 用 ast，不执行代码）；按数据库枚举值、注释点名、表名+状态/类型命名三种路径映射；`ValueSemantics.source` 记录来源；`data catalog --code`；冲突/多候选/类型不符均告警，不猜 |
+
+## 本轮完成（代码枚举常量，2026-11-17）
+
+1. **扫描范围**：新增 `data/codeconst.py`，静态读取 Java `enum`、Python
+   `Enum/IntEnum/StrEnum/Flag` 与 TypeScript `enum`。Java 取构造参数首个字面量，
+   无参时用常量名；Python 用 `ast`，不执行代码；TS 支持字符串/数字初始化，
+   无初始化按 TS 规则顺延编号。支持枚举项行尾注释作为含义（如 `PENDING(0), // 待支付`）。
+2. **扫描边界**：默认跳过 `node_modules`、`target`、`build`、`dist`、`.venv`、
+   `__pycache__` 等目录；单文件 1MB、5000 文件、2000 枚举为上限；注释或字符串里的
+   `enum` 不会被误认成声明；无法解析的文件/路径进 `warnings`。
+3. **映射规则**：只有三种可解释路径——数据库枚举值全部能在代码枚举中找到（最强）、
+   列注释明确写出枚举类型名、或「表名 + status/type/code」命名唯一对应。
+   多候选先按取值类型与列类型亲和度排序（如 TEXT 列优先字符串枚举），仍并列则
+   `code_enum_ambiguous` 放弃，不猜表。
+4. **取值与失败关闭**：数据库枚举存在时只给已有值补含义，缺的值写
+   `code_enum_value_mismatch`；数值编码按列类型转换，无法转换写
+   `code_enum_value_unsupported`；代码枚举只补含义，不覆盖注释/DBML/规则的既有含义。
+5. **来源可追溯**：`ValueSemantics` 新增可选 `source`（`comment` / `dbml` / `enum` /
+   `rule` / `llm` / `code:<相对路径>`），旧目录缺省为空串；模型补全只能沿用已知来源
+   或标 `llm`，不能伪造 `code:` 来源；目录 `sources.code_enums` 记录扫描文件、枚举、
+   实际使用与折叠条数。
+6. **CLI 与提示词**：`data catalog --code`（可重复），输出增加 `code_enums` /
+   `code_files` 计数；C5a 提示词输入包含 `source`，并说明代码枚举候选可修正但
+   不得与数据库枚举冲突。
+7. **验证**：新增 8 条测试（三种语言扫描、路径缺失、按名/按值/冲突/歧义映射、CLI、
+   模型伪造来源被降为 `llm`）；全量 Python **470 passed, 37 skipped**（上轮 462/37，
+   新增 8 条通过）。
+8. **未做**：不执行代码，不解析注解/常量表达式（如 `A = B + 1`），不做跨语言枚举
+   合并；非枚举的类常量（`static final`）与 Go 常量暂不扫描，已写入 ROADMAP。
 
 ## 本轮完成（受控聚合与语义候选，2026-11-17）
 

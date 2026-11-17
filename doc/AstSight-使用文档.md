@@ -808,6 +808,12 @@ PYTHONPATH=. python -m astsight data catalog \
   --project $PROJECT \
   --db-url postgresql://user:pass@127.0.0.1:5432/service \
   --schema public --include 'order*'
+
+# 以上任意一种都可以再叠加代码枚举与规则常量
+PYTHONPATH=. python -m astsight data catalog \
+  --project $PROJECT --ddl schema.sql \
+  --code src --code web/src \
+  --ruleset ruleset.json
 ```
 
 可选参数：
@@ -818,7 +824,9 @@ PYTHONPATH=. python -m astsight data catalog \
 - `--include` / `--exclude`：按表名 glob 过滤反射结果，可重复；
 - `--context`：C1 规则上下文，用于字段语义对齐；
 - `--ruleset`：规则库 JSON。规则里 `eq/in` 的常量会按字段名唯一匹配折叠成该列的
-  取值候选（`rule_keys` 保留依据）；同名列表跨表出现时放弃折叠并告警，不猜表。
+  取值候选（`rule_keys` 保留依据）；同名列表跨表出现时放弃折叠并告警，不猜表；
+- `--code`：扫描 Java / Python / TypeScript 枚举的目录或文件（可重复）。默认跳过
+  `node_modules`、`target`、`build`、`dist`、`.venv`、`__pycache__` 等目录。
 
 即使不调用模型，目录也会先做一轮确定性语义候选：
 
@@ -826,10 +834,20 @@ PYTHONPATH=. python -m astsight data catalog \
   `semantic_type`（金额/数量/状态/是否/时间/类型等）；
 - 注释里的「值=含义」（如 `0=待支付；1=已支付`）与 DBML `Enum` 值上的
   `[note: '...']` 进入 `value_semantics`；
-- `CHECK ... IN (...)`、`ENUM(...)` 与规则常量提供取值集合；
-- 与数据库枚举冲突的注释/规则取值会被丢弃并写入 `warnings`，不会静默采纳。
+- `CHECK ... IN (...)`、`ENUM(...)`、规则常量与代码枚举提供取值集合和含义；
+- 与数据库枚举冲突的注释/规则/代码取值会被丢弃或告警，不会静默采纳。
 
-这些候选的证据一律是 `inferred`；业务含义仍以需求原文与人工审核为准。
+代码枚举只在以下情况映射到列，且必须唯一命中：
+
+1. 数据库已有枚举值（`CHECK IN`/`ENUM`）能在代码枚举里全部找到（最强依据）；
+2. 列注释里明确写了枚举类型名，如“订单状态（OrderStatus）”；
+3. 列名与枚举名符合「表名 + status/type/code」命名约定，例如 `orders.status`
+   对应 `OrderStatus` / `OrderStatusType`。
+
+同一列命中多个枚举时，先比较取值类型是否与列类型一致；仍并列就放弃并写
+`code_enum_ambiguous`，不猜。每条候选的 `source` 记录来源，如 `comment`、`dbml`、
+`rule`、`enum`、`llm` 或 `code:src/order_status.ts`。这些候选的证据一律是
+`inferred`；业务含义仍以需求原文与人工审核为准。
 
 反射只读 `pg_catalog` / `information_schema` / `sqlite_master`，不导出数据。
 PostgreSQL 需要 `psycopg`，MySQL 需要 `PyMySQL`；成功反射的表会带上主键、唯一约束、

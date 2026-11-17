@@ -10,7 +10,14 @@ from astsight.data import (
     semantic_hint,
 )
 from astsight.data.semantics import SemanticDraft
-from contracts import Rule, RuleConstraint, RuleSet, RuleSource
+from contracts import (
+    FieldSemantics,
+    Rule,
+    RuleConstraint,
+    RuleSet,
+    RuleSource,
+    ValueSemantics,
+)
 
 
 def _rule(
@@ -66,9 +73,9 @@ def test_catalog_uses_comment_hint_and_value_pairs() -> None:
     )
     order = catalog.table_index()["orders"].column_index()
     assert order["status"].semantic_type.value == "status"
-    assert [(item.value, item.meaning) for item in order["status"].value_semantics] == [
-        (0, "待支付"),
-        (1, "已支付"),
+    assert [(item.value, item.meaning, item.source) for item in order["status"].value_semantics] == [
+        (0, "待支付", "comment"),
+        (1, "已支付", "comment"),
     ]
     assert order["flag"].semantic_type.value == "boolean"
     assert order["note"].semantic_type.value == "text"
@@ -115,10 +122,10 @@ def test_dbml_enum_notes_and_table_purpose() -> None:
     table = catalog.table_index()["orders"]
     assert table.purpose == "订单主表"
     status = table.column_index()["status"]
-    assert [(item.value, item.meaning) for item in status.value_semantics] == [
-        ("pending", "待支付"),
-        ("paid", "已支付"),
-        ("canceled", "canceled"),
+    assert [(item.value, item.meaning, item.source) for item in status.value_semantics] == [
+        ("pending", "待支付", "dbml"),
+        ("paid", "已支付", "dbml"),
+        ("canceled", "canceled", "enum"),
     ]
 
 
@@ -175,6 +182,7 @@ def test_rule_constants_fold_into_value_semantics() -> None:
         ("pending", "注册成功")
     ]
     assert status[0].rule_keys == ["RK-fold"]
+    assert status[0].source == "rule"
     step = partner["audit_step"].value_semantics
     assert [(item.value, item.meaning) for item in step] == [
         (1, "初始审核步骤")
@@ -244,3 +252,29 @@ def test_apply_semantics_folds_rule_constants_idempotently() -> None:
     status = catalog.table_index()["partner"].column_index()["status"]
     assert len(status.value_semantics) == 1
     assert status.value_semantics[0].rule_keys == ["RK-fold"]
+
+
+def test_llm_semantics_cannot_forge_candidate_source() -> None:
+    catalog = _catalog(
+        "CREATE TABLE partner (id INTEGER PRIMARY KEY, status TEXT);"
+    )
+    draft = SemanticDraft(
+        field_semantics=[
+            FieldSemantics(
+                table="partner",
+                column="status",
+                semantic_type="enum",
+                value_semantics=[
+                    ValueSemantics(
+                        value="pending",
+                        meaning="待支付",
+                        source="code:forged.py",
+                    )
+                ],
+            )
+        ]
+    )
+    result = apply_semantics(catalog, draft)
+    assert result.ok
+    status = catalog.table_index()["partner"].column_index()["status"]
+    assert status.value_semantics[0].source == "llm"

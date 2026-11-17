@@ -447,6 +447,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="规则库 JSON；eq/in 常量会折叠为字段取值候选（确定性，不调用模型）",
     )
     data_catalog.add_argument(
+        "--code",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="扫描 Java/Python/TS 枚举常量的目录或文件（可重复）",
+    )
+    data_catalog.add_argument(
         "--out", default=None, help="输出文件或目录（默认 .astsight/data）"
     )
     data_catalog.add_argument("--json", action="store_true")
@@ -1257,6 +1264,11 @@ def _data_catalog(args) -> int:
         ruleset = _load_optional_ruleset(project, args.ruleset)
         if args.ruleset and ruleset is None:
             raise ValueError(f"规则库不存在: {args.ruleset}")
+        scan = None
+        if args.code:
+            from .data import scan_code_enums
+
+            scan = scan_code_enums(project, args.code)
         catalog = build_catalog(
             project=project.name,
             ddl=parsed,
@@ -1265,7 +1277,10 @@ def _data_catalog(args) -> int:
             dialect=dialect,
             sources=sources,
             ruleset=ruleset,
+            code_enums=list(scan.enums) if scan else None,
         )
+        if scan and scan.warnings:
+            catalog.warnings.extend(scan.warnings)
         errors = validate_catalog(catalog)
         if errors:
             print(json.dumps({"ok": False, "errors": errors}, ensure_ascii=False, indent=2))
@@ -1292,6 +1307,8 @@ def _data_catalog(args) -> int:
                     for table in catalog.tables
                     for column in table.columns
                 ),
+                "code_enums": len(scan.enums) if scan else 0,
+                "code_files": len(scan.files) if scan else 0,
                 "gaps": len(catalog.gaps),
                 "warnings": catalog.warnings,
             },

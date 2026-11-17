@@ -24,7 +24,7 @@ def _hash(value: Any) -> str:
 
 
 class ValueSemantics(BaseModel):
-    """字段取值含义；值必须来自 seed/枚举/需求。"""
+    """字段取值含义；值必须来自 seed/枚举/需求/规则/代码常量。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -32,6 +32,8 @@ class ValueSemantics(BaseModel):
     meaning: str = Field(min_length=1, max_length=500)
     evidence: Evidence = Field(default=Evidence.INFERRED)
     rule_keys: list[str] = Field(default_factory=list, max_length=50)
+    # 候选来源：comment / dbml / enum / rule / code:<相对路径>；空串兼容旧目录。
+    source: str = Field(default="", max_length=500)
 
 
 class BusinessState(BaseModel):

@@ -23,6 +23,8 @@ from contracts import (
 from .annotations import fold_rule_constants
 from .validate import validate_plan_fixtures
 
+_KNOWN_SOURCES = {"comment", "dbml", "enum", "rule", "llm"}
+
 
 class SemanticDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -49,6 +51,33 @@ class SemanticApplyResult:
 
 def _known_rule_keys(ruleset: RuleSet | None) -> set[str]:
     return set(ruleset.rule_index()) if ruleset is not None else set()
+
+
+def _sanitize_sources(
+    column: Any,
+    values: list[ValueSemantics],
+) -> list[ValueSemantics]:
+    """模型只能沿用已知来源或标 `llm`，不能伪造成代码/规则来源。"""
+    existing = {
+        str(item.value): item.source
+        for item in column.value_semantics
+        if item.source
+    }
+    out: list[ValueSemantics] = []
+    for value in values:
+        item = value.model_copy()
+        if item.source in _KNOWN_SOURCES:
+            pass
+        elif item.source.startswith("code:") and existing.get(
+            str(item.value)
+        ) == item.source:
+            pass
+        elif item.source:
+            item.source = "llm"
+        else:
+            item.source = existing.get(str(item.value), "llm")
+        out.append(item)
+    return out
 
 
 def _check_values(
@@ -128,7 +157,7 @@ def apply_semantics(
                 )
                 item = item.model_copy(update={"evidence": Evidence.INFERRED})
         column.semantic_type = item.semantic_type
-        column.value_semantics = [value.model_copy() for value in item.value_semantics]
+        column.value_semantics = _sanitize_sources(column, item.value_semantics)
         if item.evidence is Evidence.VERIFIED:
             column.evidence = Evidence.VERIFIED
         field_index[(item.table, item.column)] = item

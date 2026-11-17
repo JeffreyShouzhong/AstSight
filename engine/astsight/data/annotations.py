@@ -179,13 +179,13 @@ def value_semantics_for(
     enums = list(enum_values)
     enum_keys = {str(value) for value in enums}
     noted = dict(noted_meanings or {})
-    meanings: dict[str, tuple[Any, str]] = {}
+    meanings: dict[str, tuple[Any, str, str]] = {}
     for value, meaning in comment_value_pairs(comment):
         key = str(value)
         if enum_keys and key not in enum_keys:
             warnings.append(f"comment_value_unknown:{table}.{column}:{key}")
             continue
-        meanings.setdefault(key, (value, meaning))
+        meanings.setdefault(key, (value, meaning, "comment"))
 
     out: list[ValueSemantics] = []
     seen: set[str] = set()
@@ -194,19 +194,25 @@ def value_semantics_for(
         if key in seen:
             continue
         seen.add(key)
-        meaning = _meaning_for(key, meanings, noted, value)
+        meaning, source = _meaning_for(key, meanings, noted, value)
         out.append(
             ValueSemantics(
-                value=value, meaning=meaning, evidence=Evidence.INFERRED
+                value=value,
+                meaning=meaning,
+                evidence=Evidence.INFERRED,
+                source=source,
             )
         )
-    for key, (value, meaning) in meanings.items():
+    for key, (value, meaning, source) in meanings.items():
         if key in seen:
             continue
         seen.add(key)
         out.append(
             ValueSemantics(
-                value=value, meaning=meaning, evidence=Evidence.INFERRED
+                value=value,
+                meaning=meaning,
+                evidence=Evidence.INFERRED,
+                source=source,
             )
         )
     for key, meaning in noted.items():
@@ -215,7 +221,10 @@ def value_semantics_for(
         seen.add(key)
         out.append(
             ValueSemantics(
-                value=key, meaning=meaning[:MAX_MEANING_CHARS], evidence=Evidence.INFERRED
+                value=key,
+                meaning=meaning[:MAX_MEANING_CHARS],
+                evidence=Evidence.INFERRED,
+                source="dbml",
             )
         )
     return out[:MAX_VALUES_PER_COLUMN]
@@ -223,17 +232,17 @@ def value_semantics_for(
 
 def _meaning_for(
     key: str,
-    meanings: dict[str, tuple[Any, str]],
+    meanings: dict[str, tuple[Any, str, str]],
     noted: dict[str, str],
     value: Any,
-) -> str:
+) -> tuple[str, str]:
     pair = meanings.get(key)
     if pair is not None:
-        return pair[1]
+        return pair[1], pair[2]
     note = noted.get(key)
     if note:
-        return str(note)[:MAX_MEANING_CHARS]
-    return str(value)
+        return str(note)[:MAX_MEANING_CHARS], "dbml"
+    return str(value), "enum"
 
 
 def fold_rule_constants(
@@ -285,7 +294,7 @@ def fold_rule_constants(
                     )
                     continue
                 meaning = _rule_meaning(constraint.condition, rule.text)
-                _merge_value(
+                merge_value(
                     table.name, column, value, meaning, rule.rule_key, warnings
                 )
     return list(dict.fromkeys(warnings))
@@ -342,13 +351,15 @@ def _rule_meaning(condition: str, rule_text: str) -> str:
     return (meaning or "规则常量")[:MAX_MEANING_CHARS]
 
 
-def _merge_value(
+def merge_value(
     table_name: str,
     column: ColumnCatalog,
     value: Any,
     meaning: str,
     rule_key: str,
     warnings: list[str],
+    *,
+    source: str = "rule",
 ) -> None:
     for item in column.value_semantics:
         if (type(item.value).__name__, str(item.value)) != (
@@ -365,6 +376,9 @@ def _merge_value(
             item.rule_keys.append(rule_key)
         if item.meaning == str(item.value) and meaning:
             item.meaning = meaning
+            item.source = source
+        elif not item.source:
+            item.source = source
         return
     if len(column.value_semantics) >= MAX_VALUES_PER_COLUMN:
         warnings.append(
@@ -377,6 +391,7 @@ def _merge_value(
             meaning=meaning,
             evidence=Evidence.INFERRED,
             rule_keys=[rule_key] if rule_key else [],
+            source=source,
         )
     )
 
@@ -385,6 +400,7 @@ __all__ = [
     "MAX_VALUES_PER_COLUMN",
     "comment_value_pairs",
     "fold_rule_constants",
+    "merge_value",
     "semantic_hint",
     "value_semantics_for",
 ]
