@@ -76,6 +76,8 @@ from .data import (
     FieldSemantics,
     ForeignKey,
     RejectedPlan,
+    StatePath,
+    StatePathStep,
     TableCatalog,
     ValueSemantics,
 )
@@ -168,6 +170,8 @@ __all__ = [
     "Priority",
     "Profile",
     "RejectedPlan",
+    "StatePath",
+    "StatePathStep",
     "Report",
     "RequirementDoc",
     "ReviewDecision",

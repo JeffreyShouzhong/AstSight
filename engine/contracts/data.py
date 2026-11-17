@@ -116,6 +116,30 @@ class DataState(BaseModel):
     rule_keys: list[str] = Field(default_factory=list, max_length=50)
 
 
+class StatePathStep(BaseModel):
+    """状态迁移路径上的一条边；只描述规则，不直接生成 SQL。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule_key: str = Field(default="", max_length=128)
+    condition: str = Field(default="", max_length=500)
+    from_value: Any = None
+    to_value: Any = None
+
+
+class StatePath(BaseModel):
+    """多步状态迁移路径（至少两步），供审核与后续用例设计使用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path_key: str = Field(min_length=1, max_length=128)
+    table: str = Field(min_length=1, max_length=128)
+    column: str = Field(default="", max_length=128)
+    steps: list[StatePathStep] = Field(default_factory=list, max_length=20)
+    source: str = Field(default="rule", max_length=100)
+    evidence: Evidence = Field(default=Evidence.INFERRED)
+
+
 class DataCatalog(BaseModel):
     """C5a 数据目录。"""
 
@@ -133,6 +157,7 @@ class DataCatalog(BaseModel):
     tables_order: list[str] = Field(default_factory=list)
     field_semantics: list[FieldSemantics] = Field(default_factory=list)
     states: list[DataState] = Field(default_factory=list)
+    state_paths: list[StatePath] = Field(default_factory=list, max_length=500)
     seeds: list[dict[str, Any]] = Field(default_factory=list)
     limits: dict[str, Any] = Field(default_factory=dict)
     gaps: list[dict[str, Any]] = Field(default_factory=list)

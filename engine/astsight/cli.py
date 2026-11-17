@@ -53,6 +53,7 @@ from .data import (
     parse_ddl,
     reflect_database,
     validate_catalog,
+    validate_plan_fixtures,
 )
 from .data.semantics import SemanticDraft
 from .inventory import discover_openapi, inventory_routes
@@ -488,6 +489,14 @@ def _build_parser() -> argparse.ArgumentParser:
     data_semantics.add_argument("--ruleset", default=None)
     data_semantics.add_argument("--out", default=None)
     data_semantics.add_argument("--json", action="store_true")
+
+    data_states = data_sub.add_parser(
+        "states", help="查看数据目录中的业务态候选、target 与占位 gap"
+    )
+    data_states.add_argument("--project", required=True)
+    data_states.add_argument("--catalog", required=True)
+    data_states.add_argument("--state", default=None, help="只看指定 state_key")
+    data_states.add_argument("--json", action="store_true")
 
     data_plan = data_sub.add_parser(
         "plan", help="approved cases + catalog → data_plan.json"
@@ -1419,6 +1428,132 @@ def _data_semantics(args) -> int:
     return 0
 
 
+def _data_states(args) -> int:
+    project = Path(args.project).resolve()
+    try:
+        catalog = DataCatalog.model_validate(load_json(args.catalog))
+        errors = validate_catalog(catalog)
+        if errors:
+            print(
+                json.dumps({"ok": False, "errors": errors}, ensure_ascii=False, indent=2)
+            )
+            return 1
+        states = catalog.states
+        if args.state:
+            states = [
+                state for state in states if state.state_key == args.state
+            ]
+            if not states:
+                print(f"state 不存在: {args.state}", file=sys.stderr)
+                return 1
+        gaps_by_state: dict[str, list[dict[str, Any]]] = {}
+        for gap in catalog.gaps:
+            key = str(gap.get("state_key") or "")
+            if key:
+                gaps_by_state.setdefault(key, []).append(gap)
+        payload: list[dict[str, Any]] = []
+        for state in states:
+            payload.append(
+                {
+                    "state_key": state.state_key,
+                    "rule_keys": list(state.rule_keys),
+                    "tables": {
+                        table: len(rows)
+                        for table, rows in state.table_values.items()
+                    },
+                    "target_state": state.target_state,
+                    "gaps": gaps_by_state.get(state.state_key, []),
+                    "errors": validate_plan_fixtures(
+                        catalog, state.table_values
+                    ),
+                    "evidence": state.evidence.value,
+                }
+            )
+        summary = {
+            "states": len(catalog.states),
+            "paths": len(catalog.state_paths),
+            "shown": len(payload),
+            "rule_states": sum(
+                1
+                for state in catalog.states
+                if state.state_key.startswith("rule_")
+            ),
+            "transition_states": sum(
+                1
+                for state in catalog.states
+                if state.state_key.startswith("transition_")
+            ),
+            "seed_states": sum(
+                1
+                for state in catalog.states
+                if state.state_key.startswith("seed_")
+            ),
+        }
+    except Exception as exc:
+        print(f"data states 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "summary": summary,
+                    "states": payload,
+                    "paths": [
+                        path.model_dump(mode="json")
+                        for path in catalog.state_paths
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    print(
+        f"states: {summary['states']} "
+        f"(rule={summary['rule_states']}, "
+        f"transition={summary['transition_states']}, "
+        f"seed={summary['seed_states']}); shown={summary['shown']}; "
+        f"paths={summary['paths']}"
+    )
+    for item in payload:
+        tables = ", ".join(
+            f"{table}:{rows}" for table, rows in item["tables"].items()
+        )
+        target = (
+            json.dumps(item["target_state"], ensure_ascii=False)
+            if item["target_state"]
+            else "-"
+        )
+        print(f"- {item['state_key']}  tables={tables}  target={target}")
+        for gap in item["gaps"]:
+            column = ".".join(
+                part
+                for part in (gap.get("table"), gap.get("column"))
+                if part
+            )
+            print(
+                f"    gap {gap.get('kind')}: {column} — {gap.get('reason', '')}"
+            )
+        for error in item["errors"]:
+            print(f"    invalid: {error}")
+    if catalog.state_paths:
+        print(f"paths: {len(catalog.state_paths)}")
+        for path in catalog.state_paths:
+            print(f"- {path.path_key}  table={path.table}  column={path.column}")
+            values = [str(path.steps[0].from_value)] + [
+                str(step.to_value) for step in path.steps
+            ]
+            print("    " + " → ".join(values))
+            for step in path.steps:
+                print(
+                    f"    {step.from_value} → {step.to_value}"
+                    f"  ({step.rule_key}, {step.condition})"
+                )
+    return 0
+
+
 def _data_plan(args) -> int:
     project = Path(args.project).resolve()
     try:
@@ -1899,6 +2034,8 @@ def main(argv: list[str] | None = None) -> int:
             return _data_catalog(args)
         if args.data_command == "semantics":
             return _data_semantics(args)
+        if args.data_command == "states":
+            return _data_states(args)
         if args.data_command == "plan":
             return _data_plan(args)
         if args.data_command == "apply":

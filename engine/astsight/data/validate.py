@@ -113,6 +113,15 @@ def validate_catalog(catalog: DataCatalog) -> list[str]:
             errors.append(
                 f"semantics_column_unknown:{semantics.table}.{semantics.column}"
             )
+    paths: set[str] = set()
+    for path in catalog.state_paths:
+        if path.path_key in paths:
+            errors.append(f"state_path_duplicate:{path.path_key}")
+        paths.add(path.path_key)
+        if path.table not in tables:
+            errors.append(f"state_path_table_unknown:{path.path_key}:{path.table}")
+        if len(path.steps) < 2:
+            errors.append(f"state_path_steps_too_short:{path.path_key}")
     return errors
 
 
