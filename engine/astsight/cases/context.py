@@ -18,6 +18,7 @@ from ..persistence import load_json, save_json_atomic, sha256_json, sha256_text
 from ..profile import build_profiles, load_spec, parse_operations
 from ..profile.openapi import normalize_path
 from .draft import CaseDraft
+from .expressions import OP_ARITY
 from .requirements import DocumentContent, document_fingerprint, read_documents
 
 CONTEXT_SCHEMA_VERSION = 1
@@ -402,7 +403,7 @@ def build_context(
             "body_schema": ["matches"],
             "db_row": ["exists", "absent", "eq", "ne", "gte", "lte", "count_eq"],
         },
-        "assert_expression_ops": ["len", "sum", "add", "sub", "mul", "div"],
+        "assert_expression_ops": list(OP_ARITY),
     }
 
 

@@ -364,6 +364,20 @@ def _path_value(root, path, label="value"):
     return current
 
 
+def _expression_key(value):
+    """count_distinct 的去重键：区分类型，字典/列表按 JSON 归一。"""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return (type(value).__name__, value)
+
+
+def _projection_field(value):
+    return (
+        isinstance(value, str)
+        and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", value) is not None
+    )
+
+
 def _resolve_expression(value, responses, body, request_body):
     """解析断言右侧的受限表达式，不执行任意 Python。"""
     if isinstance(value, dict):
@@ -384,6 +398,59 @@ def _resolve_expression(value, responses, body, request_body):
                     return len(args[0])
                 if op == "sum":
                     return sum(args[0])
+                if op == "avg":
+                    items = args[0]
+                    if not isinstance(items, (list, tuple)):
+                        raise AssertionError("expression avg requires a list")
+                    if not items:
+                        raise AssertionError(
+                            "expression avg requires a non-empty list"
+                        )
+                    return sum(items) / len(items)
+                if op == "min":
+                    items = args[0]
+                    if not isinstance(items, (list, tuple)):
+                        raise AssertionError("expression min requires a list")
+                    if not items:
+                        raise AssertionError(
+                            "expression min requires a non-empty list"
+                        )
+                    return min(items)
+                if op == "max":
+                    items = args[0]
+                    if not isinstance(items, (list, tuple)):
+                        raise AssertionError("expression max requires a list")
+                    if not items:
+                        raise AssertionError(
+                            "expression max requires a non-empty list"
+                        )
+                    return max(items)
+                if op == "count_distinct":
+                    items = args[0]
+                    if not isinstance(items, (list, tuple)):
+                        raise AssertionError(
+                            "expression count_distinct requires a list"
+                        )
+                    return len({_expression_key(item) for item in items})
+                if op == "pluck":
+                    items, field = args
+                    if not isinstance(items, (list, tuple)):
+                        raise AssertionError(
+                            "expression pluck requires a list"
+                        )
+                    if not _projection_field(field):
+                        raise AssertionError(
+                            f"expression pluck invalid field: {field!r}"
+                        )
+                    out = []
+                    for index, item in enumerate(items):
+                        if not isinstance(item, dict) or field not in item:
+                            raise AssertionError(
+                                f"expression pluck missing field {field!r} "
+                                f"at index {index}"
+                            )
+                        out.append(item[field])
+                    return out
                 if op == "add":
                     return sum(args)
                 if op == "sub":

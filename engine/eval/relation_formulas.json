@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "name": "relation-formula-extraction",
+  "description": "A1 从中文需求原文抽取显式公式关系的离线评估集；expected 只记录目标字段/关系运算/表达式运算集合，不绑定具体 AST 形态。",
+  "cases": [
+    {
+      "id": "sum_pluck_total",
+      "requirement": "创建订单成功后，响应中的 total 必须等于 items 中每个元素的 price 之和。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "sum",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "avg_pluck_score",
+      "requirement": "查询评审列表时，响应中的 average_score 必须等于 reviews 中每条记录 score 的平均值。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "average_score",
+          "op": "eq",
+          "ops": [
+            "avg",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "max_pluck_price",
+      "requirement": "响应中的 highest_price 必须等于 items 中 price 的最大值。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "highest_price",
+          "op": "eq",
+          "ops": [
+            "max",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "distinct_sku_count",
+      "requirement": "响应中的 distinct_sku_count 必须等于 items 中 sku 去重后的数量。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "distinct_sku_count",
+          "op": "eq",
+          "ops": [
+            "count_distinct",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "len_items",
+      "requirement": "响应中的 item_count 必须等于 items 的数量。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "item_count",
+          "op": "eq",
+          "ops": [
+            "len"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "div_unit_price",
+      "requirement": "响应中的 unit_price 必须等于 total 除以 quantity 的结果。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "unit_price",
+          "op": "eq",
+          "ops": [
+            "div"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "echo_request_order_id",
+      "requirement": "查询订单时，响应中的 order_id 必须与创建请求里的 order_id 一致。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "order_id",
+          "op": "eq",
+          "ops": [],
+          "sources": [
+            "request"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cross_step_order_id",
+      "requirement": "查询订单返回的 order_id 必须与创建订单时返回的 order_id 一致。",
+      "expected": [
+        {
+          "assertion_kind": "body_field",
+          "target": "order_id",
+          "op": "eq",
+          "ops": [],
+          "sources": [
+            "step"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "descriptive_no_formula",
+      "requirement": "系统会记录订单的创建时间和最后更新时间，并在日志中保留操作人。",
+      "expected": []
+    },
+    {
+      "id": "vague_no_formula",
+      "requirement": "订单总额与订单明细存在关联，具体计算方式由业务方后续补充。",
+      "expected": []
+    }
+  ]
+}

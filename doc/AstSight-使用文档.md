@@ -627,7 +627,11 @@ PYTHONPATH=. python -m astsight cases prepare \
 
 - `body_field.expect` 支持受限关系表达式：`{"$field": "items"}` 引用当前响应字段，
   `{"$ref": "first.id"}` 引用更早步骤字段，表达式运算只允许
-  `len` / `sum` / `add` / `sub` / `mul` / `div`。例如：
+  `len` / `sum` / `avg` / `min` / `max` / `count_distinct` / `pluck` /
+  `add` / `sub` / `mul` / `div`。`pluck` 用于从列表元素中取单个字段，
+  例如 `{"$op": "sum", "args": [{"$op": "pluck", "args": [{"$field": "items"}, "price"]}]}`
+  表示明细价格求和。列表为空、`pluck` 缺字段或类型不匹配都会让用例显式失败，
+  不会被吞成“跳过断言”。例如：
 
   ```json
   {

@@ -432,6 +432,163 @@ def test_relation_expression_supports_len_and_multiple_step_refs(
     assert strength is AssertStrength.L4
 
 
+def test_expression_supports_aggregations_and_projection(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    assert {"avg", "min", "max", "count_distinct", "pluck"} <= set(
+        context["assert_expression_ops"]
+    )
+    expression = {
+        "$op": "avg",
+        "args": [
+            {"$op": "pluck", "args": [{"$field": "items"}, "price"]}
+        ],
+    }
+    result = validate_draft(
+        _draft(
+            context,
+            _case(
+                [
+                    {"kind": "status_code", "op": "eq", "expect": 201},
+                    {
+                        "kind": "body_field",
+                        "target": "total",
+                        "op": "eq",
+                        "expect": expression,
+                    },
+                ]
+            ),
+        ),
+        context,
+        project=tmp_path,
+    )
+    assert result.errors == []
+    generated = generate_pytest(
+        [result.resolved[0].case], tmp_path / "generated"
+    )
+    assert generated.errors == []
+    module = _load_conftest(tmp_path / "generated" / "conftest.py")
+
+    body = {"total": 5, "items": [{"price": 4}, {"price": 6}]}
+    assert module._resolve_expression(expression, {}, body, None) == 5
+    assert (
+        module._resolve_expression(
+            {"$op": "min", "args": [{"$field": "values"}]},
+            {},
+            {"values": [3, 1, 2]},
+            None,
+        )
+        == 1
+    )
+    assert (
+        module._resolve_expression(
+            {"$op": "max", "args": [{"$field": "values"}]},
+            {},
+            {"values": [3, 1, 2]},
+            None,
+        )
+        == 3
+    )
+    # 去重按类型区分：True 与 1 不是同一个值，字典按内容归一。
+    assert (
+        module._resolve_expression(
+            {"$op": "count_distinct", "args": [{"$field": "values"}]},
+            {},
+            {"values": [1, 1, "1", True, {"a": 1}, {"a": 1}]},
+            None,
+        )
+        == 4
+    )
+    with pytest.raises(AssertionError, match="non-empty list"):
+        module._resolve_expression(expression, {}, {"items": []}, None)
+    with pytest.raises(AssertionError, match="missing field"):
+        module._resolve_expression(
+            expression, {}, {"items": [{"price": 4}, {}]}, None
+        )
+    with pytest.raises(AssertionError, match="requires a list"):
+        module._resolve_expression(
+            {"$op": "avg", "args": [{"$field": "total"}]},
+            {},
+            {"total": 5},
+            None,
+        )
+
+
+def test_pluck_field_must_be_a_literal_name(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    result = validate_draft(
+        _draft(
+            context,
+            _case(
+                [
+                    {"kind": "status_code", "op": "eq", "expect": 201},
+                    {
+                        "kind": "body_field",
+                        "target": "total",
+                        "op": "eq",
+                        "expect": {
+                            "$op": "sum",
+                            "args": [
+                                {
+                                    "$op": "pluck",
+                                    "args": [
+                                        {"$field": "items"},
+                                        {"$field": "price"},
+                                    ],
+                                }
+                            ],
+                        },
+                    },
+                ]
+            ),
+        ),
+        context,
+        project=tmp_path,
+    )
+    assert any(
+        error.code == "expression.pluck_field_invalid"
+        for error in result.errors
+    )
+
+
+def test_rule_relation_supports_aggregation_ops(tmp_path: Path) -> None:
+    from astsight.rules.relations import validate_relation
+
+    relation = RuleRelation(
+        relation_key="RR-avg-price",
+        assertion_kind="body_field",
+        target="total",
+        op="eq",
+        expect={
+            "$op": "avg",
+            "args": [
+                {
+                    "$op": "pluck",
+                    "args": [{"$response": "items"}, "price"],
+                }
+            ],
+        },
+        description="总额等于明细均价",
+        evidence="customer_id",
+    )
+    assert validate_relation(relation) == []
+
+    invalid = relation.model_copy(
+        update={
+            "expect": {
+                "$op": "pluck",
+                "args": [
+                    {"$response": "items"},
+                    {"$response": "price"},
+                ],
+            }
+        }
+    )
+    assert any(
+        code == "relation.pluck_field_invalid"
+        for code, _message in validate_relation(invalid)
+    )
+
+
 def test_relation_expression_rejects_invalid_shape_and_request_use(
     tmp_path: Path,
 ) -> None:

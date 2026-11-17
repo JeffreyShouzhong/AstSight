@@ -197,6 +197,13 @@ def _validate_node(node: dict[str, Any], where: str) -> list[tuple[str, str]]:
                     f"{where} 的 {op} 需要 {expected} 个参数",
                 )
             ]
+        if op == "pluck" and not _projection_field(args[1]):
+            return [
+                (
+                    "relation.pluck_field_invalid",
+                    f"{where} 的 pluck 第二个参数必须是单个字段名，不能是表达式",
+                )
+            ]
         return []
     return [
         (
@@ -288,6 +295,14 @@ def _valid_path(path: str) -> bool:
         return False
     parts = path.split(".")
     return len(parts) <= 8 and all(_PATH_SEGMENT_RE.match(part) for part in parts)
+
+
+def _projection_field(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 64
+        and _PATH_SEGMENT_RE.match(value) is not None
+    )
 
 
 __all__ = [

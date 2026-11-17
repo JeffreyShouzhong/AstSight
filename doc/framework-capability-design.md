@@ -369,7 +369,8 @@ exhaustive`）只用于确定性比较，不是运行时表达式。框架对同
 
 **关系约束**：`Rule.relations` 只接受原文明确写出的关系，不由模型补公式。
 `$response` / `$request` 分别表示当前响应与请求字段，`$step` 表示另一动作的响应字段，
-`$op` 仅允许 `len/sum/add/sub/mul/div`。A4 在用例中只选择 `relation_refs`，框架把它们
+`$op` 仅允许 `len/sum/avg/min/max/count_distinct/pluck/add/sub/mul/div`
+（`pluck` 从列表元素投影单个字段，再交给聚合运算）。A4 在用例中只选择 `relation_refs`，框架把它们
 转换成带 `relation_ref` 的 `body_field` 或 `db_row` 断言；`$step` 的语义别名由 A4 在
 `relation_bindings` 中绑定到更早的用例步骤名，框架生成 `$ref` 并挂到最后一步。
 A/B 规则关系未物化且未进入 `uncovered_requirements[].relation_keys` 时用例导入阻断。
@@ -585,7 +586,12 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 **实现现状**：codegen 支持状态码、`body_field`、`header`、OpenAPI `body_schema`
 和只读 `db_row` 断言；`body_field` / `db_row` 的 `expect` 与 `db_row.where`
 支持 `$ref` 引用更早步骤；`body_field.expect` 还支持 `$field` 引用当前响应字段，
-以及 `len/sum/add/sub/mul/div` 受限运算，用固定 AST 解析，不执行任意 Python。
+以及 `len/sum/avg/min/max/count_distinct/pluck/add/sub/mul/div` 受限运算，
+用固定 AST 解析，不执行任意 Python；空列表、缺投影字段和类型错误显式失败。
+离线评估集与脚本（`engine/eval/relation_formulas.json`、
+`tools/eval_relation_extraction.py`）用于在提示词/模型变更后对比公式抽取的
+precision/recall/expression_accuracy（含 `response/request/step` 来源判定），
+不随测试自动调用模型。
 `db_row.wait_ms` 支持 0–60000ms 的显式轮询，默认 0 只查询一次；轮询会结束当前只读
 事务，确保 MySQL `REPEATABLE READ` 的下一轮能看到新提交。
 同响应关系式与步骤引用均推导为 L3，引用两个及以上不同步骤为 L4。`assert_strength`

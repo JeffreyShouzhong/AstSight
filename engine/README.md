@@ -113,7 +113,9 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
 - **多请求限于单用例内串行**：`steps[]` 按顺序共享同一个 `client`/Mock 会话执行，
   支持 `{"$ref": "<step>.<field>"}` 读取更早步骤的响应（body/query/path_params/断言
   expect/`db_row.where`，不支持 header；`body_schema` 不解析引用）。`body_field.expect`
-  还支持当前响应 `$field` 与 `len/sum/add/sub/mul/div` 受限运算。不生成跨用例捕获、
+  还支持当前响应 `$field` 与
+  `len/sum/avg/min/max/count_distinct/pluck/add/sub/mul/div` 受限运算
+  （`pluck` 从列表元素里投影单个字段）。不生成跨用例捕获、
   鉴权链路、并发或重试编排；需要数据库前置状态的用例仍用 `preconditions[].state_key`
   引用 `data_catalog`，由 C5b 生成单用例 fixture。无 catalog/plan 或未配置
   `ASTSIGHT_DB_URL` 时标 `blocked`，不伪造可执行用例。

@@ -1,0 +1,304 @@
+{
+  "corpus": "engine/eval/relation_formulas.json",
+  "name": "relation-formula-extraction",
+  "llm": {
+    "provider": "anthropic",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com/anthropic",
+    "auth_style": "bearer",
+    "timeout": 120.0,
+    "max_tokens": 16384,
+    "temperature": 0.0,
+    "max_retries": 1
+  },
+  "summary": {
+    "cases": 10,
+    "precision": 1.0,
+    "recall": 1.0,
+    "expression_accuracy": 0.9,
+    "expected": 8,
+    "predicted": 8,
+    "matched": 8,
+    "strict": 7,
+    "unexpected": 0
+  },
+  "cases": [
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "sum_pluck_total",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "total",
+          "op": "eq",
+          "ops": [
+            "pluck",
+            "sum"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "avg_pluck_score",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "average_score",
+          "op": "eq",
+          "ops": [
+            "avg",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "max_pluck_price",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "highest_price",
+          "op": "eq",
+          "ops": [
+            "max",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "distinct_sku_count",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "distinct_sku_count",
+          "op": "eq",
+          "ops": [
+            "count_distinct",
+            "pluck"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "len_items",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "item_count",
+          "op": "eq",
+          "ops": [
+            "len"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "div_unit_price",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "unit_price",
+          "op": "eq",
+          "ops": [
+            "div"
+          ],
+          "sources": [
+            "response"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 0.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [
+        {
+          "expected": {
+            "assertion_kind": "body_field",
+            "target": "order_id",
+            "op": "eq",
+            "ops": [],
+            "sources": [
+              "request"
+            ]
+          },
+          "predicted": {
+            "assertion_kind": "body_field",
+            "target": "order_id",
+            "op": "eq",
+            "ops": [],
+            "sources": [
+              "step"
+            ]
+          }
+        }
+      ],
+      "id": "echo_request_order_id",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "order_id",
+          "op": "eq",
+          "ops": [],
+          "sources": [
+            "step"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 1,
+      "predicted": 1,
+      "matched": 1,
+      "strict": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "cross_step_order_id",
+      "predicted_signatures": [
+        {
+          "assertion_kind": "body_field",
+          "target": "order_id",
+          "op": "eq",
+          "ops": [],
+          "sources": [
+            "step"
+          ]
+        }
+      ],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "descriptive_no_formula",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    },
+    {
+      "expected": 0,
+      "predicted": 0,
+      "matched": 0,
+      "strict": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "expression_accuracy": 1.0,
+      "missed": [],
+      "unexpected": [],
+      "expression_mismatches": [],
+      "id": "vague_no_formula",
+      "predicted_signatures": [],
+      "validation_errors": [],
+      "validation_warnings": []
+    }
+  ]
+}

@@ -164,10 +164,14 @@
   Header 值不支持 `$ref`；`body_schema` 的 `expect` 不解析引用。跨步骤比较属于关系式，
   内容推导为 `L3`（引用两个及以上不同步骤时为 `L4`）。
 - `body_field.expect` 可引用**当前响应**的同级或嵌套字段，格式 `{"$field": "items"}`；
-  也可与 `$ref` 一起使用受限运算 `len/sum/add/sub/mul/div`。例如：
+  也可与 `$ref` 一起使用受限运算
+  `len/sum/avg/min/max/count_distinct/pluck/add/sub/mul/div`。例如：
   `{"$op": "len", "args": [{"$field": "items"}]}` 验证 `total == len(items)`，
   `{"$op": "sub", "args": [{"$field": "balance_before"}, {"$field": "amount"}]}`
-  验证余额变化。`$field` 和 `$op` 不得用于请求体、query、path_params 或 header；
+  验证余额变化，`{"$op": "avg", "args": [{"$op": "pluck", "args": [{"$field": "reviews"}, "score"]}]}`
+  验证平均分。`pluck` 的第二个参数只能是单个字段名。`len/sum/avg/min/max/count_distinct`
+  的列表为空或 `pluck` 缺字段时运行期显式失败，不要用它兜底成“跳过断言”。
+  `$field` 和 `$op` 不得用于请求体、query、path_params 或 header；
   同响应关系式也推导为 `L3`。只有当规则或契约明确给出该关系时才生成，不得猜测业务公式。
 - 执行时同一用例的步骤共享 `client` 与 Mock 会话；`preconditions` 在第一步前 apply，
   `mock_bindings` 对整个用例生效。

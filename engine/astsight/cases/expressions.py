@@ -17,6 +17,11 @@ RESERVED_KEYS = frozenset({"$ref", "$field", "$request", "$op"})
 OP_ARITY: dict[str, tuple[int, int]] = {
     "len": (1, 1),
     "sum": (1, 1),
+    "avg": (1, 1),
+    "min": (1, 1),
+    "max": (1, 1),
+    "count_distinct": (1, 1),
+    "pluck": (2, 2),
     "add": (2, 16),
     "sub": (2, 2),
     "mul": (2, 16),
@@ -204,6 +209,14 @@ def validate_dynamic(value: Any, *, allow_response_expr: bool) -> list[tuple[str
                         f"{where} 的 {op} 需要 {expected} 个参数，实际 {len(args)} 个",
                     )
                 )
+                continue
+            if op == "pluck" and not _projection_field(args[1]):
+                errors.append(
+                    (
+                        "expression.pluck_field_invalid",
+                        f"{where} 的 pluck 第二个参数必须是单个字段名，不能是表达式",
+                    )
+                )
             continue
         errors.append(
             (
@@ -219,6 +232,15 @@ def _valid_field_path(path: str) -> bool:
         return False
     parts = path.split(".")
     return len(parts) <= 8 and all(_FIELD_SEGMENT_RE.match(part) for part in parts)
+
+
+def _projection_field(value: Any) -> bool:
+    """`pluck` 的投影字段只接受单个字段名，不接受路径或嵌套表达式。"""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 64
+        and _FIELD_SEGMENT_RE.match(value) is not None
+    )
 
 
 __all__ = [
