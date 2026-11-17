@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（前七轮已提交；本轮状态转移在工作区）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近九个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -80,7 +80,30 @@
 | 代码枚举常量 | ✅ 2026-11-17 | `data/codeconst.py`：静态扫描 Java/Python/TS 枚举（Python 用 ast，不执行代码）；按数据库枚举值、注释点名、表名+状态/类型命名三种路径映射；`ValueSemantics.source` 记录来源；`data catalog --code`；冲突/多候选/类型不符均告警，不猜 |
 | 非枚举常量组 | ✅ 2026-11-17 | 同一扫描器新增 Java `static final`（含 interface 隐式常量）、Go `const`（含 `iota`/简单 `iota` 运算）与 TS `as const` 对象；常量组要求组名以状态/类型/编码等后缀结尾；重复定义取值一致时稳定选一份；`.go` 纳入扫描；测试 473 passed / 37 skipped |
 | 跨表状态候选 | ✅ 2026-11-17 | `data/states.py`：同一条件下覆盖 ≥2 张表的 `eq/in` 约束 → `DataState` 骨架；`in` 按组合展开（单组上限 20）；主键/外键/父表/NOT NULL 用确定性占位值补齐，逐条写 `state_placeholder` gap；复用 `validate_plan_fixtures`，不合法候选丢弃并告警；`data catalog --rule-states` |
-| 状态转移候选 | ✅ 2026-11-17 | `operator="transition"` 按 `[迁移前, 迁移后]` 生成 `transition_*` 状态：迁移前进 `table_values`、迁移后进 `target_state`；target 同样校验表/列/类型/枚举/NOT NULL；可与同条件另一张表的 `eq/in` 组合；A1 提示词升至 11；测试 485 passed / 37 skipped |
+| 状态转移候选 | ✅ 2026-11-17 | `operator="transition"` 按 `[迁移前, 迁移后]` 生成 `transition_*` 状态：迁移前进 `table_values`、迁移后进 `target_state`；target 同样校验表/列/类型/枚举/NOT NULL；可与同条件另一张表的 `eq/in` 组合；A1 提示词升至 11 |
+| 示例端到端验收 | ✅ 2026-11-17 | partner 示例跑通 `catalog --ruleset --rule-states --code` → `data semantics --ruleset` → `data plan`：4/4 plan 生成、0 rejected；修复示例语义草稿的过期 `rule_key`；新增示例资产一致性测试；测试 486 passed / 37 skipped |
+
+## 本轮完成（示例端到端验收，2026-11-17）
+
+1. **验收链路**：对 `engine/examples/partner_onboarding` 依次执行
+   `data catalog --ruleset --rule-states --code` → `data semantics --draft --ruleset`
+   → `data plan --ruleset`。
+   - 目录：3 表 / 1 外键 / 10 条规则取值候选 / 1 个代码枚举 / 0 个规则状态；
+   - 语义：21 个字段、2 个业务态；
+   - 计划：4/4 生成，0 rejected、0 warning。
+2. **发现 1（预期行为）**：示例规则的状态约束都落在单表，且 `audit_step` 在
+   `partner` 与 `partner_audit_log` 同名，`--rule-states` 正确写
+   `rule_state_field_ambiguous:audit_step:2` 并放弃，不猜表。
+3. **发现 2（真实问题）**：直接用新目录跑 `data plan` 会把 4 条有 `preconditions`
+   的用例标 `state_unknown`。原因是状态来自语义 draft，必须先执行
+   `data semantics` 写回目录。使用文档已补充这个顺序。
+4. **发现 3（真实问题）**：示例 `data_semantics.draft.json` 的
+   `state_partner_registered` 仍引用旧规则 key `RK-dc186a55a422`，带
+   `--ruleset` 合并时报 `state_rule_unknown`。已替换为当前 BR-24 的
+   `RK-21a1b8ccab98`，语义合并恢复通过。
+5. **防回归**：新增 `tests/test_example_assets.py`，校验示例语义草稿引用的所有
+   `rule_keys` 都存在于当前示例 `ruleset.json`。
+6. **验证**：全量 Python **486 passed, 37 skipped**（上轮 485/37，新增 1 条通过）。
 
 ## 本轮完成（状态转移候选，2026-11-17）
 

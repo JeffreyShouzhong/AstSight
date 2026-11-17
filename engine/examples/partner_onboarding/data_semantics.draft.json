@@ -38,11 +38,46 @@
       "column": "city",
       "semantic_type": "enum",
       "value_semantics": [
-        {"value": "贵阳", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
-        {"value": "成都", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
-        {"value": "长沙", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
-        {"value": "武汉", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]},
-        {"value": "南京", "meaning": "可选城市", "evidence": "verified", "rule_keys": ["RK-ae178eedf9d4"]}
+        {
+          "value": "贵阳",
+          "meaning": "可选城市",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-ae178eedf9d4"
+          ]
+        },
+        {
+          "value": "成都",
+          "meaning": "可选城市",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-ae178eedf9d4"
+          ]
+        },
+        {
+          "value": "长沙",
+          "meaning": "可选城市",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-ae178eedf9d4"
+          ]
+        },
+        {
+          "value": "武汉",
+          "meaning": "可选城市",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-ae178eedf9d4"
+          ]
+        },
+        {
+          "value": "南京",
+          "meaning": "可选城市",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-ae178eedf9d4"
+          ]
+        }
       ],
       "business_notes": "所在城市，五选一且必须显式选择（BR-11）；DDL 未加 CHECK 约束",
       "evidence": "verified"
@@ -60,7 +95,14 @@
       "column": "status",
       "semantic_type": "status",
       "value_semantics": [
-        {"value": "pending", "meaning": "提交成功，等待审核", "evidence": "verified", "rule_keys": ["RK-21a1b8ccab98"]}
+        {
+          "value": "pending",
+          "meaning": "提交成功，等待审核",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-21a1b8ccab98"
+          ]
+        }
       ],
       "business_notes": "提交成功后固定为 pending（BR-24）",
       "evidence": "verified"
@@ -70,7 +112,14 @@
       "column": "audit_status",
       "semantic_type": "status",
       "value_semantics": [
-        {"value": "pending", "meaning": "审核尚未开始", "evidence": "verified", "rule_keys": ["RK-21a1b8ccab98"]}
+        {
+          "value": "pending",
+          "meaning": "审核尚未开始",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-21a1b8ccab98"
+          ]
+        }
       ],
       "business_notes": "提交成功后固定为 pending（BR-24）",
       "evidence": "verified"
@@ -80,7 +129,14 @@
       "column": "audit_step",
       "semantic_type": "quantity",
       "value_semantics": [
-        {"value": 1, "meaning": "第一步审核", "evidence": "verified", "rule_keys": ["RK-21a1b8ccab98"]}
+        {
+          "value": 1,
+          "meaning": "第一步审核",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-21a1b8ccab98"
+          ]
+        }
       ],
       "business_notes": "提交成功后固定为 1（BR-24）",
       "evidence": "verified"
@@ -106,7 +162,14 @@
       "column": "agreement_version",
       "semantic_type": "text",
       "value_semantics": [
-        {"value": "v1.0", "meaning": "当前协议版本", "evidence": "verified", "rule_keys": ["RK-cc5f2612cb7a"]}
+        {
+          "value": "v1.0",
+          "meaning": "当前协议版本",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-cc5f2612cb7a"
+          ]
+        }
       ],
       "business_notes": "勾选时展示的协议版本，当前为 v1.0（BR-17）；提交时记录（BR-34）",
       "evidence": "verified"
@@ -124,7 +187,12 @@
       "column": "name",
       "semantic_type": "text",
       "value_semantics": [
-        {"value": "partner", "meaning": "合伙人注册序号计数器", "evidence": "inferred", "rule_keys": []}
+        {
+          "value": "partner",
+          "meaning": "合伙人注册序号计数器",
+          "evidence": "inferred",
+          "rule_keys": []
+        }
       ],
       "business_notes": "单行计数器，服务端在事务内递增",
       "evidence": "inferred"
@@ -150,7 +218,14 @@
       "column": "action",
       "semantic_type": "text",
       "value_semantics": [
-        {"value": "submit", "meaning": "提交注册", "evidence": "verified", "rule_keys": ["RK-d2d2df562935"]}
+        {
+          "value": "submit",
+          "meaning": "提交注册",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-d2d2df562935"
+          ]
+        }
       ],
       "business_notes": "提交动作的审核日志 action=submit（BR-27）",
       "evidence": "verified"
@@ -168,7 +243,14 @@
       "column": "to_status",
       "semantic_type": "status",
       "value_semantics": [
-        {"value": "pending", "meaning": "进入待审核", "evidence": "verified", "rule_keys": ["RK-d2d2df562935"]}
+        {
+          "value": "pending",
+          "meaning": "进入待审核",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-d2d2df562935"
+          ]
+        }
       ],
       "business_notes": "提交动作的审核日志 to_status=pending（BR-27）",
       "evidence": "verified"
@@ -178,7 +260,14 @@
       "column": "audit_step",
       "semantic_type": "quantity",
       "value_semantics": [
-        {"value": 1, "meaning": "第一步审核", "evidence": "verified", "rule_keys": ["RK-d2d2df562935"]}
+        {
+          "value": 1,
+          "meaning": "第一步审核",
+          "evidence": "verified",
+          "rule_keys": [
+            "RK-d2d2df562935"
+          ]
+        }
       ],
       "business_notes": "提交动作的审核日志 audit_step=1（BR-27）",
       "evidence": "verified"
@@ -218,7 +307,7 @@
       "evidence": "inferred",
       "rule_keys": [
         "RK-ef51d27c937a",
-        "RK-dc186a55a422",
+        "RK-21a1b8ccab98",
         "RK-f18646e6a101",
         "RK-42ced5ce95ff"
       ]
@@ -270,7 +359,9 @@
       "kind": "state_seq_semantics",
       "desc": "状态行的 partner.seq 使用 0",
       "reason": "示例服务的 partner_seq 计数器由应用递增，state 只能插入行、不能先更新计数器；seq=0 可保证后续注册取到 1，不与状态行冲突。生产库如果要求序号从 1 开始，需要单独的序列状态或应用级 fixture。",
-      "affected_rule_keys": ["RK-bf9a2027d9f1"]
+      "affected_rule_keys": [
+        "RK-bf9a2027d9f1"
+      ]
     }
   ],
   "questions": [

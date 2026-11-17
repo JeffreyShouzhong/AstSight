@@ -904,6 +904,11 @@ PYTHONPATH=. python -m astsight data semantics \
 （例如进程内存里的频控计数）写入 `gaps`，由 A4 改用 `steps` 连续请求覆盖；只有
 连续请求也无法构造时才写入 `uncovered_requirements`，不要硬造状态。
 
+顺序上要注意：如果已批准用例声明了 `preconditions.state_key`，必须先用
+`data semantics` 把 draft/LLM 候选写回目录，再执行 `data plan`；否则会报
+`state_unknown`。draft 里的 `rule_keys` 也必须来自**当前** `ruleset.json`，
+规则重抽后旧 key 会失效，需要同步更新示例或重新生成 draft。
+
 ### 10.2 C5b 逐用例计划
 
 在用例批准后生成：
