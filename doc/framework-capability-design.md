@@ -1915,7 +1915,9 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
    迁移后值进 `target_state`。同一张表上的 `from_*/to_*`、`old_*/new_*`、
    `before_*/after_*` 成对字段也生成转移候选：行内同时保存两列（表示一次迁移
    事件），`target_state` 声明期望的 to 值。`target_state` 同样做表/列/类型/
-   枚举校验。
+   枚举校验。生成的状态可直接被用例 `preconditions.state_key` 引用，`data plan`
+   展开成 fixtures；SQLite e2e 覆盖规则状态 → 计划 → 建表/apply/teardown。
+   清理语句由 `render_teardown` 按逆拓扑顺序生成，执行层不再二次反转。
 6. **确定性校验（LLM 之后）**：表/列白名单、类型/枚举/NOT NULL、FK 闭包、拓扑顺序、`preconditions` 全覆盖、行数/列数上限；未知表/列直接拒绝，失败用例写入 `rejected`，不生成计划
 7. **SQL 渲染**：模型**不输出 SQL**；`data/render.py` 只从通过校验的 fixtures 生成参数化 `INSERT`/`DELETE`，标识符按白名单校验，值只走 `params`
 8. **隔离与回收**：每个用例一个 `data_state` fixture，请求前在事务内 apply，用例结束（含失败/异常）按主键 teardown；`run_scope` 记录到计划里用于多 run 审计。`keep-data` 调试模式保留数据

@@ -194,7 +194,9 @@ def _run(
         _check_tables(conn, target, [*inserts, *deletes])
         _execute(conn, inserts, applied)
         if teardown and not keep:
-            _execute(conn, list(reversed(deletes)), deleted)
+            # render_teardown 已按逆拓扑顺序生成（先删子表），这里不能再反转，
+            # 否则有外键时会先删父表并触发 FOREIGN KEY constraint failed。
+            _execute(conn, deletes, deleted)
         conn.commit()
     except ApplyError:
         conn.rollback()

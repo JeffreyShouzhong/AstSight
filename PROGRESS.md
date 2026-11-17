@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十一个提交）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十二个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -83,7 +83,24 @@
 | 状态转移候选 | ✅ 2026-11-17 | `operator="transition"` 按 `[迁移前, 迁移后]` 生成 `transition_*` 状态：迁移前进 `table_values`、迁移后进 `target_state`；target 同样校验表/列/类型/枚举/NOT NULL；可与同条件另一张表的 `eq/in` 组合；A1 提示词升至 11 |
 | 示例端到端验收 | ✅ 2026-11-17 | partner 示例跑通 `catalog --ruleset --rule-states --code` → `data semantics --ruleset` → `data plan`：4/4 plan 生成、0 rejected；修复示例语义草稿的过期 `rule_key`；新增示例资产一致性测试 |
 | 同组字段消歧 | ✅ 2026-11-17 | `resolve_field_group`：同一 condition 内用唯一字段收窄同名字段，仍不唯一才告警放弃；规则折叠与状态候选共用；示例 `audit_step` 正确落到 `partner`，`semantic_values` 10 → 12 |
-| 成对字段迁移 | ✅ 2026-11-17 | `from_*/to_*`、`old_*/new_*`、`before_*/after_*` 生成 `transition_*` 候选；行内保存两列、`target_state` 声明 to 值；`NULL` 转 null；父表被引用列非主键时补占位值；示例 BR-27 生成 1 条转移候选；测试 492 passed / 37 skipped |
+| 成对字段迁移 | ✅ 2026-11-17 | `from_*/to_*`、`old_*/new_*`、`before_*/after_*` 生成 `transition_*` 候选；行内保存两列、`target_state` 声明 to 值；`NULL` 转 null；父表被引用列非主键时补占位值；示例 BR-27 生成 1 条转移候选 |
+| 状态造数闭环 | ✅ 2026-11-17 | e2e：规则生成的跨表状态/成对字段状态作为 `preconditions.state_key` → `data plan` → SQLite `apply`/`teardown`；修复 `apply._run` 二次反转 delete 导致外键失败；新增 2 条 e2e 测试；全量 494 passed / 37 skipped |
+
+## 本轮完成（状态造数闭环，2026-11-17）
+
+1. **e2e 覆盖**：新增 `tests/test_data_rule_state_apply.py`，两种状态都从规则生成：
+   - 跨表 `rule_*` 状态：orders + order_items，含 FK 闭包和 NOT NULL 占位；
+   - 成对字段 `transition_*` 状态：events 的 from_status/to_status。
+   用例以 `preconditions.state_key` 引用状态，执行 `build_data_plan` →
+   `apply_plan` → `teardown_plan`，在真实 SQLite 建表上验证行值、`target_state`
+   和清理结果。
+2. **发现并修复清理顺序 bug**：`render_teardown` 已按逆拓扑顺序生成 delete（先子表），
+   `apply._run` 又 `reversed(deletes)` 一次，导致有外键时先删父表，报
+   `FOREIGN KEY constraint failed`。执行层改为按给定顺序删除，并加注释说明契约。
+3. **验证**：新增 2 条 e2e；全量 Python **494 passed, 37 skipped**（上轮 492/37，
+   新增 2 条通过）。
+4. **边界**：`target_state` 仍是描述性的，不会自动生成断言；占位值仍需人工确认；
+   不做多步路径或多行组合。
 
 ## 本轮完成（成对字段迁移，2026-11-17）
 

@@ -872,7 +872,10 @@ PYTHONPATH=. python -m astsight data catalog \
 - 主键、外键和被外键牵连的父表由框架补确定性占位值；其它 NOT NULL 列用类型占位，
   每条都写 `state_placeholder` gap；
 - 生成后逐条跑 `validate_plan_fixtures`（类型、枚举、FK 闭包），不通过就丢弃并告警；
-- 占位值只是“能落库的骨架”，不是业务上正确的数据，必须人工确认或替换。
+- 占位值只是“能落库的骨架”，不是业务上正确的数据，必须人工确认或替换；
+- 生成的状态写入目录 `states`，可以直接在用例 `preconditions[].state_key` 中引用；
+  `data plan` 会展开成 fixtures，`apply/teardown` 按主键参数化执行。规则状态 →
+  计划 → SQLite 建表/apply/teardown 已有 e2e 覆盖。
 
 反射只读 `pg_catalog` / `information_schema` / `sqlite_master`，不导出数据。
 PostgreSQL 需要 `psycopg`，MySQL 需要 `PyMySQL`；成功反射的表会带上主键、唯一约束、
