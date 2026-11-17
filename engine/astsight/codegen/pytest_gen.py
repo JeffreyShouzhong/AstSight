@@ -234,6 +234,28 @@ def _check_data_statement(statement, kind):
         raise RuntimeError("data_plan_invalid: params must be list")
 
 
+def _run_post_assertions(plan):
+    """用例正常结束后执行迁移后只读断言；失败时照常进入 teardown。"""
+    assertions = plan.get("post_assertions") or []
+    if not assertions:
+        return
+    tools = _DbTools()
+    try:
+        for item in assertions:
+            if not isinstance(item, dict):
+                continue
+            tools.check(
+                item.get("table"),
+                item.get("column"),
+                item.get("op") or "eq",
+                item.get("expect"),
+                item.get("where") or {},
+                int(item.get("wait_ms") or 0),
+            )
+    finally:
+        tools.close()
+
+
 @pytest.fixture()
 def data_state(request):
     """用例级造数：请求前 apply，用例结束后 teardown。
@@ -308,6 +330,8 @@ def data_state(request):
     except BaseException as exc:
         primary = exc
         raise
+    else:
+        _run_post_assertions(plan)
     finally:
         close_error = None
         try:

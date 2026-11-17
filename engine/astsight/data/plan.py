@@ -112,6 +112,105 @@ def _validate_target_state(
     return errors
 
 
+def _derive_post_assertions(
+    case: TestCase | CaseEntry,
+    catalog: DataCatalog,
+    state_keys: list[str],
+    fixtures: dict[str, list[dict[str, Any]]],
+    target_state: dict[str, Any],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    """只对实体表单列迁移生成迁移后只读断言。
+
+    限制：正例、`transition_*` 状态、单表单列目标、目标列不是 to_/new_/after_
+    成对字段、单列主键且 fixture 恰好一行。其它情况只保留 target_state 作为线索。
+    """
+    if str(getattr(case, "category", "")) != "positive":
+        return []
+    states = catalog.state_index()
+    tables = catalog.table_index()
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
+    for state_key in state_keys:
+        state = states.get(state_key)
+        if state is None or not state.state_key.startswith("transition_"):
+            continue
+        if len(state.target_state) != 1:
+            continue
+        table_name, columns = next(iter(state.target_state.items()))
+        if not isinstance(columns, dict) or len(columns) != 1:
+            continue
+        column_name, value = next(iter(columns.items()))
+        if str(column_name).lower().startswith(("to_", "new_", "after_")):
+            continue
+        table = tables.get(table_name)
+        if table is None:
+            warnings.append(
+                f"target_assertion_skipped:{state_key}:table_unknown"
+            )
+            continue
+        column = table.column_index().get(column_name)
+        if column is None:
+            warnings.append(
+                f"target_assertion_skipped:{state_key}:column_unknown"
+            )
+            continue
+        if len(table.primary_key) != 1:
+            warnings.append(
+                f"target_assertion_skipped:{state_key}:composite_primary_key"
+            )
+            continue
+        pk_name = table.primary_key[0]
+        rows = fixtures.get(table_name) or []
+        if len(rows) != 1:
+            warnings.append(
+                f"target_assertion_skipped:{state_key}:row_not_unique"
+            )
+            continue
+        pk_value = rows[0].get(pk_name)
+        if pk_value is None:
+            warnings.append(
+                f"target_assertion_skipped:{state_key}:primary_key_missing"
+            )
+            continue
+        if value is None and not column.nullable:
+            warnings.append(
+                f"target_assertion_skipped:{state_key}:not_null_target"
+            )
+            continue
+        target = f"{table_name}.{column_name}"
+        where = {pk_name: pk_value}
+        existing = [
+            assertion
+            for assertion in getattr(case, "asserts", []) or []
+            if str(getattr(assertion, "kind", "")) == "db_row"
+            and str(getattr(assertion, "target", "")) == target
+            and (getattr(assertion, "where", None) or {}) == where
+        ]
+        if existing:
+            continue
+        marker = (target, tuple(sorted(where.items())))
+        if marker in seen:
+            continue
+        seen.add(marker)
+        out.append(
+            {
+                "kind": "db_row",
+                "table": table_name,
+                "column": column_name,
+                "target": target,
+                "op": "eq",
+                "expect": target_state.get(table_name, {}).get(
+                    column_name, value
+                ),
+                "where": where,
+                "wait_ms": 0,
+                "source": "transition_target",
+            }
+        )
+    return out
+
+
 def build_data_plan(
     *,
     case: TestCase | CaseEntry,
@@ -169,6 +268,9 @@ def build_data_plan(
     for table in merged:
         if not tables[table].primary_key:
             warnings.append(f"table_without_primary_key:{table}")
+    post_assertions = _derive_post_assertions(
+        case, catalog, state_keys, merged, merged_target, warnings
+    )
 
     order = [name for name in catalog.tables_order if name in merged]
     plan_payload = {
@@ -177,6 +279,7 @@ def build_data_plan(
         "case": _case_label(case),
         "fixtures": merged,
         "target_state": merged_target,
+        "post_assertions": post_assertions,
         "run_scope": run_scope,
     }
     plan = DataPlan(
@@ -191,6 +294,7 @@ def build_data_plan(
         tables_order=order,
         fixtures=merged,
         target_state=merged_target,
+        post_assertions=post_assertions,
         fk_links=[
             f"{fk.child_table}.{','.join(fk.child_columns)} -> "
             f"{fk.parent_table}.{','.join(fk.parent_columns)}"

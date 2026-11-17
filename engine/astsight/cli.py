@@ -1596,6 +1596,9 @@ def _data_plan(args) -> int:
                 "plan": str(out),
                 "run_scope": bundle.run_scope,
                 "plans": len(bundle.plans),
+                "post_assertions": sum(
+                    len(plan.post_assertions) for plan in bundle.plans
+                ),
                 "rejected": [
                     item.model_dump(mode="json") for item in bundle.rejected
                 ],

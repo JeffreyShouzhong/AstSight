@@ -130,6 +130,10 @@ class DataPlan(BaseModel):
         default_factory=dict,
         description="用例目标状态（字段 → 目标值），业务态构造核心",
     )
+    post_assertions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="迁移后自动生成的只读 db_row 断言；仅对实体表单列迁移生效",
+    )
     fk_links: list[str] = Field(
         default_factory=list, description="外键关联（优先取自 DB 血缘）"
     )

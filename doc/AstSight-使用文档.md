@@ -948,6 +948,17 @@ PYTHONPATH=. python -m astsight data plan \
 计划只使用目录中存在的表/列/状态，并校验 FK 闭包、类型、枚举、`preconditions`
 覆盖和 SQL 标识符白名单。
 
+迁移后断言（受限）：
+
+- 只对**正例**、且 `preconditions.state_key` 指向 `transition_*` 状态的情况生成；
+- 目标必须是**单表、单列**，且目标列不是 `to_*/new_*/after_*` 这类成对字段；
+- 目标表必须有单列主键，fixture 恰好一行，能定位到迁移后的行；
+- 生成的是只读 `db_row` 断言（`table.column == 目标值`，按主键定位），写入
+  `data_plan.json` 的 `post_assertions`；生成物在用例正常结束后、teardown 之前执行；
+- 负例、成对字段（审计/事件表）、多行状态、复合主键不自动断言，只保留
+  `target_state` 作为线索；
+- 断言失败会先让用例失败，然后照常 teardown，不吞掉失败。
+
 ### 10.3 手工 apply / teardown
 
 ```bash

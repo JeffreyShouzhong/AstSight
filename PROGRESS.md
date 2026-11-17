@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十四个提交）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交并推送，见最近十五个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -86,7 +86,28 @@
 | 成对字段迁移 | ✅ 2026-11-17 | `from_*/to_*`、`old_*/new_*`、`before_*/after_*` 生成 `transition_*` 候选；行内保存两列、`target_state` 声明 to 值；`NULL` 转 null；父表被引用列非主键时补占位值；示例 BR-27 生成 1 条转移候选 |
 | 状态造数闭环 | ✅ 2026-11-17 | e2e：规则生成的跨表状态/成对字段状态作为 `preconditions.state_key` → `data plan` → SQLite `apply`/`teardown`；修复 `apply._run` 二次反转 delete 导致外键失败；新增 2 条 e2e 测试 |
 | 状态审查命令 | ✅ 2026-11-17 | `data states`：列出 state_key、规则 key、各表行数、target_state、占位 gap 与 fixture 校验错误；`--state` 过滤、`--json`；分类计数 rule/transition/seed |
-| 多步迁移路径 | ✅ 2026-11-17 | `DataCatalog.state_paths` + `StatePath/StatePathStep`：同一 (table,column) 的 transition 边按 before=上一步 after 连成路径，最多 5 步/50 条；transition 与 from/to 成对字段都贡献边；`data states` 展示路径；只读描述，不生成 fixtures；测试 499 passed / 37 skipped |
+| 多步迁移路径 | ✅ 2026-11-17 | `DataCatalog.state_paths` + `StatePath/StatePathStep`：同一 (table,column) 的 transition 边按 before=上一步 after 连成路径，最多 5 步/50 条；transition 与 from/to 成对字段都贡献边；`data states` 展示路径；只读描述，不生成 fixtures |
+| 迁移后断言 | ✅ 2026-11-17 | `DataPlan.post_assertions`：正例 + `transition_*` + 单表单列 + 非成对字段 + 单列主键且单行时生成只读 `db_row` eq 断言；生成物在用例结束后、teardown 前执行；负例/成对字段/多行/复合主键不生成；测试 503 passed / 37 skipped |
+
+## 本轮完成（迁移后断言，2026-11-17）
+
+1. **受限生成**：`build_data_plan` 从 `transition_*` 状态的 `target_state` 生成
+   `post_assertions`，条件全部满足才生成：
+   - 用例是正例；
+   - 目标是单表、单列；
+   - 目标列不是 `to_*/new_*/after_*` 成对字段；
+   - 目标表有单列主键，fixture 恰好一行，能取到主键值；
+   - 目标为 null 时列必须可空；
+   - 用例已有相同 `target`/`where` 的 `db_row` 断言时不重复添加。
+2. **执行**：生成的 `conftest.py` 在 `data_state` fixture 正常结束后（测试体通过）、
+   teardown 之前执行 `post_assertions`，用只读 `_DbTools.check`；断言失败先让用例
+   失败，然后照常 teardown，不吞掉失败。
+3. **可见性**：`data plan` 输出增加 `post_assertions` 计数，计划 JSON 保留完整断言；
+   负例、成对字段、多行状态和复合主键不自动断言，`target_state` 仍作为线索。
+4. **验证**：新增 4 条测试（正例生成、负例不生成、成对字段不生成、SQLite 真实执行）；
+   全量 Python **503 passed, 37 skipped**（上轮 499/37，新增 4 条通过）。
+5. **边界**：只支持 `db_row` eq 与单行定位；不处理异步落库（`wait_ms` 固定 0）、
+   多行状态、复合主键或负例“状态保持不变”的断言。
 
 ## 本轮完成（多步迁移路径，2026-11-17）
 
