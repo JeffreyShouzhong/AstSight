@@ -300,6 +300,127 @@ def test_build_profiles_appends_dubbo_profiles_and_template_skips_them(
     assert all(case.endpoint.startswith("dubbo:") for case in cases)
 
 
+def test_dto_fields_enum_and_nested_dto_are_sampled(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    _write(
+        root,
+        "CreateOrderRequest.java",
+        """package com.acme;
+
+import java.util.List;
+
+public class CreateOrderRequest {
+    @NotNull
+    private String sku;
+    private int quantity;
+    private OrderStatus status;
+    private List<String> tags;
+    private Address address;
+}
+""",
+    )
+    _write(
+        root,
+        "OrderStatus.java",
+        "package com.acme;\npublic enum OrderStatus { NEW, PAID }\n",
+    )
+    _write(
+        root,
+        "Address.java",
+        "package com.acme;\npublic class Address { private String city; }\n",
+    )
+    _write(root, "OrderServiceImpl.java", IMPL)
+
+    result = _scan(root)
+    create = next(item for item in result.providers if item["method"] == "create")
+    schema = create["parameter_schemas"][0]
+    assert schema["kind"] == "dto"
+    fields = {field["name"]: field for field in schema["fields"]}
+    assert fields["sku"]["required"] is True
+    assert fields["quantity"]["schema"]["kind"] == "scalar"
+    assert fields["status"]["schema"]["kind"] == "enum"
+    assert fields["status"]["schema"]["enum_values"] == ["NEW", "PAID"]
+    assert fields["tags"]["schema"]["kind"] == "collection"
+    assert fields["address"]["schema"]["kind"] == "dto"
+    assert fields["address"]["schema"]["fields"][0]["name"] == "city"
+    assert create["result_schema"]["kind"] == "dto"
+
+    profiles, _ = build_profiles([], [], project_root=root)
+    cases = generate_cases(profiles)
+    case = next(
+        item
+        for item in cases
+        if item.dubbo is not None and item.dubbo.method == "create"
+    )
+    assert case.dubbo.arguments == [
+        {
+            "sku": "sample",
+            "quantity": 1,
+            "status": "NEW",
+            "tags": [],
+            "address": {"city": "sample"},
+        }
+    ]
+    assert case.note is None
+
+
+def test_record_components_are_parsed_as_fields(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    _write(
+        root,
+        "CreateOrderRequest.java",
+        "package com.acme;\n"
+        "public record CreateOrderRequest(String sku, int quantity) {}\n",
+    )
+    _write(root, "OrderServiceImpl.java", IMPL)
+
+    result = _scan(root)
+    create = next(item for item in result.providers if item["method"] == "create")
+    fields = {
+        field["name"]: field
+        for field in create["parameter_schemas"][0]["fields"]
+    }
+    assert set(fields) == {"sku", "quantity"}
+    assert fields["sku"]["required"] is True
+
+
+def test_a4_prompt_includes_dubbo_profiles_and_dto_fields(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    _write(root, "OrderServiceImpl.java", IMPL)
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "api.md").write_text("# API\n\n## 下单\n\n下单接口。\n", encoding="utf-8")
+    prepared = prepare_context(
+        root,
+        ["docs/api.md"],
+        scan_routes=False,
+        out=tmp_path / "context",
+    )
+
+    from astsight.agent.case_design import _prompt_input
+    from contracts import RuleSet
+
+    payload = _prompt_input(
+        prepared.context,
+        ruleset=RuleSet(),
+        mode="full",
+        changed_apis=[],
+        mock_semantic=None,
+        data_catalog=None,
+    )
+
+    dubbo = [
+        item for item in payload["profiles"] if item["transport"] == "dubbo"
+    ]
+    assert dubbo
+    by_id = next(item for item in dubbo if item["method"] == "byId")
+    assert by_id["service"] == "com.acme.OrderService"
+    assert by_id["parameter_schemas"][0]["kind"] == "scalar"
+    assert payload["unsupported_profiles"] == []
+
+
 def test_protocol_port_is_resolved_from_properties(tmp_path: Path) -> None:
     root = _project(tmp_path)
     _write(root, "OrderServiceImpl.java", IMPL)

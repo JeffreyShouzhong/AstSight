@@ -21,12 +21,17 @@
 ## 输入
 
 - `mode`：`full` 生成 `level=business`；`delta` 生成 `level=code`（变更回归）。
-- `profiles[]`：接口画像（`endpoint` 为 `METHOD /path`；`transport=http`；
-  `coverage_role`；`params` / `request_body` / `body_required` /
-  `response_fields`（按响应码，含 4xx/5xx 已声明字段）/ `error_codes`；
-  `contract_incomplete`；`downstream_deps`）。没有 OpenAPI 时 `params` 与
-  `request_body` 为空、`contract_incomplete=true`，这只表示“契约未知”，
-  不表示“没有字段”。
+- `profiles[]`：接口画像。
+  - HTTP：`transport=http`，`endpoint` 为 `METHOD /path`，含 `params` /
+    `request_body` / `body_required` / `response_fields`（按响应码，含
+    4xx/5xx 已声明字段）/ `error_codes`。没有 OpenAPI 时 `params` 与
+    `request_body` 为空、`contract_incomplete=true`，这只表示“契约未知”，
+    不表示“没有字段”。
+  - Dubbo：`transport=dubbo`，`endpoint` 为
+    `dubbo:{interface}#{method}({param_types})?group=&version=`，含
+    `service` / `method` / `parameter_types` / `parameter_schemas`
+    （DTO 字段、必填标记与枚举值）/ `result_schema` / `group` / `version`。
+  - 两种都带 `coverage_role` 与 `downstream_deps`。
 - `ruleset.rules[]`：A1 业务规则与 CR 契约规则；只可引用其中的 `rule_key`。
 - `mock_semantics[]`：每个 `dep_id` 的可用 `branches[]`；可能为 `null`。
 - `data_catalog`：可用表、列、枚举和 `states[].state_key`；可能为 `null`。
@@ -96,9 +101,10 @@
 |---|---|
 | `case_key` | `[a-z][a-z0-9_]{2,63}`，同一次输出内唯一，不含 `TC-` 编号 |
 | `level` | `business` 或 `code`；`full` 模式只生成 business，`delta` 只生成 code |
-| `transport` | 只能 `http`；v1 不支持 gRPC/Dubbo，遇到直接跳过 |
+| `transport` | 只能 `http` 或 `dubbo`；gRPC 跳过 |
 | `coverage_role` | 必须与画像一致（`primary` / `alias` / `independent`） |
-| `endpoint` | 必须原样取自画像 `endpoint`（`METHOD /path`） |
+| `endpoint` | 必须原样取自画像 `endpoint`；HTTP 是 `METHOD /path`，Dubbo 是完整的 `dubbo:{interface}#{method}(...)?group=&version=` |
+| `dubbo` | 仅 `transport=dubbo`：只填 `arguments`（按 `parameter_schemas` 构造），可选 `attachments` / `url`。`interface/method/parameter_types/group/version/target_port` 由画像回填，不要手写；`arguments` 数量必须与参数类型一致 |
 | `rule_refs` | 至少 1 条；`rule_key` 必须存在于输入规则库；不得引用 `ungrounded` / `deprecated` 规则；不得只引用 C/D 级规则 |
 | `relation_refs` | 可选；只填输入 `ruleset.rules[].relations[].relation_key`。选中后框架按规则配方生成断言，**不要在 asserts 里重复手写同一关系** |
 | `relation_bindings` | 仅当所选关系含 `$step` 时必填：`{relation_key: {语义别名: 本用例步骤名}}`；绑定的步骤必须早于最后一步；不含 `$step` 的关系不要填 |
@@ -106,13 +112,46 @@
 | `change_refs` | code 用例至少 1 条；`changed_api` 取自 `changed_apis[].handler` |
 | `preconditions` | `state_key` 必须存在于 `data_catalog.states`；没有 catalog 时不要编造 |
 | `category` | 小写标识，如 `positive` / `negative` / `boundary` / `change_regression` |
-| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`（target 为响应状态码，expect 可省略由 OpenAPI 回填），`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`；值必须来自规则原文或契约。关系式只允许 `context.assert_expression_ops` 中的受限运算 |
-| `steps` | 多请求用例；至少 2 步。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中 |
+| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op。HTTP：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`，`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`。Dubbo：`rpc_status` 用 `eq/ne/in`，`result_present` 用 `exists/absent`，`result_field` 用 `exists/eq/ne/in/gte/lte/contains`，`error_code` 用 `eq/ne/in/contains`，`exception_type` 用 `eq/ne/contains`，`error_message` 用 `eq/contains`。HTTP 与 Dubbo 断言不能混用；Dubbo 用例至少 1 条 `rpc_status`。值必须来自规则原文或契约。关系式只允许 `context.assert_expression_ops` 中的受限运算 |
+| `steps` | 仅 HTTP；多请求用例至少 2 步。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中。Dubbo 不支持 `steps` |
 | `assert_strength` | 按断言内容填写：`L1` 状态码/字段存在/结构；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨两个及以上步骤的不变量。框架会按内容重新推导，不一致时产生 `assert_strength.mismatch` warning 并以推导值为准 |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
-| `path_params` / `query` / `headers` / `body` | 字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
+| `path_params` / `query` / `headers` / `body` | 仅 HTTP。字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
 | `rationale` / `assumptions` / `note` | `rationale` 写该用例证明哪条规则的哪一面；`assumptions` 写契约缺口/歧义假设；`note` 写规则冲突 `topic` |
 | `uncovered_requirements` | 无法构造的 section 必写 `reason`；未覆盖的业务规则写 `rule_keys`，无法映射的关系写 `relation_keys`（不得漏掉 A/B 级） |
+
+### Dubbo 用例
+
+`transport=dubbo` 时不要写 `path_params/query/headers/body`；业务字段放进
+`dubbo.arguments`，按画像 `parameter_schemas` 构造。`fields[].required=true`
+的字段必须给值，枚举字段取 `enum_values` 中的值。不要手写
+`interface/method/parameter_types/group/version`，框架会按 endpoint 回填并校验。
+
+```json
+{
+  "case_key": "order_by_id_ok",
+  "level": "business",
+  "transport": "dubbo",
+  "coverage_role": "primary",
+  "requirement_refs": [
+    {"doc": "requirements.md", "section": "3.2 查询订单", "quote": "按订单号查询"}
+  ],
+  "endpoint": "dubbo:com.acme.OrderService#byId(java.lang.String)?group=order&version=1.0.0",
+  "category": "positive",
+  "asserts": [
+    {"kind": "rpc_status", "op": "eq", "expect": "OK"},
+    {"kind": "result_field", "target": "orderId", "op": "exists"}
+  ],
+  "dubbo": {"arguments": ["O-1"]},
+  "assert_strength": "L1",
+  "rationale": "按规则 BR-01 查询已有订单",
+  "mock_bindings": {}
+}
+```
+
+失败分支用 `rpc_status` + `error_code` / `exception_type`，例如
+`{"kind": "rpc_status", "op": "eq", "expect": "NO_PROVIDER"}`。
+Dubbo 用例不支持 `steps`；连续调用请等后续版本或用 HTTP 入口。
 
 失败场景可用 `db_row` 验证“没有副作用”：写入失败后断言目标表不存在对应行，
 例如 `{"kind": "db_row", "target": "partners", "op": "absent", "where": {"mobile": "13800138000"}}`。

@@ -177,9 +177,14 @@ def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
         "downstream_deps": profile.get("downstream_deps") or [],
         "service": profile.get("service"),
         "parameter_types": profile.get("parameter_types") or [],
+        "parameter_schemas": profile.get("parameter_schemas") or [],
         "return_type": profile.get("return_type"),
+        "result_schema": profile.get("result_schema"),
         "group": profile.get("group"),
         "version": profile.get("version"),
+        "direct_url": profile.get("direct_url"),
+        "protocol_port": profile.get("protocol_port"),
+        "url_source": profile.get("url_source"),
     }
 
 
@@ -193,10 +198,11 @@ def _prompt_input(
     data_catalog: DataCatalog | None,
 ) -> dict[str, Any]:
     profiles = context.get("profiles") or []
-    http_profiles = [
+    supported_transports = {"http", "dubbo"}
+    supported_profiles = [
         item
         for item in profiles
-        if str(item.get("transport", "http")).lower() == "http"
+        if str(item.get("transport", "http")).lower() in supported_transports
     ]
     unsupported_profiles = [
         {
@@ -205,12 +211,12 @@ def _prompt_input(
             "reason": "transport_not_supported_in_case_design",
         }
         for item in profiles
-        if str(item.get("transport", "http")).lower() != "http"
+        if str(item.get("transport", "http")).lower() not in supported_transports
     ]
     return {
         "mode": mode,
         "context_id": context.get("context_id"),
-        "profiles": [_profile_view(item) for item in http_profiles],
+        "profiles": [_profile_view(item) for item in supported_profiles],
         "unsupported_profiles": unsupported_profiles,
         "profile_unmapped": context.get("profile_unmapped") or [],
         "documents": context.get("documents") or [],

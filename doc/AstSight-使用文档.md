@@ -1145,6 +1145,11 @@ dubbo:com.acme.OrderService#create(com.acme.CreateOrderRequest)?group=order&vers
 `interfaceName`/`interfaceClass`、Kotlin 提供方都会显式 `unsupported`。
 Spring 的 `@Service` 不会被误判。
 
+DTO 字段会进入 `parameter_schemas` / `result_schema`：普通字段、嵌套 DTO、
+record 组件、枚举常量，以及 `@NotNull` / `@NotBlank` / `@NotEmpty` 等必填
+标记。模板和 A4 都按这些字段构造 `arguments`；无法静态解析的类型按 `null`
+采样并在用例 `note` 里标明。
+
 ### 11A.3 目标地址
 
 按优先级解析：
@@ -1215,9 +1220,11 @@ PYTHONPATH=. python -m astsight run \
 - 首版只支持直连 URL + Hessian2；注册中心（Nacos/ZooKeeper）与 Kryo/FST
   显式失败。
 - sidecar 固定同步调用；异步/oneway 不生成用例。
-- 模板只生成正向冒烟：POJO 参数按空对象 `{}` 构造，并在用例 `note` 里标明
-  需要人工补字段；没有字段级断言时只校验 `rpc_status` 与返回值存在。
-- A4 提示词目前只收 HTTP 画像；Dubbo 用例来自模板或人工草案。
+- 模板只生成正向冒烟：DTO 参数按字段采样（必填标记、嵌套 DTO、枚举），
+  无法解析的字段按 `null` 并在 `note` 标明；没有字段级断言时只校验
+  `rpc_status` 与返回值存在。
+- A4 已收 Dubbo 画像与 `parameter_schemas`，可直接生成 `transport=dubbo`
+  草案；草案只填 `dubbo.arguments`，接口/方法/参数类型由框架回填并校验。
 
 ---
 

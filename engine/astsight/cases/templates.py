@@ -195,22 +195,71 @@ def _dubbo_sample_arg(type_name: str) -> Any:
     return {}
 
 
+def _dubbo_sample_schema(schema: dict, depth: int = 0) -> Any:
+    kind = str(schema.get("kind") or "")
+    type_name = str(schema.get("type") or "")
+    if kind == "scalar":
+        return _DUBBO_SCALARS.get(type_name)
+    if kind == "enum":
+        values = schema.get("enum_values") or []
+        return values[0] if values else ""
+    if kind == "dto":
+        if depth >= 4:
+            return {}
+        body: dict[str, Any] = {}
+        for field in (schema.get("fields") or [])[:20]:
+            body[str(field.get("name"))] = _dubbo_sample_schema(
+                field.get("schema") or {}, depth + 1
+            )
+        return body
+    if kind == "collection":
+        return []
+    if kind == "map":
+        return {}
+    if kind == "reference":
+        return {}
+    return None
+
+
+def _unknown_schema_types(schema: dict) -> list[str]:
+    if not isinstance(schema, dict):
+        return []
+    if schema.get("kind") == "unknown":
+        return [str(schema.get("type") or "")]
+    result: list[str] = []
+    for field in schema.get("fields") or []:
+        result.extend(_unknown_schema_types(field.get("schema") or {}))
+    return result
+
+
 def _dubbo_case(profile: dict, case_id: str) -> TestCase:
     types = list(profile.get("parameter_types") or [])
-    arguments = [_dubbo_sample_arg(type_name) for type_name in types]
-    complex_args = [
-        type_name
-        for type_name in types
-        if type_name not in _DUBBO_SCALARS
-        and not type_name.endswith("[]")
-        and not type_name.startswith(_DUBBO_COLLECTIONS)
-    ]
+    schemas = list(profile.get("parameter_schemas") or [])
+    if schemas:
+        arguments = [_dubbo_sample_schema(schema) for schema in schemas]
+        complex_args = sorted(
+            {
+                type_name
+                for schema in schemas
+                for type_name in _unknown_schema_types(schema)
+                if type_name
+            }
+        )
+    else:
+        arguments = [_dubbo_sample_arg(type_name) for type_name in types]
+        complex_args = [
+            type_name
+            for type_name in types
+            if type_name not in _DUBBO_SCALARS
+            and not type_name.endswith("[]")
+            and not type_name.startswith(_DUBBO_COLLECTIONS)
+        ]
     asserts = [Assertion(kind="rpc_status", op="eq", expect="OK")]
     return_type = str(profile.get("return_type") or "")
     if return_type and return_type not in {"void", "java.lang.Void"}:
         asserts.append(Assertion(kind="result_present", op="exists"))
     note = (
-        f"DTO 参数按空对象构造，需人工补字段: {', '.join(complex_args)}"
+        f"无法静态采样的参数类型，字段值需人工补充: {', '.join(complex_args)}"
         if complex_args
         else None
     )

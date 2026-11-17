@@ -10,7 +10,9 @@
 
 - `@DubboService`、2.7 的 `org.apache.dubbo...@Service`、XML `<dubbo:service>`；
 - 实现类的 `implements` 或 `interfaceName`/`interfaceClass` 能定位接口源码；
-- 每个接口方法生成一个 `dubbo:{interface}#{method}({param_types})?...` 端点。
+- 每个接口方法生成一个 `dubbo:{interface}#{method}({param_types})?...` 端点；
+- DTO 字段、必填注解（`@NotNull` 等）、嵌套 DTO 与枚举常量进入
+  `parameter_schemas` / `result_schema`，供 A4 与模板采样。
 
 不猜：
 
@@ -139,6 +141,33 @@ _PROPERTY_PORT = re.compile(
 )
 _XML_PROTOCOL = re.compile(r"<dubbo:protocol\b[^>]*>", re.S)
 _XML_PORT = re.compile(r'\bport\s*=\s*"(\d+)"')
+_CLASS_BODY = re.compile(
+    r"\b(?P<kind>class|record)\s+([A-Za-z_$][\w$]*)[^{;]*\{"
+)
+_ENUM_BODY = re.compile(r"\benum\s+([A-Za-z_$][\w$]*)[^{]*\{")
+_FIELD_STATEMENT = re.compile(
+    r"^\s*(?P<annotations>(?:@[\w.$]+(?:\s*\([^)]*\))?\s*)*)"
+    r"(?P<modifiers>(?:(?:public|protected|private|static|final|transient|volatile)\s+)*)"
+    r"(?P<type>[A-Za-z_$][\w.$]*(?:\s*<[^;{}]*>)?(?:\s*\[\s*\])*)\s+"
+    r"(?P<name>[A-Za-z_$][\w$]*)\s*(?:=.*)?$",
+    re.S,
+)
+_ANNOTATION_NAME = re.compile(r"@([\w.$]+)")
+_RECORD_COMPONENT = re.compile(
+    r"^\s*(?P<annotations>(?:@[\w.$]+(?:\s*\([^)]*\))?\s*)*)"
+    r"(?P<type>[A-Za-z_$][\w.$]*(?:\s*<[^;{}]*>)?(?:\s*\[\s*\])*)\s+"
+    r"(?P<name>[A-Za-z_$][\w$]*)\s*$",
+    re.S,
+)
+_REQUIRED_ANNOTATIONS = {
+    "NotNull",
+    "NotBlank",
+    "NotEmpty",
+    "NonNull",
+    "Required",
+}
+_MAX_SCHEMA_DEPTH = 4
+_MAX_SCHEMA_FIELDS = 40
 
 
 @dataclass(frozen=True)
@@ -154,6 +183,25 @@ class _MethodDecl:
     line: int
     return_type: str | None
     declared_return_type: str
+
+
+@dataclass(frozen=True)
+class _FieldDecl:
+    name: str
+    type: str | None
+    declared_type: str
+    annotations: tuple[str, ...] = ()
+    required: bool = False
+
+
+@dataclass
+class _ClassInfo:
+    fqn: str
+    package: str
+    imports: dict[str, str]
+    is_enum: bool = False
+    fields: list[_FieldDecl] = field(default_factory=list)
+    enum_values: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -452,6 +500,217 @@ def _dubbo_protocol_ports(raw: str, suffix: str) -> set[int]:
     return ports
 
 
+_SCALAR_JVM_TYPES = {
+    "java.lang.String",
+    "java.lang.CharSequence",
+    "java.lang.Object",
+    "int",
+    "java.lang.Integer",
+    "short",
+    "java.lang.Short",
+    "byte",
+    "java.lang.Byte",
+    "long",
+    "java.lang.Long",
+    "float",
+    "java.lang.Float",
+    "double",
+    "java.lang.Double",
+    "boolean",
+    "java.lang.Boolean",
+    "char",
+    "java.lang.Character",
+    "java.math.BigDecimal",
+    "java.math.BigInteger",
+}
+_COLLECTION_TYPES = {
+    "java.util.List",
+    "java.util.Set",
+    "java.util.Collection",
+    "java.util.ArrayList",
+    "java.util.LinkedList",
+    "java.util.HashSet",
+    "java.util.LinkedHashSet",
+}
+_MAP_TYPES = {
+    "java.util.Map",
+    "java.util.HashMap",
+    "java.util.LinkedHashMap",
+    "java.util.TreeMap",
+}
+
+
+def _top_level_statements(body: str):
+    """按顶层 `;` 切出字段语句；跳过方法体/内部类等 `{...}` 块。"""
+    start = 0
+    index = 0
+    length = len(body)
+    while index < length:
+        char = body[index]
+        if char in "\"'":
+            quote = char
+            index += 1
+            while index < length and body[index] != quote:
+                if body[index] == "\\":
+                    index += 1
+                index += 1
+            index += 1
+            continue
+        if char == "{":
+            end = _matching_brace(body, index)
+            if end <= index:
+                return
+            index = end + 1
+            start = index
+            continue
+        if char == ";":
+            yield body[start:index]
+            start = index + 1
+        index += 1
+
+
+def _annotation_names(raw: str) -> tuple[str, ...]:
+    return tuple(_ANNOTATION_NAME.findall(raw or ""))
+
+
+def _is_required_field(annotations: tuple[str, ...]) -> bool:
+    return any(name.rsplit(".", 1)[-1] in _REQUIRED_ANNOTATIONS for name in annotations)
+
+
+def _parse_fields(
+    body: str,
+    *,
+    package: str,
+    imports: dict[str, str],
+    classes: dict[str, str],
+) -> list[_FieldDecl]:
+    fields: list[_FieldDecl] = []
+    for statement in _top_level_statements(body):
+        match = _FIELD_STATEMENT.match(statement)
+        if match is None:
+            continue
+        modifiers = (match.group("modifiers") or "").split()
+        if "static" in modifiers:
+            continue
+        declared = _strip_annotations(match.group("type")).strip()
+        resolved = _resolve_type(
+            declared, package=package, imports=imports, classes=classes
+        )
+        annotations = _annotation_names(match.group("annotations") or "")
+        fields.append(
+            _FieldDecl(
+                name=match.group("name"),
+                type=resolved,
+                declared_type=declared,
+                annotations=annotations,
+                required=_is_required_field(annotations),
+            )
+        )
+    return fields
+
+
+def _record_header(text: str, start: int) -> str:
+    open_index = text.find("(", start)
+    if open_index < 0:
+        return ""
+    depth = 0
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_index + 1 : index]
+    return ""
+
+
+def _parse_record_components(
+    text: str,
+    match: re.Match,
+    *,
+    package: str,
+    imports: dict[str, str],
+    classes: dict[str, str],
+) -> list[_FieldDecl]:
+    fields: list[_FieldDecl] = []
+    for item in _split_type_list(_record_header(text, match.start())):
+        component = _RECORD_COMPONENT.match(item)
+        if component is None:
+            continue
+        declared = component.group("type").strip()
+        resolved = _resolve_type(
+            declared, package=package, imports=imports, classes=classes
+        )
+        annotations = _annotation_names(component.group("annotations") or "")
+        fields.append(
+            _FieldDecl(
+                name=component.group("name"),
+                type=resolved,
+                declared_type=declared,
+                annotations=annotations,
+                required=True,
+            )
+        )
+    return fields
+
+
+def _parse_enum_constants(body: str) -> list[str]:
+    head = body.split(";", 1)[0]
+    names = re.findall(
+        r"(?:^|,)\s*(?:@[\w.$]+(?:\s*\([^)]*\))?\s*)*([A-Za-z_$][\w$]*)",
+        head,
+    )
+    return [name for name in names if name not in {"public", "private", "protected"}]
+
+
+def _schema_for_type(
+    type_name: str | None,
+    class_index: dict[str, _ClassInfo],
+    *,
+    depth: int = 0,
+    seen: set[str] | None = None,
+) -> dict[str, Any]:
+    if not type_name:
+        return {"kind": "unknown", "type": ""}
+    if type_name in _SCALAR_JVM_TYPES:
+        return {"kind": "scalar", "type": type_name}
+    if type_name in _COLLECTION_TYPES or type_name.endswith("[]"):
+        return {"kind": "collection", "type": type_name}
+    if type_name in _MAP_TYPES:
+        return {"kind": "map", "type": type_name}
+    info = class_index.get(type_name)
+    if info is None:
+        return {"kind": "unknown", "type": type_name}
+    if info.is_enum:
+        return {
+            "kind": "enum",
+            "type": type_name,
+            "enum_values": list(info.enum_values),
+        }
+    seen = set(seen or ())
+    if type_name in seen or depth >= _MAX_SCHEMA_DEPTH:
+        return {"kind": "reference", "type": type_name}
+    seen.add(type_name)
+    fields: list[dict[str, Any]] = []
+    for field in info.fields[:_MAX_SCHEMA_FIELDS]:
+        # 每个字段独立记录路径，允许不同分支引用同一 DTO，同时仍能断环。
+        schema = _schema_for_type(
+            field.type, class_index, depth=depth + 1, seen=set(seen)
+        )
+        fields.append(
+            {
+                "name": field.name,
+                "type": field.type,
+                "declared_type": field.declared_type,
+                "required": field.required,
+                "annotations": list(field.annotations),
+                "schema": schema,
+            }
+        )
+    return {"kind": "dto", "type": type_name, "fields": fields}
+
+
 def _provider_kind(
     simple: str,
     qualified: str | None,
@@ -480,6 +739,7 @@ def _provider_records(
     service: str,
     impl: str,
     iface: _Interface,
+    class_index: dict[str, _ClassInfo],
     group: str,
     version: str,
     direct_url: str | None,
@@ -509,6 +769,15 @@ def _provider_records(
                     "parameter_types": list(declaration.params),
                     "return_type": declaration.return_type,
                     "return_type_declared": declaration.declared_return_type,
+                    "parameter_schemas": [
+                        _schema_for_type(type_name, class_index)
+                        for type_name in declaration.params
+                    ],
+                    "result_schema": (
+                        _schema_for_type(declaration.return_type, class_index)
+                        if declaration.return_type
+                        else None
+                    ),
                     "group": group,
                     "version": version,
                     "direct_url": direct_url,
@@ -557,6 +826,7 @@ def _scan_provider_annotations(
     text: str,
     interfaces: dict[str, _Interface],
     classes: dict[str, str],
+    class_index: dict[str, _ClassInfo],
     providers: dict[str, dict[str, Any]],
     protocol_port: int | None,
     result: DubboScanResult,
@@ -677,6 +947,7 @@ def _scan_provider_annotations(
             service=service,
             impl=impl_fqn,
             iface=iface,
+            class_index=class_index,
             group=group,
             version=version,
             direct_url=direct_url,
@@ -700,6 +971,7 @@ def scan_dubbo_sources(
     sources: list[tuple[str, str]] = []
     classes: dict[str, str] = {}
     interfaces: dict[str, _Interface] = {}
+    class_index: dict[str, _ClassInfo] = {}
     providers: dict[str, dict[str, Any]] = {}
     xml_services: list[dict[str, Any]] = []
     protocol_ports: set[int] = set()
@@ -820,6 +1092,55 @@ def scan_dubbo_sources(
                 ),
             )
 
+    # DTO 字段与枚举常量：供模板采样和 A4 生成 arguments。
+    for rel, text in sources:
+        package, imports = _package_and_imports(text)
+        for match in _CLASS_BODY.finditer(text):
+            name = match.group(2)
+            brace = text.find("{", match.start())
+            if brace < 0:
+                continue
+            end = _matching_brace(text, brace)
+            if end <= brace:
+                continue
+            fqn = f"{package}.{name}" if package else name
+            body = text[brace + 1 : end]
+            fields = (
+                _parse_record_components(
+                    text,
+                    match,
+                    package=package,
+                    imports=imports,
+                    classes=classes,
+                )
+                if match.group("kind") == "record"
+                else _parse_fields(
+                    body, package=package, imports=imports, classes=classes
+                )
+            )
+            class_index[fqn] = _ClassInfo(
+                fqn=fqn,
+                package=package,
+                imports=imports,
+                fields=fields,
+            )
+        for match in _ENUM_BODY.finditer(text):
+            name = match.group(1)
+            brace = text.find("{", match.start())
+            if brace < 0:
+                continue
+            end = _matching_brace(text, brace)
+            if end <= brace:
+                continue
+            fqn = f"{package}.{name}" if package else name
+            class_index[fqn] = _ClassInfo(
+                fqn=fqn,
+                package=package,
+                imports=imports,
+                is_enum=True,
+                enum_values=_parse_enum_constants(text[brace + 1 : end]),
+            )
+
     protocol_port: int | None = None
     if len(protocol_ports) == 1:
         protocol_port = next(iter(protocol_ports))
@@ -833,6 +1154,7 @@ def scan_dubbo_sources(
             text=text,
             interfaces=interfaces,
             classes=classes,
+            class_index=class_index,
             providers=providers,
             protocol_port=protocol_port,
             result=result,
@@ -854,6 +1176,7 @@ def scan_dubbo_sources(
             service=item["service"],
             impl=item["ref"],
             iface=iface,
+            class_index=class_index,
             group=_clean_group_version(item["group"]),
             version=_clean_group_version(item["version"]),
             direct_url=None,
