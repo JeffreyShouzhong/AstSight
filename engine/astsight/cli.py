@@ -1317,10 +1317,10 @@ def _data_catalog(args) -> int:
                 ),
                 "code_enums": len(scan.enums) if scan else 0,
                 "code_files": len(scan.files) if scan else 0,
-                "rule_states": sum(
-                    1
-                    for state in catalog.states
-                    if state.state_key.startswith("rule_")
+                "rule_states": int(
+                    (catalog.sources.get("rule_states") or {}).get(
+                        "proposed", 0
+                    )
                 ),
                 "gaps": len(catalog.gaps),
                 "warnings": catalog.warnings,

@@ -194,6 +194,153 @@ def test_transition_can_combine_with_eq_constraints_on_other_tables() -> None:
     assert state.target_state == {"orders": {"status": "paid"}}
 
 
+def test_from_to_columns_generate_transition_state() -> None:
+    ddl = """
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY,
+      from_status TEXT,
+      to_status TEXT NOT NULL
+    );
+    """
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=_ruleset(
+            _rule(
+                RuleConstraint(
+                    field="from_status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="支付订单",
+                ),
+                RuleConstraint(
+                    field="to_status",
+                    operator="eq",
+                    values=["paid"],
+                    condition="支付订单",
+                ),
+            )
+        ),
+        rule_states=True,
+    )
+    assert len(catalog.states) == 1
+    state = catalog.states[0]
+    assert state.state_key.startswith("transition_BR_01_")
+    assert state.table_values == {
+        "events": [
+            {"id": 1, "from_status": "pending", "to_status": "paid"}
+        ]
+    }
+    assert state.target_state == {"events": {"to_status": "paid"}}
+
+
+def test_from_to_columns_accept_null_before_value() -> None:
+    ddl = """
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY,
+      from_status TEXT,
+      to_status TEXT NOT NULL
+    );
+    """
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=_ruleset(
+            _rule(
+                RuleConstraint(
+                    field="from_status",
+                    operator="eq",
+                    values=["NULL"],
+                    condition="提交",
+                ),
+                RuleConstraint(
+                    field="to_status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="提交",
+                ),
+            )
+        ),
+        rule_states=True,
+    )
+    assert len(catalog.states) == 1
+    assert catalog.states[0].table_values["events"][0]["from_status"] is None
+
+
+def test_from_to_columns_pull_fk_parent() -> None:
+    ddl = """
+    CREATE TABLE partner (id INTEGER PRIMARY KEY, status TEXT NOT NULL);
+    CREATE TABLE audit_log (
+      id INTEGER PRIMARY KEY,
+      partner_id INTEGER NOT NULL REFERENCES partner(id),
+      from_status TEXT,
+      to_status TEXT NOT NULL
+    );
+    """
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=_ruleset(
+            _rule(
+                RuleConstraint(
+                    field="audit_log.from_status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="审核",
+                ),
+                RuleConstraint(
+                    field="audit_log.to_status",
+                    operator="eq",
+                    values=["approved"],
+                    condition="审核",
+                ),
+            )
+        ),
+        rule_states=True,
+    )
+    assert len(catalog.states) == 1
+    state = catalog.states[0]
+    assert state.table_values["audit_log"][0]["partner_id"] == 1
+    assert state.table_values["partner"][0]["id"] == 1
+    assert state.target_state == {"audit_log": {"to_status": "approved"}}
+
+
+def test_from_to_enum_mismatch_is_rejected() -> None:
+    ddl = """
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY,
+      from_status TEXT,
+      to_status TEXT CHECK (to_status IN ('paid')) NOT NULL
+    );
+    """
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=_ruleset(
+            _rule(
+                RuleConstraint(
+                    field="from_status",
+                    operator="eq",
+                    values=["pending"],
+                    condition="支付订单",
+                ),
+                RuleConstraint(
+                    field="to_status",
+                    operator="eq",
+                    values=["lost"],
+                    condition="支付订单",
+                ),
+            )
+        ),
+        rule_states=True,
+    )
+    assert catalog.states == []
+    assert any(
+        warning.startswith("rule_state_enum_mismatch:events.to_status:")
+        for warning in catalog.warnings
+    )
+
+
 def test_transition_enum_mismatch_is_rejected() -> None:
     ddl = """
     CREATE TABLE orders (

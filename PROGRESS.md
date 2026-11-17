@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十个提交）
+> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近十一个提交）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -24,8 +24,8 @@
 > 并会从注释、DBML Enum note、规则常量、Java/Python/Go/TS 枚举与
 > Java `static final`/Go `const`/TS `as const` 常量组确定性地给出取值语义候选
 > （每条带 `source`）。`--rule-states` 还能把同一条件下的多表规则约束组合成
-> 跨表状态骨架，并把 `transition` 约束生成“迁移前 → 迁移后”的 `target_state`
-> 候选；占位值逐条写入 gaps。公式抽取已有 20 条离线评估集与脚本，v10 基线
+> 跨表状态骨架，并把 `transition` 约束和 `from_*/to_*` 成对字段生成
+> “迁移前 → 迁移后”的 `target_state` 候选；占位值逐条写入 gaps。公式抽取已有 20 条离线评估集与脚本，v10 基线
 > 14/14 严格命中、P/R/表达式准确率均为 1.00；下一步用评估结果决定哪些公式值得
 > 进规则层。
 
@@ -82,7 +82,27 @@
 | 跨表状态候选 | ✅ 2026-11-17 | `data/states.py`：同一条件下覆盖 ≥2 张表的 `eq/in` 约束 → `DataState` 骨架；`in` 按组合展开（单组上限 20）；主键/外键/父表/NOT NULL 用确定性占位值补齐，逐条写 `state_placeholder` gap；复用 `validate_plan_fixtures`，不合法候选丢弃并告警；`data catalog --rule-states` |
 | 状态转移候选 | ✅ 2026-11-17 | `operator="transition"` 按 `[迁移前, 迁移后]` 生成 `transition_*` 状态：迁移前进 `table_values`、迁移后进 `target_state`；target 同样校验表/列/类型/枚举/NOT NULL；可与同条件另一张表的 `eq/in` 组合；A1 提示词升至 11 |
 | 示例端到端验收 | ✅ 2026-11-17 | partner 示例跑通 `catalog --ruleset --rule-states --code` → `data semantics --ruleset` → `data plan`：4/4 plan 生成、0 rejected；修复示例语义草稿的过期 `rule_key`；新增示例资产一致性测试 |
-| 同组字段消歧 | ✅ 2026-11-17 | `resolve_field_group`：同一 condition 内用唯一字段收窄同名字段，仍不唯一才告警放弃；规则折叠与状态候选共用；示例 `audit_step` 正确落到 `partner`，`semantic_values` 10 → 12；测试 488 passed / 37 skipped |
+| 同组字段消歧 | ✅ 2026-11-17 | `resolve_field_group`：同一 condition 内用唯一字段收窄同名字段，仍不唯一才告警放弃；规则折叠与状态候选共用；示例 `audit_step` 正确落到 `partner`，`semantic_values` 10 → 12 |
+| 成对字段迁移 | ✅ 2026-11-17 | `from_*/to_*`、`old_*/new_*`、`before_*/after_*` 生成 `transition_*` 候选；行内保存两列、`target_state` 声明 to 值；`NULL` 转 null；父表被引用列非主键时补占位值；示例 BR-27 生成 1 条转移候选；测试 492 passed / 37 skipped |
+
+## 本轮完成（成对字段迁移，2026-11-17）
+
+1. **成对字段**：同一张表上的 `from_*/to_*`、`old_*/new_*`、`before_*/after_*`
+   约束按 base 名配对，生成 `transition_*` 候选。行内同时保存两列（表示一次迁移
+   事件），`target_state` 声明期望的 to 值；`NULL` 转成 null，允许迁移前为空。
+2. **FK 父表补全**：被引用父列不是主键时（例如 `partner_audit_log.partner_id`
+   引用 `partner.partner_id`，而 `partner` 的主键是 `seq`），也补确定性占位值并写
+   `state_placeholder`，不再误报 `fk_parent_value_missing`。
+3. **CLI 计数**：`data catalog` 的 `rule_states` 改为读 `sources.rule_states.proposed`；
+   之前只统计 `rule_` 前缀，`transition_*` 会被漏算。
+4. **示例效果**：partner 示例 BR-27 现在生成 1 条转移候选：
+   `partner_audit_log.from_status=null`、`to_status=pending`、`action=submit`，
+   `target_state={partner_audit_log.to_status=pending}`；父表 partner 与被引用列
+   由占位值补全，所有占位值逐条写入 gaps。
+5. **验证**：新增 4 条测试（from/to 成对、NULL 迁移前、FK 父表拉起、枚举不符）；
+   全量 Python **492 passed, 37 skipped**（上轮 488/37，新增 4 条通过）。
+6. **边界**：只支持单字段成对与单列外键；不做多步路径、多行组合或跨表 from/to
+   配对；`from_*` 与 `to_*` 必须落在同一张表，且值只取约束的第一个取值。
 
 ## 本轮完成（同组字段消歧，2026-11-17）
 

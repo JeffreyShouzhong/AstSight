@@ -55,10 +55,10 @@ DBML `Enum` note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量、Java/Python/Go/TS
 每条候选带 `source`，冲突会丢弃并告警。跨表状态骨架已支持：`--rule-states`
 把同一条件下覆盖多表的 `eq/in` 约束组合成 `DataState`，`in` 按取值组合展开
 （单组上限 20），主键/外键/NOT NULL 用确定性占位值补齐并逐条写 gap；
-`operator="transition"` 会生成“迁移前 → 迁移后”的 `target_state` 候选。规则折叠与
-状态候选都支持同组字段消歧，同名列跨表时先用唯一字段收窄，不再直接放弃。
-**目标**：继续补多步状态机路径、多行组合与非单字段迁移（如 `from_status/to_status`
-两列）的候选，降低人工补 catalog 的成本。
+`operator="transition"` 与成对字段（`from_*/to_*`、`old_*/new_*`、`before_*/after_*`）
+会生成“迁移前 → 迁移后”的 `target_state` 候选。规则折叠与状态候选都支持同组字段
+消歧，同名列跨表时先用唯一字段收窄，不再直接放弃。
+**目标**：继续补多步状态机路径与多行组合的候选，降低人工补 catalog 的成本。
 真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务判断仍回需求原文”。
 
 ### 3. 文档差异化定位落到门面

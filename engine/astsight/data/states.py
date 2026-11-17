@@ -50,6 +50,7 @@ def propose_rule_states(
     proposal = StateProposal()
     for rule in ruleset.rules:
         _propose_transitions(rule, table_list, proposal)
+        _propose_pair_transitions(rule, table_list, proposal)
         for condition, constraints in _constraint_groups(rule).items():
             if len(proposal.states) >= MAX_STATES:
                 proposal.warnings.append(f"rule_state_limit:{MAX_STATES}")
@@ -191,6 +192,172 @@ def _transition_value(raw: str, column: ColumnCatalog) -> Any:
     if raw.upper() in {"NULL", "NONE"}:
         return None
     return coerce_constant(raw, column)
+
+
+_PAIR_PREFIXES = (
+    ("from_", "to_", "before", "after"),
+    ("old_", "new_", "before", "after"),
+    ("before_", "after_", "before", "after"),
+)
+
+
+def _pair_key(field: str) -> tuple[str, str] | None:
+    leaf = (field or "").split(".")[-1].lower()
+    for before_prefix, after_prefix, before_side, after_side in _PAIR_PREFIXES:
+        if leaf.startswith(before_prefix) and len(leaf) > len(before_prefix):
+            return before_side, leaf[len(before_prefix) :]
+        if leaf.startswith(after_prefix) and len(leaf) > len(after_prefix):
+            return after_side, leaf[len(after_prefix) :]
+    return None
+
+
+def _propose_pair_transitions(
+    rule: Rule,
+    tables: list[TableCatalog],
+    proposal: StateProposal,
+) -> None:
+    """从 `from_status`/`to_status` 这类成对字段生成迁移前/迁移后候选。"""
+    groups: dict[str, list[RuleConstraint]] = {}
+    for constraint in rule.constraints:
+        if constraint.operator not in {RuleOperator.EQ, RuleOperator.IN}:
+            continue
+        if len(constraint.values) != 1 or _pair_key(constraint.field) is None:
+            continue
+        groups.setdefault(constraint.condition or "", []).append(constraint)
+    if not groups:
+        return
+    for condition, grouped in groups.items():
+        if len(proposal.states) >= MAX_STATES:
+            proposal.warnings.append(f"rule_state_limit:{MAX_STATES}")
+            return
+        # paired 约束可能带 NULL 表示迁移前为空，不能用 _constraint_groups（它会过滤 NULL）。
+        all_constraints = [
+            (constraint, [str(value).strip() for value in constraint.values])
+            for constraint in rule.constraints
+            if (constraint.condition or "") == condition
+            and constraint.operator in {RuleOperator.EQ, RuleOperator.IN}
+            and constraint.values
+        ]
+        resolved, ambiguous = resolve_field_group(
+            tables, [constraint.field for constraint, _values in all_constraints]
+        )
+        for field, count in ambiguous:
+            proposal.warnings.append(
+                f"rule_state_field_ambiguous:{field}:{count}"
+            )
+        if ambiguous:
+            return
+        resolved_by_constraint = {
+            id(constraint): matches
+            for (constraint, _values), matches in zip(all_constraints, resolved)
+        }
+        pairs: dict[tuple[str, str], dict[str, tuple[ColumnCatalog, str]]] = {}
+        for constraint, _values in all_constraints:
+            parsed = _pair_key(constraint.field)
+            matches = resolved_by_constraint[id(constraint)]
+            if parsed is None or len(matches) != 1:
+                continue
+            side, base = parsed
+            table, column = matches[0]
+            pairs.setdefault((table.name, base), {})[side] = (
+                column,
+                str(constraint.values[0]).strip(),
+            )
+        for (table_name, _base), sides in pairs.items():
+            if "before" not in sides or "after" not in sides:
+                continue
+            before_column, before_raw = sides["before"]
+            after_column, after_raw = sides["after"]
+            before_value = _transition_value(before_raw, before_column)
+            after_value = _transition_value(after_raw, after_column)
+            if not _check_transition_value(
+                table_name, before_column, before_raw, before_value, proposal
+            ):
+                continue
+            if not _check_transition_value(
+                table_name, after_column, after_raw, after_value, proposal
+            ):
+                continue
+            # 成对字段通常记录一次迁移事件：迁移前行同时保存 from/to 两列，
+            # target_state 再声明期望的 to 值；这样不会给 NOT NULL 的 to 列
+            # 填一个与 target 冲突的占位值。
+            before: dict[str, dict[str, Any]] = {
+                table_name: {
+                    before_column.name: before_value,
+                    after_column.name: after_value,
+                }
+            }
+            target: dict[str, dict[str, Any]] = {
+                table_name: {after_column.name: after_value}
+            }
+            if not _merge_extra_constraints(
+                all_constraints,
+                resolved_by_constraint,
+                before,
+                proposal,
+            ):
+                continue
+            _build_state(
+                rule,
+                condition,
+                before,
+                tables,
+                proposal,
+                target_state=target,
+                prefix="transition",
+            )
+
+
+def _check_transition_value(
+    table_name: str,
+    column: ColumnCatalog,
+    raw: str,
+    value: Any,
+    proposal: StateProposal,
+) -> bool:
+    if value is None:
+        return True
+    if column.enum_values and not any(
+        str(item) == str(value) for item in column.enum_values
+    ):
+        proposal.warnings.append(
+            f"rule_state_enum_mismatch:{table_name}.{column.name}:{raw}"
+        )
+        return False
+    return True
+
+
+def _merge_extra_constraints(
+    constraints: list[tuple[RuleConstraint, list[str]]],
+    resolved_by_constraint: dict[int, list[tuple[TableCatalog, ColumnCatalog]]],
+    before: dict[str, dict[str, Any]],
+    proposal: StateProposal,
+) -> bool:
+    for constraint, values in constraints:
+        if _pair_key(constraint.field) is not None:
+            continue
+        matches = resolved_by_constraint[id(constraint)]
+        if len(matches) != 1:
+            continue
+        table, column = matches[0]
+        value = _transition_value(values[0], column)
+        if value is not None and column.enum_values and not any(
+            str(item) == str(value) for item in column.enum_values
+        ):
+            proposal.warnings.append(
+                f"rule_state_enum_mismatch:"
+                f"{table.name}.{column.name}:{values[0]}"
+            )
+            return False
+        current = before.setdefault(table.name, {})
+        existing = current.get(column.name)
+        if existing is not None and str(existing) != str(value):
+            proposal.warnings.append(
+                f"rule_state_value_conflict:{table.name}.{column.name}"
+            )
+            return False
+        current[column.name] = value
+    return True
 
 
 def _propose_one(
@@ -423,8 +590,22 @@ def _ensure_table(
             parent_row = rows[fk.parent_table]
             parent_column = fk.parent_columns[0]
             if parent_column not in parent_row:
-                raise _StateError(
-                    f"fk_parent_value_missing:{fk.parent_table}.{parent_column}"
+                parent_table = table_index[fk.parent_table]
+                parent_spec = parent_table.column_index().get(parent_column)
+                if parent_spec is None:
+                    raise _StateError(
+                        f"fk_parent_column_missing:"
+                        f"{fk.parent_table}.{parent_column}"
+                    )
+                value, reason = _placeholder(parent_spec)
+                if value is None:
+                    raise _StateError(
+                        f"fk_parent_value_unsupported:"
+                        f"{fk.parent_table}.{parent_column}"
+                    )
+                parent_row[parent_column] = value
+                placeholders.append(
+                    (fk.parent_table, parent_column, reason)
                 )
             row[fk.child_columns[0]] = parent_row[parent_column]
     finally:
