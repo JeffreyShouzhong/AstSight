@@ -1,7 +1,7 @@
 # AstSight 项目进度
 
 > 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交，见最近四个提交）
+> 分支：`feat/postgres-mysql-data`（前四轮已提交；本轮代码常量组在工作区）
 > 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
 > `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
 > `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
@@ -21,8 +21,9 @@
 > `db_row.wait_ms` 落库轮询与跨步骤规则关系；规则关系已结构化，并由框架按
 > A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。数据目录的
 > 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射，
-> 并会从注释、DBML Enum note、规则常量与 Java/Python/TS 枚举确定性地给出取值语义
-> 候选（每条带 `source`）。公式抽取已有 20 条离线评估集与脚本，v10 基线
+> 并会从注释、DBML Enum note、规则常量、Java/Python/Go/TS 枚举与
+> Java `static final`/Go `const`/TS `as const` 常量组确定性地给出取值语义候选
+> （每条带 `source`）。公式抽取已有 20 条离线评估集与脚本，v10 基线
 > 14/14 严格命中、P/R/表达式准确率均为 1.00；下一步用评估结果决定哪些公式值得
 > 进规则层。
 
@@ -75,6 +76,26 @@
 | 公式抽取评估 | ✅ 2026-11-17 | `engine/eval/relation_formulas.json` 20 条标注（14 条公式 + 6 条负例）；`tools/eval_relation_extraction.py` 按目标/运算/来源/字段路径打分；v10 基线 P=1.00 / R=1.00 / expr=1.00（14/14 严格命中、0 误抽、6 条负例全部没补公式）；打分逻辑 6 条单测 |
 | 数据目录语义候选 | ✅ 2026-11-17 | `data/annotations.py`：注释关键词补 `semantic_type`；注释「值=含义」、DBML Enum note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量进入 `value_semantics`；表注释写入 `purpose`；冲突候选丢弃并告警；`data catalog --ruleset` |
 | 代码枚举常量 | ✅ 2026-11-17 | `data/codeconst.py`：静态扫描 Java/Python/TS 枚举（Python 用 ast，不执行代码）；按数据库枚举值、注释点名、表名+状态/类型命名三种路径映射；`ValueSemantics.source` 记录来源；`data catalog --code`；冲突/多候选/类型不符均告警，不猜 |
+| 非枚举常量组 | ✅ 2026-11-17 | 同一扫描器新增 Java `static final`（含 interface 隐式常量）、Go `const`（含 `iota`/简单 `iota` 运算）与 TS `as const` 对象；常量组要求组名以状态/类型/编码等后缀结尾；重复定义取值一致时稳定选一份；`.go` 纳入扫描；测试 473 passed / 37 skipped |
+
+## 本轮完成（非枚举常量组，2026-11-17）
+
+1. **Java `static final`**：解析类/接口中的字面量常量，支持行尾注释作为含义；
+   `1L`、`LoggerFactory.getLogger(...)` 这类无法静态求值的声明直接跳过，不猜。
+   interface 字段即使不写 `static final` 也按常量处理，但要求常量名全大写。
+2. **Go `const` 块**：支持类型标注、无初始化继承上一表达式、`iota`、`iota ± N`、
+   `iota × N`、`N × iota`；常量组按文件 stem 命名（`order_status.go` → `OrderStatus`），
+   同一文件多个 const 块合并；多名字/复杂表达式（如 `1 << iota`）跳过并保持 iota 序号。
+3. **TS `as const` 对象**：解析扁平的 `NAME: 字面量` 属性与行尾注释；没有 `as const`
+   的普通对象不当成常量组；嵌套对象、计算属性跳过。
+4. **信噪比控制**：常量组只有组名以 `status/state/type/kind/code/enum/category/level/
+   flag` 或其复数结尾时才参与映射，避免超时、日志、序列化等配置常量被当成业务取值。
+5. **重复定义**：同一列命中多个代码来源、取值集合完全一致时，按路径稳定选一份，
+   不再报歧义；取值不一致才 `code_enum_ambiguous` 放弃。
+6. **验证**：新增 3 条测试（三类常量组扫描、Go 常量组折叠、重复定义不误报歧义）；
+   全量 Python **473 passed, 37 skipped**（上轮 470/37，新增 3 条通过）。
+7. **未做**：不执行代码，不解析 `A = B + 1`、`1 << iota`、注解或跨文件常量引用；
+   Python 模块级常量未扫描；这些继续保持为边界，不用正则硬猜。
 
 ## 本轮完成（公式抽取评估 v10，2026-11-17）
 

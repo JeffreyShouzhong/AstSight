@@ -50,11 +50,11 @@
 **现状**：C5a/C5b 已支持 SQLite / PostgreSQL / MySQL 的 apply/teardown 与方言校验；
 `data catalog` 现在可以从 DDL、DBML 或真实数据库反射生成结构目录，多 schema 时使用
 `schema.table` 限定名。确定性语义候选已落地：注释关键词补结构语义，注释「值=含义」、
-DBML `Enum` note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量与 Java/Python/TS 枚举常量
-进入 `value_semantics`，每条候选带 `source`，冲突会丢弃并告警。
-**目标**：继续补跨表业务态候选（多表组合、状态机路径）与代码里非枚举的常量来源，
-降低人工补 catalog 的成本。真实后端几乎不用 SQLite，下一步重点是“结构自动、
-语义半自动、业务判断仍回需求原文”。
+DBML `Enum` note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量、Java/Python/Go/TS 枚举
+与 Java `static final`、Go `const`、TS `as const` 常量组进入 `value_semantics`，
+每条候选带 `source`，冲突会丢弃并告警。
+**目标**：继续补跨表业务态候选（多表组合、状态机路径），降低人工补 catalog 的成本。
+真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务判断仍回需求原文”。
 
 ### 3. 文档差异化定位落到门面
 

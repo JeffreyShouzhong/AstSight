@@ -1,6 +1,9 @@
-"""C5a 取值语义的代码常量来源：Java / Python / TypeScript 枚举。
+"""C5a 取值语义的代码常量来源：Java / Python / Go / TypeScript。
 
-只做静态读取，不执行代码、不调用模型。枚举到列的映射必须可解释：
+除了语言原生枚举，也读取 Java `static final`、Go `const` 块与 TS `as const`
+常量对象；它们统一表示为“常量组”，只用于取值语义候选。
+
+只做静态读取，不执行代码、不调用模型。常量组到列的映射必须可解释：
 
 - 数据库枚举值全部能在代码枚举里找到（强匹配）；
 - 列注释里明确写了枚举类型名；
@@ -29,6 +32,7 @@ MAX_CONSTANTS_PER_ENUM = 500
 _SCAN_EXTENSIONS = {
     ".py": "python",
     ".java": "java",
+    ".go": "go",
     ".ts": "typescript",
     ".tsx": "typescript",
     ".mts": "typescript",
@@ -54,9 +58,25 @@ _EXCLUDED_DIRS = {
     "coverage",
 }
 _JAVA_ENUM_RE = re.compile(r"\benum\s+([A-Za-z_$][\w$]*)")
+_JAVA_CLASS_RE = re.compile(r"\b(?:class|interface)\s+([A-Za-z_$][\w$]*)")
+_JAVA_STATIC_FINAL_RE = re.compile(
+    r"(?m)^\s*(?P<mods>(?:(?:public|protected|private|static|final|"
+    r"transient|volatile)\s+)+)"
+    r"(?P<type>[A-Za-z_$][\w$<>\[\]., ?]*?)\s+"
+    r"(?P<name>[A-Za-z_$][\w$]*)\s*=\s*(?P<value>[^;]+);(?P<tail>[^\n]*)"
+)
+_JAVA_INTERFACE_CONST_RE = re.compile(
+    r"(?m)^\s*(?:(?:public|static|final)\s+)*"
+    r"(?P<type>[A-Za-z_$][\w$<>\[\]., ?]*?)\s+"
+    r"(?P<name>[A-Z][A-Z0-9_]*)\s*=\s*(?P<value>[^;]+);(?P<tail>[^\n]*)"
+)
 _TS_ENUM_RE = re.compile(
     r"(?:export\s+)?(?:declare\s+)?(?:const\s+)?enum\s+([A-Za-z_$][\w$]*)"
 )
+_TS_CONST_OBJECT_RE = re.compile(
+    r"(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*\{"
+)
+_GO_CONST_RE = re.compile(r"\bconst\s*\(")
 _JAVA_IDENT_RE = re.compile(r"^@?[A-Za-z_$][\w$]*")
 _JAVA_ANNOTATION_RE = re.compile(r"^@[A-Za-z_$][\w$]*(?:\([^)]*\))?\s*")
 _INT_RE = re.compile(r"^-?\d+$")
@@ -64,6 +84,9 @@ _DECIMAL_RE = re.compile(r"^-?\d+\.\d+$")
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 _ENUM_SUFFIXES = ("status", "state", "type", "kind", "code", "enum", "category", "level", "flag")
 _TYPE_SUFFIXES = ("enum", "type", "code")
+_CONST_SUFFIXES = _ENUM_SUFFIXES + tuple(
+    f"{suffix}s" for suffix in _ENUM_SUFFIXES
+)
 _UNKNOWN = object()
 
 
@@ -80,6 +103,8 @@ class CodeEnum:
     language: str
     path: str
     constants: tuple[EnumConstant, ...]
+    # enum：语言原生枚举；constants：static final / Go const / as const 常量组。
+    kind: str = "enum"
 
     @property
     def source(self) -> str:
@@ -172,8 +197,16 @@ def _scan_file(project: Path, path: Path, result: CodeScanResult) -> None:
         enums, warnings = _scan_python(text, relative)
     elif language == "java":
         enums, warnings = _scan_java(text, relative)
+        constants, const_warnings = _scan_java_constants(text, relative)
+        enums.extend(constants)
+        warnings.extend(const_warnings)
+    elif language == "go":
+        enums, warnings = _scan_go_constants(text, relative)
     else:
         enums, warnings = _scan_typescript(text, relative)
+        constants, const_warnings = _scan_ts_constants(text, relative)
+        enums.extend(constants)
+        warnings.extend(const_warnings)
     result.enums.extend(enums)
     result.warnings.extend(f"{relative}:{item}" for item in warnings)
     result.files.append(relative)
@@ -251,7 +284,11 @@ def _split_line_comment(text: str, marker: str = "//") -> tuple[str, str]:
 
 
 def _find_matching(text: str, start: int) -> int:
-    if start >= len(text) or text[start] != "{":
+    return _find_matching_pair(text, start, "{", "}")
+
+
+def _find_matching_pair(text: str, start: int, open_char: str, close_char: str) -> int:
+    if start >= len(text) or text[start] != open_char:
         return -1
     depth = 0
     quote: str | None = None
@@ -282,14 +319,65 @@ def _find_matching(text: str, start: int) -> int:
                 return -1
             index = end + 2
             continue
-        if char == "{":
+        if char == open_char:
             depth += 1
-        elif char == "}":
+        elif char == close_char:
             depth -= 1
             if depth == 0:
                 return index
         index += 1
     return -1
+
+
+def _strip_braced_blocks(text: str) -> str:
+    """去掉嵌套 `{...}` 内容（方法体/内部类/数组初始化），只保留外层声明。"""
+    out: list[str] = []
+    depth = 0
+    quote: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if depth == 0:
+                out.append(char)
+            if char == "\\" and index + 1 < len(text):
+                if depth == 0:
+                    out.append(text[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+            if depth == 0:
+                out.append(char)
+            index += 1
+            continue
+        if text.startswith("//", index):
+            end = text.find("\n", index)
+            end = len(text) if end < 0 else end
+            if depth == 0:
+                out.append(text[index:end])
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            index = len(text) if end < 0 else end + 2
+            continue
+        if char == "{":
+            depth += 1
+            index += 1
+            continue
+        if char == "}":
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        if depth == 0:
+            out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def _split_top_level(text: str, separator: str = ",", stop: str = "") -> list[str]:
@@ -617,6 +705,184 @@ def _paren_content(text: str) -> tuple[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# Java static final / Go const / TS as const：把常量组当作只读枚举使用。
+# ---------------------------------------------------------------------------
+
+
+def _scan_java_constants(text: str, path: str) -> tuple[list[CodeEnum], list[str]]:
+    out: list[CodeEnum] = []
+    warnings: list[str] = []
+    for match in _JAVA_CLASS_RE.finditer(text):
+        if not _is_code_position(text, match.start()):
+            continue
+        name = match.group(1)
+        brace = text.find("{", match.end())
+        if brace < 0:
+            continue
+        end = _find_matching(text, brace)
+        if end < 0:
+            warnings.append(f"java_class_unclosed:{name}")
+            continue
+        header = text[match.start() : brace]
+        interface = re.search(r"\binterface\b", header) is not None
+        body = _strip_braced_blocks(text[brace + 1 : end])
+        constants = _java_static_constants(body, interface=interface)
+        if (
+            len(constants) >= 2
+            and _is_constant_group_name(name)
+            and len(_scan_existing(out, name)) == 0
+        ):
+            out.append(
+                CodeEnum(
+                    name=name,
+                    language="java",
+                    path=path,
+                    constants=tuple(constants),
+                    kind="constants",
+                )
+            )
+    return out, warnings
+
+
+def _scan_existing(out: list[CodeEnum], name: str) -> list[CodeEnum]:
+    return [item for item in out if item.name == name]
+
+
+def _java_static_constants(
+    body: str, *, interface: bool
+) -> list[EnumConstant]:
+    regex = _JAVA_INTERFACE_CONST_RE if interface else _JAVA_STATIC_FINAL_RE
+    out: list[EnumConstant] = []
+    seen: set[str] = set()
+    for match in regex.finditer(body):
+        if not interface:
+            mods = match.group("mods").lower()
+            if "static" not in mods or "final" not in mods:
+                continue
+        name = match.group("name")
+        if name in seen:
+            continue
+        value = _literal(match.group("value"))
+        if value is _UNKNOWN or value is None:
+            continue
+        _code, comment = _split_line_comment(match.group("tail"), "//")
+        out.append(
+            EnumConstant(name=name, value=value, meaning=comment[:500])
+        )
+        seen.add(name)
+        if len(out) >= MAX_CONSTANTS_PER_ENUM:
+            break
+    return out
+
+
+def _scan_go_constants(text: str, path: str) -> tuple[list[CodeEnum], list[str]]:
+    constants: list[EnumConstant] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for match in _GO_CONST_RE.finditer(text):
+        if not _is_code_position(text, match.start()):
+            continue
+        paren = text.find("(", match.start())
+        end = _find_matching_pair(text, paren, "(", ")")
+        if end < 0:
+            warnings.append("go_const_unclosed")
+            continue
+        for constant in _go_block_constants(text[paren + 1 : end]):
+            if constant.name in seen:
+                continue
+            seen.add(constant.name)
+            constants.append(constant)
+    group = _title_from_stem(Path(path).stem)
+    if (
+        len(constants) < 2
+        or not group
+        or not _is_constant_group_name(group)
+    ):
+        return [], warnings
+    return (
+        [
+            CodeEnum(
+                name=group,
+                language="go",
+                path=path,
+                constants=tuple(constants[:MAX_CONSTANTS_PER_ENUM]),
+                kind="constants",
+            )
+        ],
+        warnings,
+    )
+
+
+def _go_block_constants(body: str) -> list[EnumConstant]:
+    out: list[EnumConstant] = []
+    previous: str | None = None
+    iota_index = 0
+    for raw in body.splitlines():
+        line, comment = _split_line_comment(raw, "//")
+        line = re.sub(r"/\*.*?\*/", "", line).strip().rstrip(",")
+        if not line:
+            continue
+        if "=" in line:
+            left, _, expression = line.partition("=")
+            previous = expression.strip()
+        else:
+            left, expression = line, previous
+        left = left.strip()
+        value = (
+            _go_value(expression, iota_index)
+            if expression
+            else _UNKNOWN
+        )
+        iota_index += 1
+        if "," in left:
+            continue
+        name = left.split()[0] if left.split() else ""
+        if name in {"", "_"} or value is _UNKNOWN or value is None:
+            continue
+        out.append(
+            EnumConstant(name=name, value=value, meaning=comment[:500])
+        )
+        if len(out) >= MAX_CONSTANTS_PER_ENUM:
+            break
+    return out
+
+
+def _go_value(expression: str | None, iota_index: int) -> Any:
+    text = (expression or "").strip()
+    if text == "iota":
+        return iota_index
+    match = re.fullmatch(r"iota\s*([+\-*])\s*(-?\d+)", text)
+    if match is not None:
+        left, operator, right = iota_index, match.group(1), int(match.group(2))
+        return _apply_operator(left, operator, right)
+    match = re.fullmatch(r"(-?\d+)\s*([+\-*])\s*iota", text)
+    if match is not None:
+        left, operator, right = int(match.group(1)), match.group(2), iota_index
+        return _apply_operator(left, operator, right)
+    return _literal(text)
+
+
+def _apply_operator(left: int, operator: str, right: int) -> int:
+    if operator == "+":
+        return left + right
+    if operator == "-":
+        return left - right
+    return left * right
+
+
+def _title_from_stem(stem: str) -> str:
+    parts = [part for part in re.split(r"[^A-Za-z0-9]+", stem) if part]
+    return "".join(part[:1].upper() + part[1:] for part in parts)
+
+
+def _is_constant_group_name(name: str) -> bool:
+    normalized = _norm(name)
+    return bool(normalized) and any(
+        normalized.endswith(suffix) for suffix in _CONST_SUFFIXES
+    )
+
+
+# ---------------------------------------------------------------------------
 # TypeScript：支持字符串/数字初始化；无初始化按 TS 规则顺延编号。
 # ---------------------------------------------------------------------------
 
@@ -679,6 +945,63 @@ def _ts_constants(body: str) -> list[EnumConstant]:
     return out
 
 
+def _scan_ts_constants(
+    text: str, path: str
+) -> tuple[list[CodeEnum], list[str]]:
+    out: list[CodeEnum] = []
+    warnings: list[str] = []
+    for match in _TS_CONST_OBJECT_RE.finditer(text):
+        if not _is_code_position(text, match.start()):
+            continue
+        name = match.group(1)
+        brace = match.end() - 1
+        end = _find_matching(text, brace)
+        if end < 0:
+            warnings.append(f"ts_const_unclosed:{name}")
+            continue
+        after = text[end + 1 : end + 60]
+        if re.match(r"\s*as\s+const\b", after) is None:
+            continue
+        constants = _ts_object_constants(text[brace + 1 : end])
+        if len(constants) >= 2 and _is_constant_group_name(name):
+            out.append(
+                CodeEnum(
+                    name=name,
+                    language="typescript",
+                    path=path,
+                    constants=tuple(constants),
+                    kind="constants",
+                )
+            )
+    return out, warnings
+
+
+def _ts_object_constants(body: str) -> list[EnumConstant]:
+    out: list[EnumConstant] = []
+    seen: set[str] = set()
+    for raw, comment in _entries_with_comments(body, stop=""):
+        entry = raw.strip()
+        if not entry:
+            continue
+        name, separator, initializer = entry.partition(":")
+        if not separator:
+            continue
+        raw_name = _literal(name.strip())
+        name_text = str(raw_name) if raw_name is not _UNKNOWN else name.strip()
+        if not re.match(r"^[A-Za-z_$][\w$]*$", name_text):
+            continue
+        value = _literal(re.sub(r"\s+as\s+const$", "", initializer.strip()))
+        if value is _UNKNOWN or value is None or name_text in seen:
+            continue
+        out.append(
+            EnumConstant(name=name_text, value=value, meaning=comment[:500])
+        )
+        seen.add(name_text)
+        if len(out) >= MAX_CONSTANTS_PER_ENUM:
+            break
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 映射：代码枚举 → 目录列。
 # ---------------------------------------------------------------------------
@@ -726,6 +1049,13 @@ def _choose_enum(
     best = max(rank for rank, _enum in scored)
     top = [enum for rank, enum in scored if rank == best]
     if len(top) > 1:
+        # 同一个枚举在多处重复定义（如 Java + TS）且取值一致时，选路径稳定的一份，
+        # 不因为“来源多”就放弃；取值不一致才视为歧义。
+        value_sets = {
+            tuple(str(item.value) for item in enum.constants) for enum in top
+        }
+        if len(value_sets) == 1:
+            return sorted(top, key=lambda enum: (enum.path, enum.name))[0]
         names = ",".join(sorted(enum.name for enum in top))
         warnings.append(
             f"code_enum_ambiguous:{table_name}.{column.name}:{names}"

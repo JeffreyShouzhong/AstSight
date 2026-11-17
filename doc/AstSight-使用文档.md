@@ -809,7 +809,7 @@ PYTHONPATH=. python -m astsight data catalog \
   --db-url postgresql://user:pass@127.0.0.1:5432/service \
   --schema public --include 'order*'
 
-# 以上任意一种都可以再叠加代码枚举与规则常量
+# 以上任意一种都可以再叠加代码枚举/常量组与规则常量
 PYTHONPATH=. python -m astsight data catalog \
   --project $PROJECT --ddl schema.sql \
   --code src --code web/src \
@@ -825,7 +825,8 @@ PYTHONPATH=. python -m astsight data catalog \
 - `--context`：C1 规则上下文，用于字段语义对齐；
 - `--ruleset`：规则库 JSON。规则里 `eq/in` 的常量会按字段名唯一匹配折叠成该列的
   取值候选（`rule_keys` 保留依据）；同名列表跨表出现时放弃折叠并告警，不猜表；
-- `--code`：扫描 Java / Python / TypeScript 枚举的目录或文件（可重复）。默认跳过
+- `--code`：扫描 Java / Python / Go / TypeScript 枚举与常量组的目录或文件（可重复）。
+  枚举之外还读 Java `static final`、Go `const` 块和 TS `as const` 对象；默认跳过
   `node_modules`、`target`、`build`、`dist`、`.venv`、`__pycache__` 等目录。
 
 即使不调用模型，目录也会先做一轮确定性语义候选：
@@ -834,10 +835,12 @@ PYTHONPATH=. python -m astsight data catalog \
   `semantic_type`（金额/数量/状态/是否/时间/类型等）；
 - 注释里的「值=含义」（如 `0=待支付；1=已支付`）与 DBML `Enum` 值上的
   `[note: '...']` 进入 `value_semantics`；
-- `CHECK ... IN (...)`、`ENUM(...)`、规则常量与代码枚举提供取值集合和含义；
+- `CHECK ... IN (...)`、`ENUM(...)`、规则常量与代码枚举/常量组提供取值集合和含义；
 - 与数据库枚举冲突的注释/规则/代码取值会被丢弃或告警，不会静默采纳。
 
-代码枚举只在以下情况映射到列，且必须唯一命中：
+代码枚举/常量组只在以下情况映射到列，且必须唯一命中（常量组还要求组名以
+`status`/`state`/`type`/`kind`/`code`/`level`/`flag`/`enum`/`category` 或其复数结尾，
+避免把超时、日志之类的配置常量当成业务取值）：
 
 1. 数据库已有枚举值（`CHECK IN`/`ENUM`）能在代码枚举里全部找到（最强依据）；
 2. 列注释里明确写了枚举类型名，如“订单状态（OrderStatus）”；

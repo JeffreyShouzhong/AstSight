@@ -103,6 +103,146 @@ def test_scan_java_python_and_typescript_enums(tmp_path: Path) -> None:
     assert all("node_modules" not in path for path in scan.files)
 
 
+def test_scan_non_enum_constant_groups(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "src" / "OrderStatus.java",
+        """
+        public final class OrderStatus {
+            public static final String PENDING = "pending"; // 待支付
+            public static final String PAID = "paid";
+            private static final long serialVersionUID = 1L;
+            public static final Logger LOG = LoggerFactory.getLogger(OrderStatus.class);
+        }
+        """,
+    )
+    _write(
+        tmp_path / "src" / "TimeoutSettings.java",
+        """
+        public final class TimeoutSettings {
+            public static final int READ = 10;
+            public static final int WRITE = 20;
+        }
+        """,
+    )
+    _write(
+        tmp_path / "src" / "order_status.go",
+        """
+        package order
+
+        type Status int
+
+        const (
+            StatusPending Status = iota // 待支付
+            StatusPaid
+            StatusCanceled
+        )
+        """,
+    )
+    _write(
+        tmp_path / "src" / "order_status.ts",
+        """
+        export const OrderStatus = {
+          PENDING: 'pending', // 待支付
+          PAID: 'paid',
+        } as const;
+
+        const Plain = { A: 'a', B: 'b' };
+        """,
+    )
+
+    scan = scan_code_enums(tmp_path, [tmp_path / "src"])
+    groups = {enum.path: enum for enum in scan.enums if enum.kind == "constants"}
+    assert all(enum.name != "TimeoutSettings" for enum in scan.enums)
+
+    java = groups["src/OrderStatus.java"]
+    assert [(item.name, item.value, item.meaning) for item in java.constants] == [
+        ("PENDING", "pending", "待支付"),
+        ("PAID", "paid", ""),
+    ]
+
+    go = groups["src/order_status.go"]
+    assert go.name == "OrderStatus"
+    assert [(item.name, item.value) for item in go.constants] == [
+        ("StatusPending", 0),
+        ("StatusPaid", 1),
+        ("StatusCanceled", 2),
+    ]
+    assert go.constants[0].meaning == "待支付"
+
+    ts = groups["src/order_status.ts"]
+    assert ts.name == "OrderStatus"
+    assert [(item.name, item.value) for item in ts.constants] == [
+        ("PENDING", "pending"),
+        ("PAID", "paid"),
+    ]
+    # 没有 as const 的普通对象不当成常量组。
+    assert all(enum.name != "Plain" for enum in scan.enums)
+
+
+def test_constant_groups_fold_into_catalog(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "src" / "order_status.go",
+        """
+        package order
+
+        const (
+            StatusPending = "pending" // 待支付
+            StatusPaid = "paid"
+        )
+        """,
+    )
+    scan = scan_code_enums(tmp_path, [tmp_path / "src"])
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT);"
+        ),
+        code_enums=scan.enums,
+    )
+    status = catalog.table_index()["orders"].column_index()["status"]
+    assert [(item.value, item.meaning, item.source) for item in status.value_semantics] == [
+        ("pending", "待支付", "code:src/order_status.go"),
+        ("paid", "StatusPaid", "code:src/order_status.go"),
+    ]
+
+
+def test_duplicate_identical_constant_groups_are_not_ambiguous(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "src" / "OrderStatus.java",
+        """
+        public final class OrderStatus {
+            public static final String PENDING = "pending";
+            public static final String PAID = "paid";
+        }
+        """,
+    )
+    _write(
+        tmp_path / "src" / "order_status.ts",
+        """
+        export const OrderStatus = {
+          PENDING: 'pending',
+          PAID: 'paid',
+        } as const;
+        """,
+    )
+    scan = scan_code_enums(tmp_path, [tmp_path / "src"])
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT);"
+        ),
+        code_enums=scan.enums,
+    )
+    status = catalog.table_index()["orders"].column_index()["status"]
+    assert [item.value for item in status.value_semantics] == ["pending", "paid"]
+    assert not any(
+        warning.startswith("code_enum_ambiguous:")
+        for warning in catalog.warnings
+    )
+
+
 def test_scan_missing_path_is_reported(tmp_path: Path) -> None:
     scan = scan_code_enums(tmp_path, [tmp_path / "missing"])
     assert scan.enums == []
@@ -208,7 +348,7 @@ def test_ambiguous_code_enums_are_not_folded(tmp_path: Path) -> None:
     )
     _write(
         tmp_path / "src" / "b.ts",
-        "export enum OrdersStatusType { PENDING = 'pending' }",
+        "export enum OrdersStatusType { PENDING = 'waiting' }",
     )
     scan = scan_code_enums(tmp_path, [tmp_path / "src"])
     catalog = build_catalog(

@@ -134,10 +134,11 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
   同一套 fixture 校验，SQL 占位符/引用在计划生成时固化；计划方言与 `--db-url`
   不一致时标 `data_dialect_mismatch`，不静默改写 SQL。建库、迁移、连接池与跨库事务
   不在范围内。示例服务仍用 `/_reset` 保证可重复，不把示例重置当成通用造数。
-- **C5a 语义候选一律带来源**：注释、DBML Enum note、数据库枚举、规则常量与代码枚举
-  （Java/Python/TS）只能产出 `inferred` 候选；`source` 记录
-  `comment/dbml/enum/rule/llm/code:<路径>`。代码枚举只在数据库值匹配、注释点名或
-  「表名+状态/类型」唯一对应时映射，多候选并列时放弃并告警，不猜。
+- **C5a 语义候选一律带来源**：注释、DBML Enum note、数据库枚举、规则常量与代码枚举/
+  常量组（Java/Python/Go/TS，含 Java `static final`、Go `const`、TS `as const`）
+  只能产出 `inferred` 候选；`source` 记录
+  `comment/dbml/enum/rule/llm/code:<路径>`。代码枚举/常量组只在数据库值匹配、
+  注释点名或「表名+状态/类型」唯一对应时映射，多候选并列时放弃并告警，不猜。
 - **Java/Spring 变更感知输出到 API 级**：CodeGraph 原生识别 Spring 路由与方法行区间，
   AstSight 做「diff 行 ∩ 符号区间 → 反向闭包 ∩ 路由」。方法只是中间证据，不是输出单位。
   Java 路由没有源码侧第二来源，证据等级只到 `inferred`；Spring 路由覆盖缺口会进
@@ -813,7 +814,7 @@ python -m astsight mock semantics --project $PROJECT \
   → 路由/影响接口（full 或 delta；无 OpenAPI 时只用代码路由）
   → A1 规则：LLM 抽取 BR + 确定性 CR → 校验/版本化 → ruleset.json
   → C3.5.1 Mock 语义：契约 success 确定性 + 规则分支 + 有依据的 LLM 候选
-  → C5a 数据目录（提供 --ddl 时）：DDL/FK + 注释/枚举/规则常量/代码枚举候选 + LLM 补全 → data_catalog.json
+  → C5a 数据目录（提供 --ddl 时）：DDL/FK + 注释/枚举/规则常量/代码常量候选 + LLM 补全 → data_catalog.json
   → A4 用例设计（模型读规则 + 画像 + Mock 语义 + 造数目录，走 validate_draft）
   → proposal（只生成待审；--approve-as 显式批准 new/update/revive）
   → C5b 造数计划（批准后，有 catalog 时）→ MockPlan → 启动内嵌 Mock
