@@ -274,6 +274,16 @@ def _parse_enum_values(raw: str) -> list[Any]:
     return values
 
 
+def normalize_type(raw: str) -> str:
+    """公开的类型规范化：DBML/反射与 DDL 解析共用。"""
+    return _normalize_type(raw)
+
+
+def parse_enum_values(raw: str) -> list[Any]:
+    """从 ``(a, b)`` 或 ``ENUM(a, b)`` 中解析枚举值。"""
+    return _parse_enum_values(raw)
+
+
 def _parse_default(text: str, index: int) -> tuple[Any, int]:
     while index < len(text) and text[index].isspace():
         index += 1
@@ -623,6 +633,8 @@ __all__ = [
     "ParsedDDL",
     "ParsedForeignKey",
     "ParsedTable",
+    "normalize_type",
     "parse_ddl",
+    "parse_enum_values",
     "split_statements",
 ]

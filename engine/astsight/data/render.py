@@ -21,9 +21,11 @@ class RenderError(ValueError):
 
 
 def quote_identifier(name: str, dialect: str = "sqlite") -> str:
-    if not _IDENT_RE.match(name or ""):
+    """引用标识符；表名允许一层 ``schema.table``，列名仍是单段。"""
+    parts = (name or "").split(".")
+    if len(parts) > 2 or any(not _IDENT_RE.match(part) for part in parts):
         raise RenderError(f"非法标识符: {name!r}")
-    return dialect_quote(name, dialect)
+    return ".".join(dialect_quote(part, dialect) for part in parts)
 
 
 def _sql_value(value: Any, dialect: str) -> Any:

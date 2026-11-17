@@ -167,8 +167,9 @@ C5 造数支持 SQLite、PostgreSQL、MySQL。方言由 `--db-url` 决定，SQL 
 ```
 
 SQLite 相对路径也可用，但建议使用绝对路径，避免工作目录变化后指错库。
-`data catalog` 需要显式传 `--dialect postgres|mysql`（默认 `sqlite`）；
-`agent run` 会从 `--db-url` 推断，也可以用 `--db-dialect` 覆盖。计划里的方言与
+`data catalog` 用 DDL/DBML 时默认 `sqlite`，可用 `--dialect postgres|mysql` 指定；
+`--db-url` 反射时方言从 URL 推断，显式冲突会报错。`agent run` 会从 `--db-url` 推断，
+也可以用 `--db-dialect` 覆盖。计划里的方言与
 `--db-url` 不一致时直接标 `data_dialect_mismatch`，不会把 SQLite 的 `?` 占位符
 发到 PostgreSQL/MySQL。
 
@@ -785,20 +786,38 @@ PYTHONPATH=. python -m astsight rules status --project $PROJECT
 
 ### 10.1 C5a 数据目录
 
-有 DDL 时，先从 DDL/FK/seed 生成数据目录：
+结构来源三选一：DDL、DBML，或直接从真实数据库反射。
 
 ```bash
+# 1) DDL
 PYTHONPATH=. python -m astsight data catalog \
   --project examples/partner_onboarding \
   --ddl examples/partner_onboarding/schema.sql \
   --out .astsight/data
+
+# 2) DBML
+PYTHONPATH=. python -m astsight data catalog \
+  --project $PROJECT --dbml schema.dbml --dialect postgres
+
+# 3) 真实库反射（只读，不读取业务数据）
+PYTHONPATH=. python -m astsight data catalog \
+  --project $PROJECT \
+  --db-url postgresql://user:pass@127.0.0.1:5432/service \
+  --schema public --include 'order*'
 ```
 
 可选参数：
 
 - `--seed`：seed JSON，用于补充初始数据；
-- `--dialect`：DDL 方言；
+- `--dialect`：DDL/DBML 的目标方言（默认 `sqlite`）；`--db-url` 时从 URL 推断，显式冲突会报错；
+- `--schema`：反射的 schema（PostgreSQL）或 database（MySQL），多个用逗号分隔；
+- `--include` / `--exclude`：按表名 glob 过滤反射结果，可重复；
 - `--context`：C1 规则上下文，用于字段语义对齐。
+
+反射只读 `pg_catalog` / `information_schema` / `sqlite_master`，不导出数据。
+PostgreSQL 需要 `psycopg`，MySQL 需要 `PyMySQL`；成功反射的表会带上主键、唯一约束、
+外键、注释和枚举值。选择一个以上 schema 时，表名统一写成 `schema.table`，造数 SQL
+会按方言分别引用；被过滤掉表的外键会同时移除，并在 `warnings` 里记录。
 
 无模型时仍产出骨架，缺失语义标 `unmapped`。
 

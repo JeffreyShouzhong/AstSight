@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（v4.27，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例、v4.21 Dubbo 消费端 Filter 首版、v4.24 `agent run` Dubbo 全链路、v4.25 断言关系表达式与落库轮询、v4.26 规则关系自动物化、v4.27 跨步骤规则关系）
+# AstSight — 能力设计规格说明书（v4.28，含 v4.4 gRPC Mock、v4.6 Feign 决策、v4.6.1 HTTP Mock 范围、v4.7 规则驱动 A4 与 C5a/C5b、v4.15 Java HTTP agent 改写、v4.16 客户端范围收敛、v4.17 Apache HttpClient 直连 adapter、v4.18 agent wheel 分发与全链路 e2e、v4.19 Mock 路由字面量优先、v4.20 HTTP/2 prior-knowledge 负例、v4.21 Dubbo 消费端 Filter 首版、v4.24 `agent run` Dubbo 全链路、v4.25 断言关系表达式与落库轮询、v4.26 规则关系自动物化、v4.27 跨步骤规则关系、v4.28 DB 反射与 DBML）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -1798,6 +1798,14 @@ C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批�
 |---|---|---|---|---|
 | **C5a 数据目录** | C4 之前 | DDL/库结构、seed、profiles、context、ruleset | `data_catalog.json`（有哪些表/列/可用业务态） | 是（字段业务语义与候选状态，适配层执行；结构解析/FK/拓扑确定性） |
 | **C5b 造数计划** | 用例批准后 | `caseset.json`/`cases.json`、`data_catalog.json`、`ruleset.json`、profiles | `data_plan.json`（逐用例 fixtures/回收） | 是（业务态与取值候选；**SQL 不由模型输出**） |
+
+**结构来源三选一**：`--ddl`（SQL 文件）、`--dbml`（DBML 文件）或 `--db-url`
+（真实库反射）。三条入口都先转成同一个 `ParsedDDL`，再走同一套 catalog 构建、
+外键闭包与拓扑排序，所以后续校验/造数逻辑不区分来源。反射只读
+`pg_catalog` / `information_schema` / `sqlite_master`，不导出业务数据；支持主键、
+唯一约束（含单列唯一索引）、外键、注释与枚举值。多 schema 反射时表名统一为
+`schema.table`，SQL 渲染按方言逐段引用；被 `--include/--exclude` 过滤掉的表会
+同步移除其外键并记录 warning。复合唯一约束/表达式索引不展开到单列，显式告警。
 
 **C5a 数据契约**：
 

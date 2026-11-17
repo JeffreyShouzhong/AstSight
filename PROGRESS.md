@@ -19,8 +19,9 @@
 >
 > 2026-11-17 起优先做断言质量：已支持同响应字段关系、受限算术表达式、
 > `db_row.wait_ms` 落库轮询与跨步骤规则关系；规则关系已结构化，并由框架按
-> A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。下一步扩展
-> 受控聚合与复杂公式抽取。
+> A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。数据目录的
+> 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射。
+> 下一步扩展受控聚合与复杂公式抽取。
 
 ## 当前状态
 
@@ -66,6 +67,31 @@
 | 关系自动物化 | ✅ 2026-11-17 | A4 只填 `relation_refs`，框架生成带 `relation_ref` 的 `body_field/db_row` 断言；支持响应、请求、算术、DB where、`wait_ms` 组合 |
 | 关系覆盖门禁 | ✅ 2026-11-17 | A/B 规则关系未物化且未列入 `uncovered_requirements[].relation_keys` 时导入阻断；未知键、跨规则误引、目标响应字段未声明均显式报错 |
 | 跨步骤规则关系 | ✅ 2026-11-17 | `RuleRelation` 新增 `$step` 语义引用（`"<别名>.<字段>"`）；用例 `relation_bindings` 把别名绑定到更早步骤，框架生成 `$ref` 断言挂到最后一步；缺绑定、绑定最后一步/不存在步骤、单请求用例使用 `$step` 均阻断导入 |
+| DB 反射与 DBML | ✅ 2026-11-17 | `data catalog` 支持 `--dbml` 与 `--db-url`（SQLite/PostgreSQL/MySQL 只读反射），与 `--ddl` 三选一；`--schema` 支持多 schema，表名用 `schema.table`；`--include/--exclude` glob 过滤；DBML 支持 Table/Enum/Ref/行内 ref/indexes |
+
+## 本轮完成（DB 反射与 DBML，2026-11-17）
+
+1. **结构来源三选一**：`data catalog` 新增 `--dbml` 与 `--db-url`；三条入口都转成
+   `ParsedDDL`，复用同一套 catalog 构建、外键拓扑与校验。
+2. **真实库反射**：`data/reflect.py` 只读 `sqlite_master`+PRAGMA / `pg_catalog` /
+   `information_schema`，提取表、列、主键、唯一约束（含唯一索引）、外键、注释与枚举；
+   不导出业务数据。SQLite 的 `REFERENCES parent`（省略列名）会回退到父表主键。
+3. **跨 schema**：`--schema` 逗号分隔；多 schema 时表名限定为 `schema.table`，
+   `render.py` 的标识符引用、`apply.py` 的语句白名单与表存在性检查同步支持限定名。
+4. **过滤**：`--include/--exclude` 按表名 glob 过滤，过滤后同步丢弃悬空外键并告警；
+   复合唯一约束与表达式索引不展开到单列，显式 `unique_composite_ignored` warning。
+5. **DBML**：新增 `data/dbml.py`，支持 `Table`/`Enum`/`Ref:`/行内 `[ref: > t.c]`/
+   `indexes`（单列唯一与复合 PK/唯一）/`Note:`；未知表/列/块形式只告警不猜。
+6. **连接复用**：抽出 `data/connection.py`，反射与造数共用同一套连接与驱动错误
+   （`db_driver_missing`）。
+7. **验证**：新增 DBML、SQLite 反射、CLI 入口测试与 PG/MySQL 真库测试（默认 skip）；
+   聚焦 8 条通过；全量 Python **445 passed, 37 skipped**（新增 8 条通过、
+   真库 2 条默认跳过），与上轮基线 437/35 的差值正好对应本轮新增。
+8. **真库实测**：本机 MySQL 26.7.0（`astsight_test` 库）跑通
+   `test_data_reflect_live.py` 的 MySQL 用例；CLI `data catalog --db-url` 对真实库
+   反射出 2 表 / 1 外键，主键、唯一约束与可空性正确，父表排在子表前；catalog
+   `sources.display` 已脱敏为 `root:***`，不导出业务数据，临时表用后即删。
+   PostgreSQL 无实例，仍为未验证。
 
 ## 本轮完成（跨步骤规则关系，2026-11-17）
 
@@ -665,15 +691,15 @@
    `prop-44d9f59e45cdf922` 已批准。
 6. **OpenAPI 快照漂移警告**：本次为 V1.1 补充了 503 响应并重新生成 `openapi.json`，
    已批准用例仍基于旧快照；运行报告提示 “OpenAPI 契约已变化”，属预期 warning。
-7. **旧记录已清理**：2026-11-16 的 Dubbo 工作已提交并推送；本条原先的“未提交”
-   已不代表当前状态。2026-11-17 的关系断言改动仍在工作区，验收后提交。
+7. **工作区待提交**：2026-11-16 的 Dubbo 与 2026-11-17 的关系断言已提交；
+   2026-11-17 的 DB 反射与 DBML 改动已通过全量回归（445/37），待提交。
 
 ## 下一步
 
 2026-11-17 优先级调整：断言质量优先于协议扩展。
 
-1. **跨步骤关系（下一项）**：规则关系增加语义步骤引用（如“创建响应 → 查询响应”），
-   A4 绑定具体步骤名后生成 `$ref` / 跨步骤表达式，继续由框架物化而非模型手写。
+1. **跨步骤关系**：✅ 已完成（2026-11-17），见“本轮完成（跨步骤规则关系）”。
+   数据目录的结构来源（DDL / DBML / 真实库反射）也已于同日完成。
 2. **复杂公式抽取质量评估**：对真实需求文档标注“明确公式 / 隐含假设 / 缺口”，
    评估 A1 是否只抽取原文关系；复杂自然语言公式不得静默猜测。
 3. **示例回归**：用合伙人注册/订单类规则补充“总额与明细”“接口状态与落库状态”

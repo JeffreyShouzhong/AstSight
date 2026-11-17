@@ -43,9 +43,12 @@
 
 ### 2. 造数深度：方言已通，下一步反射与跨库 schema
 
-**现状**：C5a/C5b 已支持 SQLite / PostgreSQL / MySQL 的 apply/teardown 与方言校验。
-**目标**：补数据库反射/DBML、跨库 schema 限定名与更复杂的跨表业务态。真实后端几乎不用 SQLite，
-方言打通是“别人真的用起来”的第一道门槛，下一步是降低手写 catalog 的成本。
+**现状**：C5a/C5b 已支持 SQLite / PostgreSQL / MySQL 的 apply/teardown 与方言校验；
+`data catalog` 现在可以从 DDL、DBML 或真实数据库反射生成结构目录，多 schema 时使用
+`schema.table` 限定名。
+**目标**：补更复杂的跨表业务态与取值语义候选（DB 注释/常量折叠），继续降低人工补
+catalog 的成本。真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务
+判断仍回需求原文”。
 
 ### 3. 文档差异化定位落到门面
 

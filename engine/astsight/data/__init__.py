@@ -1,4 +1,4 @@
-"""C5 数据层：DDL/seed → catalog；approved cases → data plan；多方言执行。"""
+"""C5 数据层：DDL/DBML/数据库反射/seed → catalog；approved cases → data plan；多方言执行。"""
 from .apply import (
     ApplyError,
     ApplyResult,
@@ -8,13 +8,16 @@ from .apply import (
     teardown_plan,
 )
 from .catalog import CATALOG_SCHEMA_VERSION, build_catalog
+from .dbml import DBMLError, MAX_DBML_BYTES, parse_dbml
 from .ddl import (
     DDLError,
     ParsedColumn,
     ParsedDDL,
     ParsedForeignKey,
     ParsedTable,
+    normalize_type,
     parse_ddl,
+    parse_enum_values,
     split_statements,
 )
 from .dialects import (
@@ -26,6 +29,7 @@ from .dialects import (
     parse_db_url,
 )
 from .plan import PlanError, build_data_plan, build_data_plan_bundle
+from .reflect import ReflectError, Reflection, reflect_database
 from .render import RenderError, quote_identifier, render_inserts, render_plan, render_teardown
 from .seed import SeedData, SeedError, load_seed
 from .semantics import SemanticApplyResult, SemanticDraft, apply_semantics
@@ -41,14 +45,18 @@ __all__ = [
     "ApplyError",
     "ApplyResult",
     "CATALOG_SCHEMA_VERSION",
+    "DBMLError",
     "DDLError",
     "DbTarget",
     "DialectError",
+    "MAX_DBML_BYTES",
     "ParsedColumn",
     "ParsedDDL",
     "ParsedForeignKey",
     "ParsedTable",
     "PlanError",
+    "ReflectError",
+    "Reflection",
     "RenderError",
     "SUPPORTED_DIALECTS",
     "SeedData",
@@ -65,9 +73,13 @@ __all__ = [
     "dialect_from_url",
     "load_seed",
     "normalize_dialect",
+    "normalize_type",
     "parse_db_url",
+    "parse_dbml",
     "parse_ddl",
+    "parse_enum_values",
     "parse_sqlite_url",
+    "reflect_database",
     "quote_identifier",
     "render_inserts",
     "render_plan",

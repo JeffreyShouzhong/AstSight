@@ -86,7 +86,7 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
 | `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
-| `astsight/data/` C5 | ✅（SQLite/PostgreSQL/MySQL） | DDL/seed → `data_catalog.json`；批准后 → `data_plan.json`；参数化 SQL、FK 拓扑、事务化 apply/teardown；方言决定占位符与标识符引用，plan 与数据库不一致时拒执行 |
+| `astsight/data/` C5 | ✅（SQLite/PostgreSQL/MySQL） | DDL/DBML/真实库反射/seed → `data_catalog.json`；批准后 → `data_plan.json`；参数化 SQL、FK 拓扑、事务化 apply/teardown；方言决定占位符与标识符引用，plan 与数据库不一致时拒执行；多 schema 用 `schema.table` 限定名 |
 | `astsight/agent/` | ✅ 首版 | A1 规则适配、C3.5.1 Mock 语义适配、C5a/C5b 造数适配、A4 用例设计、MockPlan、SUT 启动注入、A5/A6 合并诊断修复（含 Mock 分支热更新）与端到端编排 |
 | `examples/order_service` | ✅ | 18 接口 FastAPI 示例 + 可重置种子数据 + 示例草案 |
 | `examples/downstream_service` | ✅ | 上游报价 → 下游价格服务的 HTTP Mock 示例（环境变量注入） |

@@ -6,24 +6,24 @@
 from __future__ import annotations
 
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import unquote, urlsplit
 
 from contracts import DataPlan, DataPlanBundle
 
+from .connection import DbConnectError, connect as connect_db
 from .dialects import DbTarget, DialectError, parse_db_url
 
 _IDENT = r'["`][A-Za-z_][A-Za-z0-9_$]*["`]'
+_TABLE = rf"{_IDENT}(?:\.{_IDENT})?"
 _VALUE = r"(?:\?|%s)"
 _INSERT_RE = re.compile(
-    rf"^INSERT INTO {_IDENT} \({_IDENT}(?:, {_IDENT})*\) "
+    rf"^INSERT INTO {_TABLE} \({_IDENT}(?:, {_IDENT})*\) "
     rf"VALUES \({_VALUE}(?:, {_VALUE})*\)$"
 )
 _DELETE_RE = re.compile(
-    rf"^DELETE FROM {_IDENT} WHERE {_IDENT} = {_VALUE}"
+    rf"^DELETE FROM {_TABLE} WHERE {_IDENT} = {_VALUE}"
     rf"(?: AND {_IDENT} = {_VALUE})*$"
 )
 
@@ -88,86 +88,75 @@ def _check_statement(statement: dict[str, Any], kind: str) -> None:
 
 
 def _connect(target: DbTarget):
-    if target.dialect == "sqlite":
-        path = target.sqlite_path
-        assert path is not None
-        if not path.is_file():
-            raise ApplyError(f"sqlite 数据库不存在: {path}")
-        conn = sqlite3.connect(path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
-    if target.dialect == "postgres":
-        try:
-            import psycopg  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise ApplyError(
-                "db_driver_missing: PostgreSQL 造数需要 psycopg，"
-                "请安装 psycopg[binary]"
-            ) from exc
-        try:
-            return psycopg.connect(target.url)
-        except Exception as exc:  # 驱动异常类型随版本变化，统一转换
-            raise ApplyError(f"postgres 连接失败: {exc}") from exc
-    if target.dialect == "mysql":
-        try:
-            import pymysql  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise ApplyError(
-                "db_driver_missing: MySQL 造数需要 PyMySQL，请安装 PyMySQL"
-            ) from exc
-        parts = urlsplit(target.url)
-        kwargs: dict[str, Any] = {
-            "host": parts.hostname or "127.0.0.1",
-            "port": parts.port or 3306,
-            "user": unquote(parts.username or ""),
-            "password": unquote(parts.password or ""),
-            "database": unquote(parts.path.lstrip("/")),
-            "charset": target.options.get("charset", "utf8mb4"),
-            "autocommit": False,
-        }
-        timeout = target.options.get("connect_timeout")
-        if timeout:
-            try:
-                kwargs["connect_timeout"] = int(timeout)
-            except ValueError as exc:
-                raise ApplyError("db_url_invalid: connect_timeout 必须是整数") from exc
-        try:
-            return pymysql.connect(**kwargs)
-        except Exception as exc:
-            raise ApplyError(f"mysql 连接失败: {exc}") from exc
-    raise ApplyError(f"unsupported_dialect: {target.dialect!r}")
+    try:
+        return connect_db(target)
+    except DbConnectError as exc:
+        raise ApplyError(str(exc)) from exc
+
+
+def _table_refs(
+    statements: Iterable[dict[str, Any]],
+) -> set[tuple[str | None, str]]:
+    """收集语句里的表引用；``schema.table`` 拆成 (schema, table)。"""
+    refs: set[tuple[str | None, str]] = set()
+    for item in statements:
+        raw = str(item.get("table") or "")
+        if not raw:
+            continue
+        if "." in raw:
+            schema, _, table = raw.partition(".")
+            refs.add((schema, table))
+        else:
+            refs.add((None, raw))
+    return refs
 
 
 def _check_tables(conn, target: DbTarget, statements: Iterable[dict[str, Any]]) -> None:
-    names = {
-        str(item.get("table") or "")
-        for item in statements
-        if item.get("table")
-    }
-    if not names:
+    refs = _table_refs(statements)
+    if not refs:
         return
     if target.dialect == "sqlite":
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
+        existing = {(None, str(row[0])) for row in rows}
     else:
+        existing: set[tuple[str | None, str]] = set()
+        unqualified = {table for schema, table in refs if schema is None}
+        qualified = {(schema, table) for schema, table in refs if schema}
         cursor = conn.cursor()
         try:
-            if target.dialect == "postgres":
+            if unqualified:
+                current = (
+                    "current_schema()"
+                    if target.dialect == "postgres"
+                    else "DATABASE()"
+                )
                 cursor.execute(
                     "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = current_schema()"
+                    f"WHERE table_schema = {current}"
                 )
-            else:
+                existing |= {
+                    (None, str(row[0])) for row in cursor.fetchall()
+                }
+            if qualified:
+                schemas = sorted({schema for schema, _ in qualified})
+                markers = ", ".join(["%s"] * len(schemas))
                 cursor.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = DATABASE()"
+                    "SELECT table_schema, table_name "
+                    "FROM information_schema.tables "
+                    f"WHERE table_schema IN ({markers})",
+                    schemas,
                 )
-            rows = cursor.fetchall()
+                existing |= {
+                    (str(row[0]), str(row[1])) for row in cursor.fetchall()
+                }
         finally:
             cursor.close()
-    existing = {str(row[0]) for row in rows}
-    missing = sorted(names - existing)
+    missing = sorted(
+        f"{schema}.{table}" if schema else table
+        for schema, table in refs - existing
+    )
     if missing:
         raise ApplyError(f"数据库中不存在表: {missing}")
 

@@ -235,7 +235,8 @@ pytest 生成与执行、`agent run` 编排均已落地，示例项目 38 条用
   支持 `$ref`、当前响应 `$field` 与受限算术；规则中明确声明的 relations 由框架自动物化，
   复杂自然语言公式仍不能可靠自动推导。
 - 造数支持 SQLite / PostgreSQL / MySQL；三者共用同一套 fixture 校验与事务语义，
-  驱动分别为 stdlib `sqlite3`、`psycopg`、`PyMySQL`。
+  驱动分别为 stdlib `sqlite3`、`psycopg`、`PyMySQL`。数据目录可从 DDL、DBML 或
+  真实库反射生成（只读结构，不导出数据），多 schema 使用 `schema.table` 限定名。
 - HTTP 是主路径；gRPC 仅 unary。Dubbo 2.7+ 消费端 Mock 由 Java agent 的 Filter
   拦截，已在 Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 个组合验证；真实
   `ReferenceConfig` 代理在普通 classpath 与 Spring Boot fat jar 下都验证过桩

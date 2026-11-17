@@ -49,7 +49,9 @@ from .data import (
     build_catalog,
     build_data_plan_bundle,
     load_seed,
+    parse_dbml,
     parse_ddl,
+    reflect_database,
     validate_catalog,
 )
 from .data.semantics import SemanticDraft
@@ -400,15 +402,43 @@ def _build_parser() -> argparse.ArgumentParser:
     data_parser = sub.add_parser("data", help="C5 数据目录、造数计划与执行")
     data_sub = data_parser.add_subparsers(dest="data_command", required=True)
 
-    data_catalog = data_sub.add_parser("catalog", help="DDL/seed → data_catalog.json")
+    data_catalog = data_sub.add_parser(
+        "catalog", help="DDL/DBML/数据库反射 → data_catalog.json"
+    )
     data_catalog.add_argument("--project", required=True)
-    data_catalog.add_argument("--ddl", action="append", required=True, metavar="PATH")
+    source_group = data_catalog.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
+        "--ddl", action="append", metavar="PATH", help="DDL 文件（可重复）"
+    )
+    source_group.add_argument("--dbml", default=None, metavar="PATH", help="DBML 文件")
+    source_group.add_argument(
+        "--db-url", default=None, help="从真实数据库反射结构（sqlite/postgres/mysql）"
+    )
     data_catalog.add_argument("--seed", default=None)
     data_catalog.add_argument(
+        "--schema",
+        default=None,
+        help="反射的 schema/database；多个用逗号分隔（仅 --db-url）",
+    )
+    data_catalog.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="只反射匹配的表名（仅 --db-url，可重复）",
+    )
+    data_catalog.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="跳过匹配的表名（仅 --db-url，可重复）",
+    )
+    data_catalog.add_argument(
         "--dialect",
-        default="sqlite",
+        default=None,
         choices=("sqlite", "postgres", "mysql"),
-        help="DDL 与造数 SQL 方言（默认 sqlite）",
+        help="造数 SQL 方言；--db-url 时从 URL 推断，其余默认 sqlite",
     )
     data_catalog.add_argument("--context", default=None, help="rules context 目录/JSON")
     data_catalog.add_argument(
@@ -1179,16 +1209,43 @@ def _data_path(project: Path, raw: str | None, default_name: str) -> Path:
 def _data_catalog(args) -> int:
     project = Path(args.project).resolve()
     try:
-        text = "\n;\n".join(
-            Path(_resolve_under_project(project, raw) or raw).read_text(
-                encoding="utf-8-sig"
+        if args.db_url:
+            dialect = _catalog_dialect(args.db_url, args.dialect)
+            schemas = [
+                item.strip()
+                for item in str(args.schema or "").split(",")
+                if item.strip()
+            ]
+            reflection = reflect_database(
+                args.db_url,
+                schemas=schemas,
+                include=args.include,
+                exclude=args.exclude,
             )
-            for raw in args.ddl
-        )
-        parsed = parse_ddl(text, dialect=args.dialect)
+            parsed = reflection.ddl
+            sources = reflection.sources
+        elif args.dbml:
+            _catalog_reject_reflect_only(args)
+            dialect = args.dialect or "sqlite"
+            path = Path(_resolve_under_project(project, args.dbml) or args.dbml)
+            parsed = parse_dbml(path.read_text(encoding="utf-8-sig"))
+            sources = {
+                "kind": "dbml",
+                "file": _project_relative(project, path),
+            }
+        else:
+            _catalog_reject_reflect_only(args)
+            dialect = args.dialect or "sqlite"
+            text = "\n;\n".join(
+                Path(_resolve_under_project(project, raw) or raw).read_text(
+                    encoding="utf-8-sig"
+                )
+                for raw in args.ddl
+            )
+            parsed = parse_ddl(text, dialect=dialect)
+            sources = {"kind": "ddl", "files": list(args.ddl)}
         seed = load_seed(_resolve_under_project(project, args.seed), parsed)
         context_id = None
-        sources: dict[str, Any] = {}
         if args.context:
             context = load_rules_context(args.context)
             context_id = str(context.get("context_id") or "")
@@ -1197,7 +1254,7 @@ def _data_catalog(args) -> int:
             ddl=parsed,
             seed=seed,
             context_id=context_id,
-            dialect=args.dialect,
+            dialect=dialect,
             sources=sources,
         )
         errors = validate_catalog(catalog)
@@ -1215,6 +1272,9 @@ def _data_catalog(args) -> int:
                 "ok": True,
                 "catalog": str(out),
                 "catalog_id": catalog.catalog_id,
+                "source": sources.get("kind"),
+                "dialect": dialect,
+                "schemas": sources.get("schemas") or [],
                 "tables": len(catalog.tables),
                 "foreign_keys": len(catalog.foreign_keys),
                 "tables_order": catalog.tables_order,
@@ -1226,6 +1286,29 @@ def _data_catalog(args) -> int:
         )
     )
     return 0
+
+
+def _catalog_dialect(db_url: str, requested: str | None) -> str:
+    from .data import dialect_from_url
+
+    inferred = dialect_from_url(db_url)
+    if requested and requested != inferred:
+        raise ValueError(
+            f"--dialect {requested} 与 --db-url 推断的 {inferred} 不一致"
+        )
+    return inferred
+
+
+def _catalog_reject_reflect_only(args) -> None:
+    if args.schema or args.include or args.exclude:
+        raise ValueError("--schema/--include/--exclude 仅用于 --db-url")
+
+
+def _project_relative(project: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(project).as_posix()
+    except ValueError:
+        return path.name
 
 
 def _data_semantics(args) -> int:
