@@ -29,7 +29,7 @@ import java.util.Map;
 /**
  * 一条 {@code invoke} 请求的已校验形态。
  *
- * <p>首版只支持直连 {@code dubbo://host:port}。注册中心（Nacos / ZooKeeper）
+ * <p>只支持直连 {@code dubbo://} / {@code tri://}。注册中心（Nacos / ZooKeeper）
  * 需要的客户端依赖不随 sidecar 分发，收到 {@code registry} 时显式失败，
  * 不猜地址。
  */
@@ -221,13 +221,14 @@ final class InvokeRequest {
         String value = nullableText(node, "url");
         if (value == null) {
             throw new RequestException(
-                    "direct_url_required", "首版必须提供直连 url（dubbo://host:port）");
+                    "direct_url_required",
+                    "必须提供直连 url（dubbo://host:port 或 tri://host:port）");
         }
         String url = value.contains("://") ? value : "dubbo://" + value;
-        if (!url.startsWith("dubbo://")) {
+        if (!url.startsWith("dubbo://") && !url.startsWith("tri://")) {
             throw new RequestException(
                     "unsupported_protocol",
-                    "只支持 dubbo:// 直连地址，收到 " + url);
+                    "sidecar 只支持 dubbo:// / tri:// 直连地址，收到 " + url);
         }
         return url;
     }

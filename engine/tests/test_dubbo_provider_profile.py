@@ -293,6 +293,28 @@ public class InventoryServiceImpl
     assert provider["descriptor_source"] == "src/main/proto/inventory.proto"
 
 
+def test_triple_java_interface_without_proto_uses_native_sidecar(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    _write(root, "OrderServiceImpl.java", IMPL)
+    resources = root / "src" / "main" / "resources"
+    resources.mkdir(parents=True)
+    (resources / "application.yml").write_text(
+        "dubbo:\n  protocol:\n    name: tri\n    port: 20880\n",
+        encoding="utf-8",
+    )
+
+    result = _scan(root)
+
+    assert len(result.providers) == 2
+    for provider in result.providers:
+        assert provider["protocol"] == "tri"
+        assert provider["serialization"] == "hessian2"
+        assert provider["compatibility"] == "native"
+        assert provider.get("descriptor_source") is None
+
+
 def test_xml_service_emits_profiles(tmp_path: Path) -> None:
     root = _project(tmp_path)
     (root / "dubbo-provider.xml").write_text(

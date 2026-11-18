@@ -29,12 +29,13 @@ final class DubboInvokerTest {
     private static ServiceConfig<EchoService> serviceConfig;
     private static DubboInvoker invoker;
     private static int port;
+    private static ApplicationConfig application;
 
     @BeforeAll
     static void startProvider() throws Exception {
         port = freePort();
 
-        ApplicationConfig application = new ApplicationConfig("astsight-sidecar-test-provider");
+        application = new ApplicationConfig("astsight-sidecar-test-provider");
         application.setQosEnable(Boolean.FALSE);
 
         ProtocolConfig protocol = new ProtocolConfig("dubbo", port);
@@ -56,7 +57,7 @@ final class DubboInvokerTest {
         assertNotNull(serviceConfig.getExportedUrls());
         port = serviceConfig.getExportedUrls().get(0).getPort();
 
-        invoker = new DubboInvoker("astsight-sidecar-test-consumer");
+        invoker = new DubboInvoker(application);
     }
 
     @AfterAll

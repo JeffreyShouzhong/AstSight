@@ -31,9 +31,17 @@ final class DubboInvoker implements DubboCaller, AutoCloseable {
     }
 
     DubboInvoker(String applicationName) {
-        application = new ApplicationConfig(applicationName);
+        this(newApplication(applicationName));
+    }
+
+    DubboInvoker(ApplicationConfig application) {
+        this.application = application;
         // sidecar 是短生命周期进程，不监听 QoS 端口，避免并发用例端口冲突。
         application.setQosEnable(Boolean.FALSE);
+    }
+
+    private static ApplicationConfig newApplication(String name) {
+        return new ApplicationConfig(name);
     }
 
     @Override
@@ -78,8 +86,7 @@ final class DubboInvoker implements DubboCaller, AutoCloseable {
             reference.setApplication(application);
             reference.setInterface(request.service);
             reference.setGeneric("true");
-            reference.setProtocol("dubbo");
-            reference.setSerialization(InvokeRequest.HESSIAN2);
+            reference.setProtocol(request.url.startsWith("tri://") ? "tri" : "dubbo");
             reference.setUrl(request.url);
             reference.setCheck(Boolean.FALSE);
             reference.setLazy(Boolean.TRUE);

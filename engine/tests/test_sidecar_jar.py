@@ -174,6 +174,35 @@ def test_locate_raises_sidecar_error(
     assert error.value.code == "sidecar_jar_missing"
 
 
+def test_repo_build_ignores_stale_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jar = _fake_jar(tmp_path / "astsight-dubbo-sidecar.jar")
+    jar.with_name(jar.name + ".manifest.json").write_text(
+        json.dumps(_manifest(jar, sha256="0" * 64)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sidecar_package, "_DEFAULT_JAR", jar)
+    monkeypatch.setattr(
+        sidecar_package.importlib.metadata,
+        "distribution",
+        lambda _name: (_ for _ in ()).throw(
+            sidecar_package.importlib.metadata.PackageNotFoundError
+        ),
+    )
+    monkeypatch.delenv("ASTSIGHT_DUBBO_SIDECAR_JAR", raising=False)
+
+    resolved, reason = sidecar_package.resolve_sidecar_jar(
+        required_version=VERSION
+    )
+
+    assert reason is None
+    assert resolved is not None
+    assert resolved.path == jar
+    assert resolved.source == "repo"
+
+
 def test_build_wheel_contains_manifest_and_record(tmp_path: Path) -> None:
     jar = _fake_jar(tmp_path / "astsight-dubbo-sidecar.jar")
     wheel = build_sidecar_wheel.build_wheel(jar, out_dir=tmp_path / "dist")

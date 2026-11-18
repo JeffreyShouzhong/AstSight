@@ -759,9 +759,10 @@ Dubbo 有效，无法覆盖 HTTP）。矩阵外的 Dubbo 版本不做运行期�
 - RPC 失败（`TIMEOUT`/`SERIALIZATION`/`NETWORK`/`NO_PROVIDER`/
   `RPC_EXCEPTION`）作为 `DubboCallResult` 返回；进程崩溃、协议错才抛
   `DubboSidecarError`；
-- `dubbo://` 直连走 sidecar + Hessian2；传 `registry` 返回
-  `registry_not_supported`。Triple 不走 sidecar：`tri://` + protobuf
-  descriptor + unary 由 Python gRPC-compatible adapter 直接调用；
+- `dubbo://` 直连走 sidecar + Hessian2；`tri://` 的 Java interface 形态也走
+  sidecar（Dubbo 3.2.19 泛化调用）。传 `registry` 返回
+  `registry_not_supported`；`tri://` + protobuf descriptor + unary 则由
+  Python gRPC-compatible adapter 直接调用；
 - jar 解析顺序：`ASTSIGHT_DUBBO_SIDECAR_JAR` → 已安装的
   `astsight-dubbo-sidecar` wheel（校验 manifest/版本/协议/sha256/size）→
   仓库 `java/astsight-sidecar-dubbo/target/astsight-dubbo-sidecar.jar`；
@@ -791,13 +792,14 @@ Dubbo 入口用例已打通模板 → codegen → 执行：
 
 Dubbo Triple unary：
 
-- 只支持 `tri://host:port` 或 `grpc://host:port`、Protobuf、仓库 `.proto` /
-  `.protoset`、单请求单响应；不接 streaming、reflection、注册中心；
+- 支持两条路径：`tri://` + Protobuf descriptor 走 gRPC-compatible adapter；
+  `tri://` + Java interface 无 proto 时走 Dubbo 3 sidecar 泛化调用；
+- 只支持单请求单响应；不接 streaming、reflection、注册中心；
 - 画像从 Dubbo `tri` 配置与 proto service/method 生成 `grpc_path`、
   `descriptor_source`、`serialization=protobuf` 和
   `compatibility=grpc_compatible`；
 - `dubbo_call` 按 URL scheme 自动选择 sidecar 或 Triple adapter；请求/响应走
-  动态 protobuf message，错误映射为统一 `rpc_status`；
+  动态 protobuf message 或 Java 泛化参数，错误映射为统一 `rpc_status`；
 - 自动 codegen 会把相对 descriptor 固化到项目根，避免生成目录 cwd 不同导致
   找不到 proto。
 
@@ -807,6 +809,9 @@ ASTSIGHT_DUBBO_SIDECAR_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \
   python -m pytest tests/integration/test_dubbo_case_e2e.py -q
 ASTSIGHT_DUBBO_TRIPLE_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \
   python -m pytest tests/integration/test_dubbo_triple_e2e.py -q
+ASTSIGHT_REAL_TRIPLE_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \
+  ASTSIGHT_REAL_TRIPLE_PROJECT=<online_bontique_demo> \
+  python -m pytest tests/integration/test_real_dubbo_triple_pilot_e2e.py -q
 ```
 
 Dubbo 多步骤与诊断：

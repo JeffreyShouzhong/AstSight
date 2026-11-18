@@ -172,9 +172,18 @@ def invoke_triple(**kwargs: Any) -> DubboCallResult:
     return TripleUnaryCaller().invoke(**kwargs)
 
 
-def is_grpc_compatible_target(url: str | None) -> bool:
+def is_grpc_compatible_target(
+    url: str | None,
+    *,
+    descriptor_source: str | None = None,
+    serialization: str | None = None,
+) -> bool:
     scheme = str(url or "").partition("://")[0].lower()
-    return scheme in {"tri", "grpc"}
+    return bool(
+        scheme in {"tri", "grpc"}
+        and descriptor_source
+        and str(serialization or "").lower() in {"protobuf", "proto"}
+    )
 
 
 def _direct_target(url: str) -> tuple[str, str]:

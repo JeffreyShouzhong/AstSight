@@ -1984,6 +1984,12 @@ def scan_dubbo_sources(
         for record in records:
             _add_provider(providers, record, result)
 
+    if protocol_names == {"tri"}:
+        for record in providers.values():
+            record.setdefault("protocol", "tri")
+            record.setdefault("serialization", "hessian2")
+            record.setdefault("compatibility", "native")
+
     result.providers = sorted(providers.values(), key=lambda item: item["endpoint"])
     result.checked = bool(sources or xml_services)
 

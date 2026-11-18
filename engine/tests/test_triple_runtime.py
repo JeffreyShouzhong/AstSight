@@ -142,7 +142,16 @@ def test_triple_unary_maps_grpc_status_and_rejects_non_protobuf(
 
 
 def test_triple_target_detection_is_scheme_based() -> None:
-    assert is_grpc_compatible_target("tri://127.0.0.1:50051")
-    assert is_grpc_compatible_target("grpc://127.0.0.1:50051")
+    assert is_grpc_compatible_target(
+        "tri://127.0.0.1:50051",
+        descriptor_source="inventory.proto",
+        serialization="protobuf",
+    )
+    assert is_grpc_compatible_target(
+        "grpc://127.0.0.1:50051",
+        descriptor_source="inventory.proto",
+        serialization="protobuf",
+    )
+    assert not is_grpc_compatible_target("tri://127.0.0.1:50051")
     assert not is_grpc_compatible_target("dubbo://127.0.0.1:20880")
     assert not is_grpc_compatible_target(None)

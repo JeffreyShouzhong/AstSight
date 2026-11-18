@@ -752,7 +752,7 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 |---|---|---|
 | `dubbo://` + Hessian2 | 正式支持 | 使用 `ReferenceConfig<GenericService>` 泛化调用，精确 `param_types` |
 | `tri://` + Protobuf + descriptor + unary | 正式支持 | 满足 gRPC 兼容条件时复用 gRPC unary adapter |
-| `tri://` + Java interface + unary | 按需支持 | 仅在真实试点证明必要时建设 Triple-native unary adapter |
+| `tri://` + Java interface + unary | 正式支持 | 使用 Dubbo 3 sidecar + `ReferenceConfig<GenericService>`；不要求 proto |
 | `grpc://` + Protobuf + descriptor + unary | 正式支持 | 以仓库 descriptor 为契约源 |
 | client/server/bidi streaming | 不支持 | 画像期标 `streaming_unsupported`，不生成用例 |
 | gRPC server reflection | 不建议支持 | descriptor 缺失时标 `no_descriptor`，不依赖运行时 reflection |
@@ -802,7 +802,7 @@ Triple 与 gRPC 兼容不得只依据 URL scheme 推断。进入 `grpc-compatibl
 1. `grpc:// + Protobuf + descriptor + unary`；
 2. `tri:// + Protobuf + descriptor + unary`，复用 gRPC unary adapter；
 3. 使用真实 Triple 项目做兼容性试点；
-4. 仅在试点证明必要时增加 `tri:// + Java interface` 的 Triple-native unary；
+4. ✅ `tri:// + Java interface` 的 Triple-native unary 已由真实广告服务试点证明需要并落地；
 5. streaming、reflection 与注册中心保持明确不支持。
 
 **当前实现（2026-11-18）**：`tri://` / `grpc://` + Protobuf + descriptor +
@@ -813,7 +813,10 @@ service/method 生成 `grpc_path`、`descriptor_source`、`serialization=protobu
 和 `compatibility=grpc_compatible`。codegen 按 URL scheme 选择 sidecar 或
 Triple adapter；自动生成时相对 descriptor 固化为项目绝对路径。真实 Dubbo
 3.2.19 Triple provider 已跑通画像 → 模板 → codegen → `run --mode full`。
-Triple-native Java interface、streaming、reflection 和注册中心仍不做。
+同时，真实 Apache `online_bontique_demo` 的 `tri` + Java interface（无 proto）
+已通过 Dubbo 3.2.19 sidecar 泛化调用跑通；sidecar 按 `tri://` 设置协议，
+Python 侧仅在 `protobuf + descriptor` 同时存在时才选择 gRPC-compatible
+adapter。streaming、reflection 和注册中心仍不做。
 
 **Dubbo 识别（确定性，零 LLM）**：
 
@@ -3136,7 +3139,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M2.3 | **代码级用例**：C2 变更选择 + 覆盖矩阵 + C4b 差分草案 + `change_refs` + `change_without_oracle` | delta 只为未覆盖变更生成 code 用例；无规则依据时不生成；变更覆盖率可见 |
 | M2.4 | **HTTP 下游通用接入**：出站 HTTP 调用点识别（配置/服务发现/代理注入点定位）+ 契约源优先级（OpenAPI > Spring MVC 注解）+ 稳定且唯一的 `dep_id`（C3.5.5） | 无 OpenAPI 的 Spring 项目也能建画像；下游 id 跨构建稳定；同路径跨下游不重名，多调用点不重复；无法识别的调用点进缺口清单 |
 | M2.5 | **transport 模型 + gRPC/Triple unary**：`transport/transport_class/transport_evidence`、端点标识、gRPC descriptor 加载、gRPC unary、Triple gRPC-compatible unary、`grpc_status/response_field/metadata` 断言、`unsupported` 清单 | gRPC 与 Triple-compatible unary 项目可执行；无 descriptor/streaming 显式 `unsupported`；报告保留 `protocol=tri` 与实际 adapter；无 HTTP 伪装 |
-| M2.6 | **Dubbo sidecar**：Dubbo 2.7+ 注解/XML 识别、接口源码校验、sidecar 直连泛化调用（Hessian2、精确 `param_types`）、Triple-native unary（按需）、`rpc_status/result_field/exception_type` 断言；测试目标不做注册中心发现 | Dubbo 2.7+ 标准场景可执行；Triple 不满足 gRPC 兼容且未启用 native 时显式阻断；2.6/jar-only/动态查找显式 `unsupported`；目标未解析/歧义阻断；sidecar 启动自检与错误归一 |
+| M2.6 | **Dubbo sidecar**：Dubbo 2.7+ 注解/XML 识别、接口源码校验、sidecar 直连泛化调用（Hessian2、精确 `param_types`）、Triple-native unary、`rpc_status/result_field/exception_type` 断言；测试目标不做注册中心发现 | Dubbo 2.7+ 标准场景可执行；Triple-native Java interface 与 protobuf gRPC-compatible 两条路径均可用；2.6/jar-only/动态查找显式 `unsupported`；目标未解析/歧义阻断；sidecar 启动自检与错误归一 |
 | M2.7 | **transport 回退（受限）**：仅 `transport_class=dubbo` 的 gRPC→sidecar，`--allow-transport-fallback` 显式开启、单次、报告 `transport_fallback + degraded` | 默认关闭；回退失败归 `adapter_error`；禁止跨形态回退 |
 | M2.8 | **多协议覆盖策略**：C2 provider-only + base/target 契约 diff + `change_kinds`；C3 `business_key`/`coverage_role`/`adapter_fingerprint`；C4 alias 冒烟 + `--transport-scope`；C7.4 `transport_coverage` | 纯契约变更分支可产出端点；每个 `business_key` 仅一个 primary；alias 冒烟可执行且不计入业务覆盖；`transport_alias_skipped` 可见 |
 | M2.9 | **Mock 用例级会话（方案 A）**：Mock 服务 admin session API、`mock_bindings` 导入期补全、C7.1 `mock:<namespace>` 独占、C7.2 mock lease 串行、C6 session fixture、C7.4 `mock_sessions` 证据 | 单命名空间单 active session；冲突/未命中/晚到调用全部显式报错；mock-bound 用例串行且证据可复核；无 session 证据的 Mock 用例标 `weak_oracle` |

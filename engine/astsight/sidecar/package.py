@@ -103,7 +103,11 @@ def resolve_sidecar_jar(
         )
 
     return _load(
-        _DEFAULT_JAR, source="repo", expected=expected, require_manifest=False
+        _DEFAULT_JAR,
+        source="repo",
+        expected=expected,
+        require_manifest=False,
+        validate_manifest=False,
     )
 
 
@@ -129,6 +133,7 @@ def _load(
     expected: str,
     require_manifest: bool,
     manifest_path: Path | None = None,
+    validate_manifest: bool = True,
 ) -> tuple[SidecarJar | None, str | None]:
     if not path.is_file():
         return None, "sidecar_jar_missing"
@@ -143,6 +148,8 @@ def _load(
         return None, "sidecar_jar_unreadable"
     if normalize_sidecar_version(jar_version) != expected:
         return None, "sidecar_jar_version_mismatch"
+    if not validate_manifest:
+        return SidecarJar(path=path, version=expected, source=source), None
 
     manifest_file = manifest_path or path.with_name(path.name + ".manifest.json")
     if not manifest_file.is_file():

@@ -732,7 +732,12 @@ def dubbo_call(request):
                 "ASTSIGHT_DUBBO_HOST；不回退成 HTTP"
             )
         scheme = target.partition("://")[0].lower()
-        if scheme in {"tri", "grpc"}:
+        serialization = str(kwargs.get("serialization") or "").lower()
+        if (
+            scheme in {"tri", "grpc"}
+            and kwargs.get("descriptor_source")
+            and serialization in {"protobuf", "proto"}
+        ):
             from astsight.sidecar.triple import invoke_triple
 
             return invoke_triple(url=target, **kwargs)

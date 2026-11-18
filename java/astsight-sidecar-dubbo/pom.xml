@@ -34,6 +34,8 @@
   <properties>
     <!-- JDK 8 不接受 add-opens；由 jdk9plus profile 覆盖。 -->
     <surefire.argLine></surefire.argLine>
+    <!-- sidecar 独立分发；Triple-native 需要 Dubbo 3 运行时。 -->
+    <dubbo.version>3.2.19</dubbo.version>
   </properties>
 
   <profiles>
