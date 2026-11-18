@@ -221,6 +221,130 @@ def test_direct_route_key_wins_and_second_case_switches_branch(tmp_path: Path) -
     ]
 
 
+def test_request_rules_and_sequence_select_branches_with_evidence(
+    tmp_path: Path,
+) -> None:
+    server, dep_id, _ = _server(tmp_path)
+    binding = {
+        "dep_id": dep_id,
+        "branch": "success",
+        "rules": [
+            {
+                "branch": "insufficient_balance",
+                "match": {"body": {"amount": 0}},
+            },
+            {
+                "branch": "success",
+                "match": {"query": {"trace": "rule"}, "headers": {"x-mode": "m"}},
+            },
+        ],
+        "sequence": ["success", "insufficient_balance"],
+    }
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            created = await client.post(
+                "/_admin/sessions",
+                headers=ADMIN,
+                json={
+                    "session_id": "s1",
+                    "namespace": "sut1",
+                    "case_id": "TC-MATCH",
+                    "bindings": [binding],
+                },
+            )
+            assert created.status_code == 200, created.text
+            ruled = await client.post(
+                "/gateway/pay",
+                headers={"Host": "pay-service", "Content-Type": "application/json"},
+                content=b'{"amount": 0}',
+            )
+            assert ruled.status_code == 400
+            first = await client.post(
+                "/gateway/pay",
+                headers={"Host": "pay-service"},
+            )
+            assert first.status_code == 200
+            second = await client.post(
+                "/gateway/pay",
+                headers={"Host": "pay-service"},
+            )
+            assert second.status_code == 400
+            fallback = await client.post(
+                "/gateway/pay",
+                headers={"Host": "pay-service"},
+            )
+            assert fallback.status_code == 200
+            matched_header = await client.post(
+                "/gateway/pay?trace=rule",
+                headers={"Host": "pay-service", "X-Mode": "m"},
+            )
+            assert matched_header.status_code == 200
+
+    _run(scenario())
+    calls = server.evidence.records
+    assert [
+        (call.branch, call.branch_source, call.sequence_index)
+        for call in calls
+    ] == [
+        ("insufficient_balance", "request_match", None),
+        ("success", "sequence", 0),
+        ("insufficient_balance", "sequence", 1),
+        ("success", "default_after_sequence", 2),
+        ("success", "request_match", None),
+    ]
+
+
+def test_ambiguous_request_rules_fail_closed(tmp_path: Path) -> None:
+    server, dep_id, _ = _server(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            created = await client.post(
+                "/_admin/sessions",
+                headers=ADMIN,
+                json={
+                    "session_id": "s1",
+                    "namespace": "sut1",
+                    "case_id": "TC-AMB",
+                    "bindings": [
+                        {
+                            "dep_id": dep_id,
+                            "branch": "success",
+                            "rules": [
+                                {
+                                    "branch": "success",
+                                    "match": {"query": {"trace": "x"}},
+                                },
+                                {
+                                    "branch": "insufficient_balance",
+                                    "match": {"headers": {"x-mode": "m"}},
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+            assert created.status_code == 200
+            response = await client.post(
+                "/gateway/pay?trace=x",
+                headers={"Host": "pay-service", "X-Mode": "m"},
+            )
+            assert response.status_code == 502
+            assert response.json()["error"] == "mock_request_ambiguous"
+
+    _run(scenario())
+    assert server.evidence.records[-1].result == "ambiguous"
+
+
 def test_unknown_and_ambiguous_routes_are_not_passed_through(tmp_path: Path) -> None:
     server = MockHttpServer(sut_id="sut1", token=TOKEN)
     server.add_route(

@@ -43,6 +43,7 @@ from contracts import (
 
 from .evidence import MockEvidenceWriter
 from .identity import DepIdEntry, DepIdError, parse_dubbo_dep_id, route_key_for
+from .matching import request_matches
 from .routes import RouteEntry, RouteResolution, RouteTable
 from .sessions import MAX_SESSION_HISTORY, SessionError, SessionManager
 
@@ -160,6 +161,24 @@ def _error_response(
     if dep_id:
         payload["dep_id"] = dep_id
     return JSONResponse(payload, status_code=status)
+
+
+def _query_values(request: Request) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for key in request.query_params:
+        items = request.query_params.getlist(key)
+        values[key] = items[0] if len(items) == 1 else items
+    return values
+
+
+def _session_payload(session) -> dict[str, Any]:
+    payload = session.model_dump(mode="json")
+    for binding in payload.get("bindings") or []:
+        if not binding.get("rules"):
+            binding.pop("rules", None)
+        if not binding.get("sequence"):
+            binding.pop("sequence", None)
+    return payload
 
 
 def _build_stub_response(
@@ -548,7 +567,7 @@ class MockHttpServer:
                 "count": len(selected),
                 "truncated": truncated,
                 "sessions": [
-                    session.model_dump(mode="json") for session in selected
+                    _session_payload(session) for session in selected
                 ],
             }
 
@@ -579,7 +598,7 @@ class MockHttpServer:
                         "mock_runtime_activate_failed",
                         dep_id=f"{type(exc).__name__}: {exc}"[:500],
                     )
-            return session.model_dump()
+            return _session_payload(session)
 
         @app.post("/_admin/sessions/{session_id}/drain")
         async def _drain_session(session_id: str, request: Request):
@@ -645,7 +664,7 @@ class MockHttpServer:
                 session = self.sessions.delete(session_id)
             except SessionError as exc:
                 return _error_response(exc.status, exc.code, dep_id=exc.detail or None)
-            return session.model_dump()
+            return _session_payload(session)
 
         @app.post("/_admin/dubbo/invoke")
         async def _dubbo_invoke(request: Request):
@@ -978,8 +997,8 @@ class MockHttpServer:
             )
 
         assert session is not None
-        branch = self.sessions.binding_map(session).get(entry.route.dep_id)
-        if branch is None:
+        binding = self.sessions.binding(session, entry.route.dep_id)
+        if binding is None:
             self._record(
                 request,
                 resolution,
@@ -997,6 +1016,57 @@ class MockHttpServer:
                 dep_id=entry.route.dep_id,
             )
 
+        match_body = _capture_body(
+            body,
+            request.headers.get("content-type", ""),
+            self.limits.request_body_bytes,
+        )
+        matched = [
+            rule
+            for rule in binding.rules
+            if request_matches(
+                rule.match,
+                query=_query_values(request),
+                headers=request.headers,
+                body=match_body,
+            )
+        ]
+        if len(matched) > 1:
+            self._record(
+                request,
+                resolution,
+                session,
+                None,
+                502,
+                body=body,
+                result=MockCallResult.AMBIGUOUS,
+                error="mock_request_ambiguous",
+            )
+            return _error_response(
+                502,
+                "mock_request_ambiguous",
+                route_key=entry.route.route_key,
+                dep_id=entry.route.dep_id,
+            )
+        sequence_index = None
+        if matched:
+            branch = matched[0].branch
+            branch_source = "request_match"
+        elif binding.sequence:
+            sequence_index = self.sessions.next_sequence_index(
+                session.session_id,
+                entry.route.dep_id,
+            )
+            if sequence_index < len(binding.sequence):
+                branch = binding.sequence[sequence_index]
+                branch_source = "sequence"
+            else:
+                branch = binding.branch
+                branch_source = "default_after_sequence"
+        else:
+            branch = binding.branch
+            branch_source = "default"
+
         stub = entry.branch(branch)
         if stub is None:
             self._record(
@@ -1008,6 +1078,8 @@ class MockHttpServer:
                 body=body,
                 result=MockCallResult.BRANCH_MISSING,
                 error="mock_branch_not_found",
+                branch_source=branch_source,
+                sequence_index=sequence_index,
             )
             return _error_response(
                 502,
@@ -1034,6 +1106,8 @@ class MockHttpServer:
                 result=MockCallResult.UNBOUND,
                 error=exc.code,
                 delay_ms=stub.delay_ms,
+                branch_source=branch_source,
+                sequence_index=sequence_index,
             )
             return _error_response(
                 502,
@@ -1059,6 +1133,8 @@ class MockHttpServer:
                 delay_ms=stub.delay_ms,
                 drop_mode="timeout",
                 error="mock_connection_dropped",
+                branch_source=branch_source,
+                sequence_index=sequence_index,
             )
             return _error_response(
                 502,
@@ -1076,6 +1152,8 @@ class MockHttpServer:
             body=body,
             result=MockCallResult.OK,
             delay_ms=stub.delay_ms,
+            branch_source=branch_source,
+            sequence_index=sequence_index,
         )
         return response
 
@@ -1163,6 +1241,8 @@ class MockHttpServer:
         error: str | None = None,
         delay_ms: int = 0,
         drop_mode: str | None = None,
+        branch_source: str | None = None,
+        sequence_index: int | None = None,
     ) -> None:
         entry = resolution.entry if resolution else None
         content_type = request.headers.get("content-type", "")
@@ -1206,6 +1286,8 @@ class MockHttpServer:
             body_bytes=len(body),
             request_body=captured,
             branch=branch,
+            branch_source=branch_source,
+            sequence_index=sequence_index,
             response_status=response_status,
             delay_ms=delay_ms,
             drop_mode=drop_mode,

@@ -21,9 +21,11 @@ from astsight.mock import (
 from astsight.report import build_report, render_markdown
 from contracts import (
     Assertion,
+    CaseMockRule,
     MockCall,
     MockCallResult,
     MockStub,
+    MockRequestMatch,
     TestCase as CaseModel,
 )
 
@@ -258,6 +260,14 @@ def test_generated_case_creates_and_closes_mock_session(
         ],
         source="test",
         mock_bindings={dep.dep_id: "success"},
+        mock_rules=[
+            CaseMockRule(
+                dep_id=dep.dep_id,
+                branch="success",
+                match=MockRequestMatch(body={"amount": 10}),
+            )
+        ],
+        mock_sequences={dep.dep_id: ["success"]},
     )
     generated = tmp_path / "generated"
     result = generate_pytest([case], generated)
@@ -266,6 +276,8 @@ def test_generated_case_creates_and_closes_mock_session(
     assert "def _open_mock_session" in conftest
     test_file = next(generated.glob("test_*.py"))
     assert "with mock_session('TC-0001'" in test_file.read_text(encoding="utf-8")
+    assert "'rules'" in test_file.read_text(encoding="utf-8")
+    assert "'sequence'" in test_file.read_text(encoding="utf-8")
 
     for name in (
         "ASTSIGHT_MOCK_ADMIN_URL",

@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`c8fd27f 新增：将状态路径展开为可执行多行数据`
+> 最新提交：本轮统一 Mock、多行造数与 HTTP 请求匹配提交均已推送（见 `git log`）
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -12,12 +12,14 @@
 > `tri` 服务 `run --mode full` 1/1 通过。gRPC target 配置已覆盖 Java
 > `@Value/@ConfigurationProperties/System.getenv/System.getProperty`、Python settings、
 > Node config/env 和 Go env/viper。
+> HTTP Mock 已支持请求级 query/header/body 子集匹配与同 dep 调用序列；
+> 多规则同时命中失败关闭，sequence 游标按 `session + dep_id` 隔离。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。真实 gripmock、
 > Java、Triple、Online Boutique 与 Dubbo sidecar 联调开启后全量为
-> **632 passed / 38 skipped**。
+> **635 passed / 38 skipped**。
 
 ## 当前状态
 
@@ -26,6 +28,7 @@
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo Triple unary | ✅ 2026-11-18 | `tri://` Protobuf descriptor 走 Python gRPC-compatible；Java interface 走 Dubbo 3.2.19 sidecar；真实 `online_bontique_demo` full run 1/1 |
 | gRPC target 配置矩阵 | ✅ 2026-11-18 | Java `@Value/@ConfigurationProperties/System.getenv/System.getProperty`、Python settings、Node config/env、Go env/viper；硬编码 target 显式阻断 |
+| HTTP 请求匹配与调用序列 | ✅ 2026-11-18 | `mock_rules` 支持 query/header/body 子集匹配，`mock_sequences` 按 session+dep 推进；rule 优先，sequence 耗尽回退 default，歧义失败关闭 |
 | 多行 fixtures / 父子表 / state_paths | ✅ 2026-11-18 | 多父多子、`$ref` 父键、单父自动关联、歧义阻断；`state_paths` 展开为逐状态多行 DataState 并完成 SQLite apply/teardown |
 | C1 规则抽取 | ✅ v3 | `engine/examples/partner_onboarding/ruleset.json`：67 条 BR + 10 条 CR；0 冲突 / 4 缺口 / 5 待确认 |
 | 路由清单 | ✅ | 5 条，全部 `graph_repaired` / `verified` |
@@ -94,6 +97,7 @@
 | gRPC 下游 target 配置 P0 | ✅ 2026-11-18 | 补全 target 配置矩阵：Java `@Value` / `@ConfigurationProperties` / `System.getenv` / `System.getProperty`，Python settings/dotenv 属性，Node 生成客户端 + config/env 别名，Go 生成客户端 + `os.Getenv`/`viper.GetString`；Java 同时注入环境变量和 JVM `-D`，plan/manifest 记录 `config_key/config_kind`；硬编码 target 标 `grpc_target_hardcoded`；Java gRPC agent run e2e 验证 `JAVA_TOOL_OPTIONS` 实际生效；全量联调 627 passed / 38 skipped |
 | 多行 fixtures 与父子表 P0 | ✅ 2026-11-18 | C5b fixtures 新增关系解析：子行可用 `{"$ref": "orders[0].id"}` 引用同批父行；单父键候选自动补子表外键并写 `fixture_fk_autofilled`，多父键未显式引用阻断 `fixture_fk_ambiguous`；至少 2 父 3 子计划按拓扑序 INSERT、逆拓扑逐行 DELETE，SQLite 真实 apply/teardown 通过；C5a/C5b 提示词补充多行父子示例；全量联调 631 passed / 38 skipped |
 | `state_paths` 可执行展开 P0 | ✅ 2026-11-18 | 每条线性迁移路径自动生成 `state_path_*` DataState；`pending → paid → shipped` 按起点/终点去重生成 3 行，唯一主键由框架分配，父表/FK/NOT NULL 自动补齐，`target_state` 指向路径终点；路径子行共享同一父行；同时支持普通状态列与 `from_*/to_*` 成对字段；新增父表 + 3 状态子行 SQLite 真实 apply/teardown e2e；全量联调 632 passed / 38 skipped |
+| HTTP 请求匹配与调用序列 P0 | ✅ 2026-11-18 | 新增 `MockRequestMatch` / `MockBindingRule` / `CaseMockRule`；session、DraftCase、TestCase、codegen、plan 全链路支持 `mock_rules` 与 `mock_sequences`；query/header/JSON body 子集匹配，rule 优先于 sequence，sequence 游标按 session+dep 隔离并在耗尽后回退 default branch；多条规则同时命中 502 `mock_request_ambiguous`；证据新增 `branch_source` / `sequence_index`；全量联调 635 passed / 38 skipped |
 | Dubbo 全链路 e2e | ✅ 2026-11-16 | `java/samples/spring-boot-dubbo`（HTTP `/orders/{id}` → `@DubboReference` 字段 → `OrderApi`）+ `test_java_agent_dubbo_flow_e2e.py`：`run_flow` 完成画像 → `dubbo_routes` → `agent_rewrite` 注入（`JAVA_TOOL_OPTIONS` + `token_env`）→ 执行 → 报告；HTTP 响应体为桩数据，证据 `adapter=dubbo-filter`/`mode=agent_filter`，目标端口零建连零字节，门禁 pass（`filter_not_in_chain` 不阻断，`serialization_verified=false` 告警）；注解字段供画像读取，运行期由 `ReferenceConfig` 填同一字段，dep_id 一致 |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
 | 同响应关系断言 | ✅ 2026-11-17 | `body_field.expect` 新增 `$field` 与受限 `$op`（`len/sum/add/sub/mul/div`）；表达式经白名单 AST 校验，生成器只执行固定运算；同响应关系推导为 L3，两个及以上步骤引用仍为 L4 |
@@ -169,7 +173,7 @@
 ### 验证缺口
 
 - 开启真实 gripmock、Java、Triple、Online Boutique 与 Dubbo sidecar 联调后全量为
-  **632 passed / 38 skipped**；跳过项主要是 Linux CI、真实 PostgreSQL 联调和其它
+  **635 passed / 38 skipped**；跳过项主要是 Linux CI、真实 PostgreSQL 联调和其它
   外部服务集成测试。
 
 ## 本轮完成（迁移后断言，2026-11-17）

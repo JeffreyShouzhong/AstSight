@@ -92,15 +92,19 @@ def _open_mock_session(case_id, bindings):
         yield None
         return
     session_id = "astsight-" + uuid.uuid4().hex
+    normalized_bindings = []
+    for dep_id, value in bindings.items():
+        if isinstance(value, str):
+            item = {"dep_id": str(dep_id), "branch": str(value)}
+        else:
+            item = {"dep_id": str(dep_id), **value}
+        normalized_bindings.append(item)
     payload = {
         "session_id": session_id,
         "namespace": _mock_namespace(),
         "case_id": case_id,
         "run_scope": MOCK_RUN_SCOPE,
-        "bindings": [
-            {"dep_id": str(dep_id), "branch": str(branch)}
-            for dep_id, branch in bindings.items()
-        ],
+        "bindings": normalized_bindings,
         "ttl_ms": MOCK_TTL_MS,
     }
     create = httpx.post(
@@ -1233,7 +1237,7 @@ def _case_assertions(case: TestCase) -> list[Any]:
 
 def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
     name = f"test_{case.id.replace('-', '_').lower()}_{case.category}"
-    bindings = dict(sorted(case.mock_bindings.items()))
+    bindings = _case_mock_bindings(case)
     requires_data = bool(case.preconditions)
     assertions = _case_assertions(case)
     is_dubbo = case.transport is Transport.DUBBO
@@ -1281,6 +1285,28 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
         inner = _single_request_lines(case)
     lines.extend("    " + line for line in inner)
     return "\n".join(lines)
+
+
+def _case_mock_bindings(case: TestCase) -> dict[str, Any]:
+    bindings: dict[str, Any] = {
+        dep_id: {"branch": branch}
+        for dep_id, branch in sorted(case.mock_bindings.items())
+    }
+    for dep_id in bindings:
+        rules = [
+            rule.model_dump(mode="json")
+            for rule in case.mock_rules
+            if rule.dep_id == dep_id
+        ]
+        sequence = list(case.mock_sequences.get(dep_id) or [])
+        if rules:
+            bindings[dep_id]["rules"] = [
+                {"branch": rule["branch"], "match": rule["match"]}
+                for rule in rules
+            ]
+        if sequence:
+            bindings[dep_id]["sequence"] = sequence
+    return bindings
 
 
 def _class_name(method: str, path: str, used: set[str]) -> str:

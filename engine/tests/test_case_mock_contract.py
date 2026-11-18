@@ -8,11 +8,13 @@ from astsight.cases.context import build_context
 from astsight.cases.draft import CaseDraft
 from astsight.cases.validate import validate_draft
 from contracts import (
+    CaseMockRule,
     Evidence,
     MockBranch,
     MockBranchSource,
     MockDep,
     MockSemantic,
+    MockRequestMatch,
     MockStub,
     MockStrategy,
     Transport,
@@ -190,6 +192,41 @@ def test_list_stub_body_uses_first_element(tmp_path: Path) -> None:
         _draft(context), context, project=tmp_path, mock_semantic=semantic
     )
     assert _drift_warnings(result) == []
+
+
+def test_request_rules_and_sequence_are_validated(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _draft(context)
+    case = draft.cases[0].model_copy(
+        update={
+            "mock_rules": [
+                CaseMockRule(
+                    dep_id=DEP_ID,
+                    branch="success",
+                    match=MockRequestMatch(),
+                ),
+                CaseMockRule(
+                    dep_id="http:svc:ghost GET /ghost",
+                    branch="success",
+                    match=MockRequestMatch(query={"id": "1"}),
+                ),
+            ],
+            "mock_sequences": {
+                DEP_ID: ["success"],
+                "http:svc:other GET /other": ["success"],
+            },
+        }
+    )
+    result = validate_draft(
+        draft.model_copy(update={"cases": [case]}),
+        context,
+        project=tmp_path,
+    )
+
+    codes = {item.code for item in result.errors}
+    assert "mock.rule_match_empty" in codes
+    assert "mock.rule_dep_missing_binding" in codes
+    assert "mock.sequence_dep_missing_binding" in codes
 
 
 def test_multiple_contract_types_are_not_checked(tmp_path: Path) -> None:

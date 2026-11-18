@@ -24,7 +24,8 @@
 > `dep_id` 改为携带下游身份并做规范化合并，落地约束见 **C3.5.5**。
 > **v4.6.1 HTTP 注入承诺**：v1 只承诺下游专属 `url_override` 与显式 `http_proxy`（均为明文）；
 > `discovery_override`/透明代理为条件支持，共享 base URL、同 JVM bean mock、动态 URL、
-> 请求匹配/序列/流式不支持。完整矩阵见 C3.5.5。
+> h2c/WebSocket/流式仍不支持；HTTP 请求 query/header/body 子集匹配与同 dep 调用序列已在 v4.63
+> 落地。完整矩阵见 C3.5.5。
 > **v4.15 Java HTTP agent 改写**：新增 `agent_rewrite` 注入策略，Java agent 在出站 HTTP
 > 客户端调用前把 URL 改写为 `http://<mock>/_dep/<route_key><原路径>`；配置注入仍优先，
 > agent 仅兜底。HTTPS 仅在 agent 激活且该 dep 选 `agent_rewrite` 时解除
@@ -1255,7 +1256,7 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 >
 > **范围（v4.6.1，v4.15 扩展）**：Mock 覆盖 SUT → **HTTP** 与 SUT → **Dubbo 2.7+** 下游。HTTP 在出站 HTTP 边界（URL/服务发现/HTTP 代理/agent 改写 + 会话）。未启用 agent 时只处理明文：`https://` 目标及需要 TLS 的代理链路统一标 `mock="unsupported"`（`unsupported_reason="tls_not_supported"`），不降级、不 MITM。v4.15 起，配置覆盖不到且客户端栈有 adapter 时用 **`agent_rewrite`**：把出站 URL 改写为明文 Mock 地址，HTTPS 因此可用（不建 TLS、不装 CA）。Dubbo 用 **agent + ByteBuddy + Filter** 拦截（见 C3.5.3），与 HTTP 共用 agent 外壳。SUT → **gRPC** 下游在 C3.5.4 落地前仍标 `mock="unsupported"`，依赖它的用例必须显式排除或标 `blocked`，不允许静默透传。
 >
-> **HTTP 注入的承诺**：下游专属配置的 `url_override` 与显式 `http_proxy` 为无条件承诺（均为明文）；`discovery_override` 与透明代理仅条件支持，环境不具备时 `discovery_not_supported`，不计入承诺；`agent_rewrite` 是条件能力（Java SUT、agent 可加载、客户端栈有 adapter）。共享 base URL 与 HTTPS 在启用 `agent_rewrite` 时可覆盖，否则不支持；同 JVM bean mock、动态 URL、请求匹配/序列/流式始终不支持。完整矩阵与选择顺序见 **C3.5.5**。
+> **HTTP 注入的承诺**：下游专属配置的 `url_override` 与显式 `http_proxy` 为无条件承诺（均为明文）；`discovery_override` 与透明代理仅条件支持，环境不具备时 `discovery_not_supported`，不计入承诺；`agent_rewrite` 是条件能力（Java SUT、agent 可加载、客户端栈有 adapter）。共享 base URL 与 HTTPS 在启用 `agent_rewrite` 时可覆盖，否则不支持；同 JVM bean mock、动态 URL、h2c/流式仍不支持；请求字段匹配与同 dep 调用序列已支持。完整矩阵见 **C3.5.5**。
 
 **核心结论：Mock 唯一主策略**
 
@@ -1780,7 +1781,7 @@ http:{downstream_key} {METHOD} {path_key}
 
 > **为什么不只用 `http:{METHOD} {path}`**：该写法不含下游身份。两个服务都暴露 `GET /api/v1/status` 时，URL 覆盖后它们都命中同一个 Mock 主机、同一个 Host、同一个 method+path，Mock 无法区分；`dep_id` 会重复，用例绑定也会串。加入 `downstream_key` 后，同一路径在不同下游之间天然不同；同一下游的多个调用点又合并，避免另一个方向的重复。
 
-> **为什么 `dep_id` 不包含 `case_id`**：`dep_id` 回答“这是哪个下游端点”，跨用例稳定；用例要的“同一个 URL 返回不同结果”由会话 binding 的 `branch` 回答。`route_key` 只由 `dep_id` 生成，SUT 启动时注入一次；若把 case 编进 `dep_id`，同一 SUT 进程内就必须按用例改 URL 配置，只能重启 SUT 或反复注入，且会把同一端点拆成 N 个身份，导致画像、覆盖率与证据碎片化。需要新返回时在 `semantic_branches` 增加分支；按用例变化的业务标识用 `T{run_scope}_{case_id}_` 变量替换；同一用例内的调用顺序语义标 `mock_sequence_unsupported`，都不通过拆 `dep_id` 解决。
+> **为什么 `dep_id` 不包含 `case_id`**：`dep_id` 回答“这是哪个下游端点”，跨用例稳定；用例要的“同一个 URL 返回不同结果”由会话 `mock_rules` / `mock_sequences` 选择已有 branch。`route_key` 只由 `dep_id` 生成，SUT 启动时注入一次；把 case 编进 `dep_id` 会导致同一端点被拆成 N 个身份。按用例变化的业务标识仍用 `T{run_scope}_{case_id}_` 变量替换。
 
 同一 `dep_id` 在不同用例中的绑定示例：
 
@@ -1831,7 +1832,8 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | HTTPS | **条件支持（agent）** | 未启用 agent 时 `tls_not_supported`；`agent_rewrite` 激活时把 `https://` 改写为明文 `http://<mock>/_dep/...`，不建 TLS、不装 CA、不 MITM、不降级真实链路 |
 | 同 JVM 内 mock HTTP 客户端 bean | **不支持** | 绕过编解码/拦截器/降级链，测不到真实调用路径；`agent_rewrite` 只改 URL，不属于 bean mock |
 | 动态 URL / 自定义传输 | **不支持** | 目标地址无法静态确定时 dep 身份不成立；agent 改写不改变该边界。除非可经明文代理覆盖，否则 `unsupported` |
-| 请求匹配、调用序列、h2c、WebSocket、流式 | **不支持** | v1 明确边界 |
+| HTTP query/header/body 子集匹配、同 dep 调用序列 | **支持** | `mock_rules` 优先；`mock_sequences` 按 session+dep 游标推进，耗尽回退 default branch；多条规则同时命中 `mock_request_ambiguous` |
+| h2c、WebSocket、流式 | **不支持** | 明确边界 |
 
 **选择规则**：C3 按 `url_override`（专用配置）> `discovery_override`（仅环境支持时）> `http_proxy`（显式）> `agent_rewrite`（agent 激活且适配器覆盖）> `unsupported` 选择；一个 dep 只选一种策略，运行期不自动降级、不改选。配置能覆盖的 dep 不因 agent 可用而改选；选不出即 `unsupported`，依赖用例 `blocked`。
 
@@ -1882,7 +1884,10 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 ```
 
 - `body` 支持 JSON 值、字符串、`{"raw_base64": "..."}`；默认 `Content-Type: application/json`；响应长度由框架计算，禁止桩自定义 `Content-Length`、`Transfer-Encoding`、`Connection` 等逐跳头。
-- 分支只由**会话 binding** 决定，不做请求体/头匹配。同一用例内同一 dep 的多次调用返回同一分支；需要“第一次成功、第二次失败”的顺序语义时标 `mock_sequence_unsupported`，不猜。
+- 分支选择顺序为 request rule → sequence → default branch。`mock_rules[].match`
+  支持 query/header/JSON body 子集匹配；`mock_sequences` 按 session+dep 独立游标推进，
+  序列耗尽后回退 default branch。多条规则同时命中时显式
+  `mock_request_ambiguous`，不按声明顺序猜。
 - `delay_ms` 用于触发真实超时（0–60000）；`drop_connection` 为尽力而为：服务端关闭连接且不回响应，若运行环境无法强制 reset，退回“延迟 + 客户端超时”，在证据中记 `drop_mode="reset" | "timeout"`，不宣称已 reset。
 - 响应体中的 `T{run_scope}_{case_id}_` 变量由框架确定性替换，不执行表达式；替换后仍超限 → `mock_response_invalid`。
 - 未绑定/未知/歧义路由不返回桩内容；不得用默认 200 兜底。
@@ -1891,7 +1896,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 
 - 复用 C3.5 的 `POST/DELETE /_admin/sessions`；`bindings[].dep_id` 使用上述新格式；`namespace` 必须等于当前 `sut_id`。
 - `POST /_admin/sessions/{id}/drain` 接受 `{timeout_ms}`（默认 200，0–60000），等待当前数据面 `inflight` 归零；返回 `{session_id, drained, inflight, waited_ms}`。超时返回 200 且 `drained=false`，由 fixture 决定告警/失败；会话不存在或已关闭返回 `mock_session_not_found`。
-- 单请求处理顺序：解析 method/path/query（限长）→ 路由解析 → 检查 active session（否则 `mock_session_missing`）→ 检查 binding（否则 `mock_unexpected_dep`）→ 检查 branch（否则 `mock_branch_not_found`）→ 生成响应 → 按 `delay_ms` 延迟 → 记录调用。
+- 单请求处理顺序：解析 method/path/query（限长）→ 路由解析 → 检查 active session（否则 `mock_session_missing`）→ 检查 binding（否则 `mock_unexpected_dep`）→ 请求规则匹配 / sequence / default 选 branch（规则歧义 502；分支不存在 `mock_branch_not_found`）→ 生成响应 → 按 `delay_ms` 延迟 → 记录调用。
 - 会话关闭后的请求 → `mock_late_call`；会话 TTL 过期 → `mock_session_expired`；晚到调用仍按最近关闭会话的 `session_id/case_id` 归因，错误响应与晚到调用都进报告，不静默丢弃。
 - 每个 case 记录命中的 route/dep/branch、调用次数、未命中与晚到调用；绑定 route 命中 0 次 → `mock_not_used`，用例失败。
 
@@ -1905,7 +1910,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | `method/original_path/query_keys` | 请求行信息；query 只记 key，不记值 |
 | `request_headers` | 允许列表：`content-type`、`accept`、`user-agent`、`x-request-id`；`authorization`/`cookie`/`token` 等一律脱敏 |
 | `body_sha256/body_bytes` | 默认只记哈希与长度；`--capture-mock-bodies` 时对 JSON/text 且 ≤64 KB 的请求体留存，仍按配置脱敏 |
-| `branch/response_status/delay_ms/drop_mode` | 本次返回的语义分支与响应 |
+| `branch/branch_source/sequence_index/response_status/delay_ms/drop_mode` | 本次返回分支，以及 `default` / `request_match` / `sequence` 来源和序列位置 |
 | `result` | `ok` / `unknown` / `ambiguous` / `unbound` / `branch_missing` / `late` |
 | `at` | 时间戳 |
 
@@ -1941,7 +1946,9 @@ agent 侧的改写异常、adapter 缺失等未到达 Mock 服务的事件，不
 | `agent_rewrite_failed` | 改写过程中抛异常 | 阻断该用例，归 `mock_error`，保留原始异常类型 |
 | `agent_rewrite_unsupported` | 客户端拒绝 URL/scheme 变化、改写点不可控或改写后仍需 TLS | 该 dep `unsupported`，依赖用例 `blocked` |
 | `mock_response_invalid` | 桩响应头/体/长度非法或超限 | 阻断，归 `mock_error` |
-| `mock_sequence_unsupported` | 需要按调用次数切换分支 | 阻断该 case |
+| `mock_request_ambiguous` | 多个请求匹配规则同时命中 | 阻断该用例，失败关闭 |
+| `mock_sequence_branch_empty` | session sequence 含空分支 | session 创建期阻断 |
+| `mock_request_match_empty` | 匹配规则没有任何 query/header/body 条件 | 导入/session 创建期阻断 |
 | `mock_not_used` | 绑定 route 命中 0 次 | 用例失败（防假绿） |
 | `mock_late_call` | 会话关闭后到达 | 报告告警；严格模式阻断 |
 
@@ -1957,7 +1964,7 @@ agent 侧的改写异常、adapter 缺失等未到达 Mock 服务的事件，不
 
 **边界**：
 
-- 不做请求匹配、不做调用序列、不做 MITM、不做 h2c/WebSocket/流式；未启用 agent 时不做 HTTPS；动态 URL（目标地址无法静态确定）仍不支持；`agent_rewrite` 只改写已识别 dep 的目标 URL，不做任意 URL 重写。
+- 不做 MITM、不做 h2c/WebSocket/流式；未启用 agent 时不做 HTTPS；动态 URL（目标地址无法静态确定）仍不支持；`agent_rewrite` 只改写已识别 dep 的目标 URL，不做任意 URL 重写。请求匹配只支持 query/header/body 子集，不执行任意表达式。
 - `agent_rewrite` 仍发生在 HTTP 边界：不 mock 客户端 bean，不绕过编解码、重试、降级与拦截器链；agent 与 Dubbo Filter 共用 `astsight-agent` 外壳，但拦截适配器分离。
 - 内嵌服务崩溃会终止引擎进程；因此启动前必须健康检查，运行期异常写 `mock_server_unavailable`，不假装用例通过。
 - 透明代理依赖环境提供 iptables REDIRECT 与相应权限；框架只输出规则/说明，不默认要求 root。拿不到就 `unsupported`。

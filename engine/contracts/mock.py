@@ -88,6 +88,44 @@ class MockBinding(BaseModel):
 
     dep_id: str
     branch: str
+    rules: list["MockBindingRule"] = Field(
+        default_factory=list,
+        max_length=50,
+        description="请求级匹配规则；命中时优先于 sequence/default",
+    )
+    sequence: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="同一 dep 的有序分支序列；耗尽后回退 default branch",
+    )
+
+
+class MockRequestMatch(BaseModel):
+    """HTTP 请求的受限匹配条件；query/header/body 均为子集匹配。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: dict[str, Any] = Field(default_factory=dict, max_length=50)
+    headers: dict[str, str] = Field(default_factory=dict, max_length=50)
+    body: Any = Field(
+        default=None,
+        description="JSON 子集匹配；None 表示不约束请求体",
+    )
+
+
+class MockBindingRule(BaseModel):
+    """会话内的一条请求匹配 → 分支规则。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    branch: str
+    match: MockRequestMatch
+
+
+class CaseMockRule(MockBindingRule):
+    """用例上的请求匹配规则。"""
+
+    dep_id: str
 
 
 class MockRoute(BaseModel):
@@ -154,6 +192,11 @@ class MockCall(BaseModel):
         default=None, description="仅在 --capture-mock-bodies 时留存"
     )
     branch: str | None = None
+    branch_source: str | None = Field(
+        default=None,
+        description="default / request_match / sequence",
+    )
+    sequence_index: int | None = Field(default=None, ge=0)
     response_status: int | None = None
     grpc_status: GrpcStatus | None = None
     delay_ms: int = 0

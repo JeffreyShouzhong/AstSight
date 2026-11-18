@@ -317,6 +317,14 @@ def build_mock_plan(
     for case in getattr(draft, "cases", []) or []:
         for dep_id, branch in (getattr(case, "mock_bindings", {}) or {}).items():
             bindings.setdefault(str(dep_id), set()).add(str(branch))
+        for rule in getattr(case, "mock_rules", []) or []:
+            bindings.setdefault(str(rule.dep_id), set()).add(str(rule.branch))
+        for dep_id, sequence in (
+            getattr(case, "mock_sequences", {}) or {}
+        ).items():
+            bindings.setdefault(str(dep_id), set()).update(
+                str(branch) for branch in sequence
+            )
     if not bindings:
         return None, ["mock_plan_skipped:no_case_bindings"]
 

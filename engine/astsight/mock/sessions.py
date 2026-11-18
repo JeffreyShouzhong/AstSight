@@ -35,6 +35,7 @@ class SessionManager:
         self._last_closed: MockSession | None = None
         self._expired = False
         self._history: list[MockSession] = []
+        self._sequence_cursors: dict[tuple[str, str], int] = {}
 
     def _expire_locked(self) -> None:
         session = self._active
@@ -49,6 +50,11 @@ class SessionManager:
         session.active = False
         session.closed_at = _iso(_now())
         session.close_reason = "ttl_expired"
+        self._sequence_cursors = {
+            key: value
+            for key, value in self._sequence_cursors.items()
+            if key[0] != session.session_id
+        }
         self._last_closed = session
         self._active = None
         self._expired = True
@@ -64,6 +70,42 @@ class SessionManager:
         dep_ids = [binding.dep_id for binding in bindings]
         if len(set(dep_ids)) != len(dep_ids):
             raise SessionError("mock_binding_duplicate", 400)
+        for binding in bindings:
+            if not binding.branch:
+                raise SessionError("mock_branch_required", 400, binding.dep_id)
+            seen_matches: set[str] = set()
+            for rule in binding.rules:
+                matcher = rule.match
+                if (
+                    not matcher.query
+                    and not matcher.headers
+                    and matcher.body is None
+                ):
+                    raise SessionError(
+                        "mock_request_match_empty",
+                        400,
+                        binding.dep_id,
+                    )
+                signature = matcher.model_dump_json()
+                if signature in seen_matches:
+                    raise SessionError(
+                        "mock_request_match_duplicate",
+                        400,
+                        binding.dep_id,
+                    )
+                seen_matches.add(signature)
+                if not rule.branch:
+                    raise SessionError(
+                        "mock_branch_required",
+                        400,
+                        binding.dep_id,
+                    )
+            if any(not branch for branch in binding.sequence):
+                raise SessionError(
+                    "mock_sequence_branch_empty",
+                    400,
+                    binding.dep_id,
+                )
         ttl_ms = int(payload.get("ttl_ms", 60_000))
         if ttl_ms < 1 or ttl_ms > 3_600_000:
             raise SessionError("invalid_ttl", 400, str(ttl_ms))
@@ -87,6 +129,11 @@ class SessionManager:
                 )
             self._active = session
             self._expired = False
+            self._sequence_cursors = {
+                key: value
+                for key, value in self._sequence_cursors.items()
+                if key[0] != session.session_id
+            }
             self._history.append(session)
             if len(self._history) > MAX_SESSION_HISTORY:
                 del self._history[: len(self._history) - MAX_SESSION_HISTORY]
@@ -102,6 +149,11 @@ class SessionManager:
             session.close_reason = reason
             self._active = None
             self._last_closed = session
+            self._sequence_cursors = {
+                key: value
+                for key, value in self._sequence_cursors.items()
+                if key[0] != session_id
+            }
             return session
 
     def current(self) -> MockSession | None:
@@ -146,3 +198,21 @@ class SessionManager:
 
     def binding_map(self, session: MockSession) -> dict[str, str]:
         return {binding.dep_id: binding.branch for binding in session.bindings}
+
+    def binding(self, session: MockSession, dep_id: str):
+        return next(
+            (
+                binding
+                for binding in session.bindings
+                if binding.dep_id == dep_id
+            ),
+            None,
+        )
+
+    def next_sequence_index(self, session_id: str, dep_id: str) -> int:
+        """返回并推进当前 session 内某 dep 的 sequence 游标。"""
+        key = (session_id, dep_id)
+        with self._lock:
+            value = self._sequence_cursors.get(key, 0)
+            self._sequence_cursors[key] = value + 1
+            return value

@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .base import SourceRef
+from .mock import CaseMockRule
 from .enums import (
     ActionTarget,
     AssertStrength,
@@ -334,6 +335,14 @@ class TestCase(BaseModel):
     mock_bindings: dict[str, str] = Field(
         default_factory=dict,
         description="用例级 Mock 分支绑定：dep_id → branch（C3.5.5 会话）",
+    )
+    mock_rules: list[CaseMockRule] = Field(
+        default_factory=list,
+        description="HTTP 请求字段匹配 → 分支；同一请求只能命中一条",
+    )
+    mock_sequences: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="dep_id → 有序分支；规则未命中时按调用次数选择",
     )
     dubbo: DubboCall | None = Field(
         default=None,

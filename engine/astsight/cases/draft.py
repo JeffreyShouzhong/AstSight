@@ -16,6 +16,7 @@ from contracts import (
     AssertStrength,
     Assertion,
     CaseLevel,
+    CaseMockRule,
     CaseStep,
     ChangeRef,
     CoverageRole,
@@ -142,6 +143,16 @@ class DraftCase(BaseModel):
     mock_bindings: dict[str, str] = Field(
         default_factory=dict,
         description="可选：dep_id → branch；执行时写入用例级 Mock 会话",
+    )
+    mock_rules: list[CaseMockRule] = Field(
+        default_factory=list,
+        max_length=200,
+        description="HTTP 请求字段匹配 → 分支",
+    )
+    mock_sequences: dict[str, list[str]] = Field(
+        default_factory=dict,
+        max_length=100,
+        description="dep_id → 有序分支序列",
     )
     dubbo: DubboCall | None = Field(
         default=None,
@@ -352,6 +363,13 @@ def to_test_case(
         ),
         note=draft_case.note,
         mock_bindings=dict(draft_case.mock_bindings),
+        mock_rules=[
+            rule.model_copy(deep=True) for rule in draft_case.mock_rules
+        ],
+        mock_sequences={
+            key: list(value)
+            for key, value in draft_case.mock_sequences.items()
+        },
         dubbo=draft_case.dubbo.model_copy(deep=True) if draft_case.dubbo else None,
     )
 
@@ -466,6 +484,26 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
             for item in case.preconditions
         ],
         "mock_bindings": dict(sorted(case.mock_bindings.items())),
+        **(
+            {
+                "mock_rules": [
+                    rule.model_dump(mode="json")
+                    for rule in case.mock_rules
+                ]
+            }
+            if case.mock_rules
+            else {}
+        ),
+        **(
+            {
+                "mock_sequences": {
+                    key: list(value)
+                    for key, value in sorted(case.mock_sequences.items())
+                }
+            }
+            if case.mock_sequences
+            else {}
+        ),
     }
     # change_refs 不进指纹：换变更分支不应触发业务用例重审。
     return sha256_json(payload)

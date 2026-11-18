@@ -57,7 +57,8 @@ Java agent 激活且该 dep 选 `agent_rewrite` 时放开 HTTPS（改写为明�
 Mock 管理地址与 token，晚到调用归因到已关闭用例。`run --mock-plan` 已能按计划启动/停止内嵌
 服务并产出注入清单；`agent run` 消费同一份清单，在启动 SUT 时写入注入环境变量。
 v1 注入只承诺下游专属 `url_override` 与显式 `http_proxy`；`discovery_override`/透明代理条件支持，
-共享 base URL（`mock_config_ambiguous`）、同 JVM bean mock、动态 URL、请求匹配/序列/流式不支持。
+共享 base URL（`mock_config_ambiguous`）、同 JVM bean mock、动态 URL、h2c/流式仍不支持；
+HTTP 请求字段子集匹配与同 dep 调用序列已支持。
 v4.15 的 `agent_rewrite` 是配置注入的兜底：agent 只改写 URL 到 `/_dep/<route_key>`，
 不构造响应、不持有会话；计划内下游零透传，计划外主机放行但上报。已打通
 OkHttp / Feign / RestTemplate / 直连 Apache HttpClient 4.3+/5.x + HTTPS +
@@ -466,6 +467,12 @@ PYTHONPATH=. python -m astsight run --project $PROJECT --mode cases \
   至少命中一次；零调用的绑定报 `mock_not_used` 并阻塞，避免“用例通过但没走到 Mock”的假绿。
   只给 `--mock-evidence` 而未提供 `--mock-admin-url` 时无法核对会话，报告标
   “会话绑定未校验”并 `degraded`；证据里的会话不在历史中同样降级。
+- HTTP 请求级匹配与序列：case 可额外填写
+  `mock_rules: [{dep_id, branch, match}]` 和
+  `mock_sequences: {dep_id: [branch, ...]}`。`match` 支持 query/header/body
+  子集匹配；rule 优先于 sequence，sequence 游标按 session+dep 隔离，耗尽后
+  回退 `mock_bindings` 的 default branch。多条 rule 同时命中会显式
+  `mock_request_ambiguous`；证据记录 `branch_source` 与 `sequence_index`。
 
 ### Mock 运行计划（P0）
 

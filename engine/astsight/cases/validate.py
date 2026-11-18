@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -1415,6 +1416,122 @@ def _check_mock_bindings(
                     path=path,
                 )
             )
+    seen_rules: set[tuple[str, str]] = set()
+    if (
+        draft_case.transport.value != "http"
+        and (draft_case.mock_rules or draft_case.mock_sequences)
+    ):
+        result.errors.append(
+            _issue(
+                "error",
+                "mock.http_only_routing",
+                "请求匹配和调用序列目前只支持 HTTP 下游 Mock",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    for index, rule in enumerate(draft_case.mock_rules):
+        if rule.dep_id not in draft_case.mock_bindings:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.rule_dep_missing_binding",
+                    f"mock_rules[{index}] 的 dep_id 没有 default mock_binding: "
+                    f"{rule.dep_id!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if not rule.branch.strip() or len(rule.branch) > _MAX_BRANCH_LENGTH:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.rule_branch_invalid",
+                    f"mock_rules[{index}] 的 branch 为空或过长",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        matcher = rule.match.model_dump(mode="json")
+        if not matcher.get("query") and not matcher.get("headers") and matcher.get("body") is None:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.rule_match_empty",
+                    f"mock_rules[{index}] 至少需要 query/header/body 条件",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if rule.match.body is not None and (
+            body_depth(rule.match.body) > MAX_BODY_DEPTH
+            or body_item_count(rule.match.body) > MAX_BODY_ITEMS
+        ):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.rule_match_body_too_large",
+                    f"mock_rules[{index}] 的 body 匹配条件超过深度/条目上限",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        signature = (
+            rule.dep_id,
+            json.dumps(matcher, ensure_ascii=False, sort_keys=True),
+        )
+        if signature in seen_rules:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.rule_match_duplicate",
+                    f"mock_rules 存在重复匹配条件: {rule.dep_id!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        seen_rules.add(signature)
+    for dep_id, sequence in draft_case.mock_sequences.items():
+        if dep_id not in draft_case.mock_bindings:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.sequence_dep_missing_binding",
+                    f"mock_sequences 的 dep_id 没有 default mock_binding: {dep_id!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if not sequence:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mock.sequence_empty",
+                    f"mock_sequences[{dep_id!r}] 不能为空",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        for branch in sequence:
+            if not branch.strip() or len(branch) > _MAX_BRANCH_LENGTH:
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "mock.sequence_branch_invalid",
+                        f"mock_sequences[{dep_id!r}] 含空 branch 或超长 branch",
+                        case_key=case_key,
+                        endpoint=endpoint,
+                        path=path,
+                    )
+                )
         if not branch.strip() or len(branch) > _MAX_BRANCH_LENGTH:
             result.errors.append(
                 _issue(
@@ -2044,6 +2161,33 @@ def _check_mock_semantics(
                     path=path,
                 )
             )
+        if dep_id in deps:
+            allowed = {item.branch for item in deps[dep_id].branches}
+            for index, rule in enumerate(draft_case.mock_rules):
+                if rule.dep_id == dep_id and rule.branch not in allowed:
+                    result.errors.append(
+                        _issue(
+                            "error",
+                            "mock.rule_branch_unknown",
+                            f"mock_rules[{index}] 引用了未知分支 {rule.branch!r}",
+                            case_key=case_key,
+                            endpoint=endpoint,
+                            path=path,
+                        )
+                    )
+            for sequence_branch in draft_case.mock_sequences.get(dep_id, []):
+                if sequence_branch not in allowed:
+                    result.errors.append(
+                        _issue(
+                            "error",
+                            "mock.sequence_branch_unknown",
+                            f"mock_sequences[{dep_id!r}] 引用了未知分支 "
+                            f"{sequence_branch!r}",
+                            case_key=case_key,
+                            endpoint=endpoint,
+                            path=path,
+                        )
+                    )
         if branch != "success":
             continue
         spec = next(

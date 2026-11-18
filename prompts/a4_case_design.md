@@ -117,6 +117,8 @@
 | `steps` | HTTP/Dubbo 多请求用例至少 2 步。每步 `{name, endpoint, asserts, ...}`；Dubbo 步骤用 `dubbo.arguments`，可用 `{"$ref": "<step>.<field>"}` 引用更早步骤的返回值字段。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中；每个 Dubbo 步骤至少一条 `rpc_status` |
 | `assert_strength` | 按断言内容填写：`L1` 状态码/字段存在/结构；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨两个及以上步骤的不变量。框架会按内容重新推导，不一致时产生 `assert_strength.mismatch` warning 并以推导值为准 |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
+| `mock_rules` | 仅 HTTP：`[{dep_id, branch, match}]`。`match` 支持 `query` / `headers` / `body` 子集匹配；规则优先于 sequence，同一请求命中多条会在运行期失败关闭。只有需求明确要求按参数返回不同结果时才填 |
+| `mock_sequences` | 仅 HTTP：`{dep_id: [branch, ...]}`。规则未命中时按调用次数取分支，序列耗尽后回退 `mock_bindings` 的 default branch；只有需求明确描述连续调用差异时使用 |
 | `path_params` / `query` / `headers` / `body` | 仅 HTTP。字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
 | `rationale` / `assumptions` / `note` | `rationale` 写该用例证明哪条规则的哪一面；`assumptions` 写契约缺口/歧义假设；`note` 写规则冲突 `topic` |
 | `uncovered_requirements` | 无法构造的 section 必写 `reason`；未覆盖的业务规则写 `rule_keys`，无法映射的关系写 `relation_keys`（不得漏掉 A/B 级） |
@@ -221,7 +223,8 @@ Dubbo 多步骤用 `steps`，后续步骤参数可用 `{"$ref": "first.orderId"}
   `$field` 和 `$op` 不得用于请求体、query、path_params 或 header；
   同响应关系式也推导为 `L3`。只有当规则或契约明确给出该关系时才生成，不得猜测业务公式。
 - 执行时同一用例的步骤共享 `client` 与 Mock 会话；`preconditions` 在第一步前 apply，
-  `mock_bindings` 对整个用例生效。
+  `mock_bindings` 是整个用例的 default branch；`mock_rules` / `mock_sequences`
+  也按整个会话生效，sequence 游标按 `session + dep_id` 隔离。
 - 规则带 `relations` 时，A4 必须在能执行该关系的用例里填 `relation_refs`；框架会把
   `$response` 转为当前响应 `$field`、`$request` 保留为请求引用并生成 L3 断言。
   若画像/数据目录无法映射，必须在 `uncovered_requirements[].relation_keys` 中列出并写明原因。
