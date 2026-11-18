@@ -363,7 +363,9 @@ def data_state(request):
         try:
             cursor = conn.cursor()
             try:
-                for statement in reversed(teardown):
+                # render_teardown 已按逆拓扑顺序生成（先删子表）；
+                # 这里按原顺序执行，不能再反转。
+                for statement in teardown:
                     cursor.execute(statement["sql"], statement["params"])
                     record["deleted"] += 1
                 conn.commit()
