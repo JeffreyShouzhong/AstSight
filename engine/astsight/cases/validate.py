@@ -19,6 +19,7 @@ from contracts import (
     DataCatalog,
     DubboCall,
     MockSemantic,
+    PreconditionKind,
     RequirementDoc,
     RuleAuthority,
     RuleSet,
@@ -2208,6 +2209,19 @@ def _check_preconditions(
 ) -> None:
     if not draft_case.preconditions:
         return
+    for item in draft_case.preconditions:
+        if item.kind is PreconditionKind.API_STATE:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "precondition.api_state_unsupported",
+                    "前置数据只支持插表造数（db_state）；"
+                    "不通过调用业务接口构造测试数据",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
     if data_catalog is None:
         result.warnings.append(
             _issue(

@@ -78,11 +78,72 @@ def resolve_data_refs(value: Any, data: dict[str, Any]) -> Any:
     return copy.deepcopy(value)
 
 
+def _resolve_assertion(assertion: Any, data: dict[str, Any]) -> Any:
+    return assertion.model_copy(
+        update={
+            "expect": resolve_data_refs(assertion.expect, data),
+            "where": resolve_data_refs(assertion.where, data),
+        }
+    )
+
+
+def _resolve_call(call: Any, data: dict[str, Any]) -> Any:
+    if call is None:
+        return None
+    return call.model_copy(
+        update={
+            "arguments": resolve_data_refs(call.arguments, data),
+            "attachments": resolve_data_refs(call.attachments, data),
+        }
+    )
+
+
+def _resolve_step(step: Any, data: dict[str, Any]) -> Any:
+    return step.model_copy(
+        update={
+            "path_params": resolve_data_refs(step.path_params, data),
+            "query": resolve_data_refs(step.query, data),
+            "body": resolve_data_refs(step.body, data),
+            "dubbo": _resolve_call(step.dubbo, data),
+            "asserts": [
+                _resolve_assertion(assertion, data)
+                for assertion in step.asserts
+            ],
+        }
+    )
+
+
+def resolve_case_data(case: Any) -> Any:
+    """把用例里的 `$data` 引用换成实体值。
+
+    只依赖字段名，不依赖具体模型；TestCase 与 DraftCase 都可传入。
+    返回新对象，不改原用例。
+    """
+    data = getattr(case, "data", None) or {}
+    if not data:
+        return case
+    return case.model_copy(
+        update={
+            "path_params": resolve_data_refs(case.path_params, data),
+            "query": resolve_data_refs(case.query, data),
+            "body": resolve_data_refs(case.body, data),
+            "dubbo": _resolve_call(case.dubbo, data),
+            "asserts": [
+                _resolve_assertion(assertion, data)
+                for assertion in case.asserts
+            ],
+            "steps": [_resolve_step(step, data) for step in case.steps],
+            "mock_replies": resolve_data_refs(case.mock_replies, data),
+        }
+    )
+
+
 __all__ = [
     "DATA_REF",
     "DataRefError",
     "is_data_ref",
     "iter_data_refs",
     "lookup_data",
+    "resolve_case_data",
     "resolve_data_refs",
 ]

@@ -12,6 +12,7 @@ from typing import Any, Iterable
 from contracts import DataCatalog, MockSemantic, RuleSet, TestCase
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..cases.data_refs import resolve_case_data
 from ..data.semantics import SemanticApplyResult, SemanticDraft, apply_semantics
 from ..llm import LLMClient, LLMError
 from .errors import AgentError
@@ -180,18 +181,24 @@ def generate_data_semantics(
 
 
 def _case_payload(case: TestCase) -> dict[str, Any]:
+    # 造数要用用例实际发出的值：先把 $data 换成实体字面量。
+    resolved = resolve_case_data(case)
     return {
-        "case_id": case.id,
-        "case_key": getattr(case, "case_key", ""),
-        "title": case.title,
-        "endpoint": case.endpoint,
-        "rule_keys": [ref.rule_key for ref in case.rule_refs],
-        "preconditions": [item.model_dump(mode="json") for item in case.preconditions],
+        "case_id": resolved.id,
+        "case_key": getattr(resolved, "case_key", ""),
+        "title": resolved.title,
+        "endpoint": resolved.endpoint,
+        "rule_keys": [ref.rule_key for ref in resolved.rule_refs],
+        "preconditions": [
+            item.model_dump(mode="json")
+            for item in resolved.preconditions
+        ],
+        "data": resolved.data,
         "request": {
-            "path_params": case.path_params,
-            "query": case.query,
-            "headers": case.headers,
-            "body": case.body,
+            "path_params": resolved.path_params,
+            "query": resolved.query,
+            "headers": resolved.headers,
+            "body": resolved.body,
         },
         "steps": [
             {
@@ -204,9 +211,10 @@ def _case_payload(case: TestCase) -> dict[str, Any]:
                     "body": step.body,
                 },
             }
-            for step in case.steps
+            for step in resolved.steps
         ],
-        "mock_bindings": dict(case.mock_bindings),
+        "mock_bindings": dict(resolved.mock_bindings),
+        "mock_replies": resolved.mock_replies,
     }
 
 

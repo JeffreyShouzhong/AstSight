@@ -9,6 +9,7 @@ from astsight.agent.case_design import (
     generate_case_design,
     load_case_design_prompt,
 )
+from astsight.agent.data_prep import _case_payload
 from astsight.cases.context import build_context
 from astsight.cases.draft import CaseDraft
 from astsight.cases.validate import validate_draft
@@ -22,6 +23,7 @@ from contracts import (
     MockRequestMatch,
     MockStub,
     MockStrategy,
+    Precondition,
     Rule,
     RuleAuthority,
     RuleSet,
@@ -456,3 +458,44 @@ def test_mock_reply_unknown_field_warns(tmp_path: Path) -> None:
     ]
     assert len(warnings) == 1
     assert "ghost" in warnings[0].message
+
+
+def test_api_state_precondition_is_rejected(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        preconditions=[
+            Precondition(kind="api_state", state_key="created_via_api")
+        ],
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    codes = {item.code for item in result.errors}
+    assert "precondition.api_state_unsupported" in codes
+
+
+def test_data_plan_payload_uses_resolved_case_values(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context, semantic = _with_contract(
+        context, types=[ITEM_TYPE], body={"id": 1, "name": "box"}
+    )
+    draft = _with_case_data(
+        _draft(context),
+        data={"product": {"id": "P-1001", "name": "Mock 手机"}},
+        body={"customer_id": {"$data": "product.id"}},
+        mock_replies={
+            DEP_ID: {
+                "id": {"$data": "product.id"},
+                "name": {"$data": "product.name"},
+            }
+        },
+    )
+    result = validate_draft(
+        draft, context, project=tmp_path, mock_semantic=semantic
+    )
+    assert result.errors == []
+    payload = _case_payload(result.resolved[0].case)
+    # 造数看到的是用例真正会发的值，不是 $data 占位符。
+    assert payload["request"]["body"] == {"customer_id": "P-1001"}
+    assert payload["data"]["product"]["id"] == "P-1001"
+    assert payload["mock_replies"][DEP_ID]["name"] == "Mock 手机"
+    assert "$data" not in json.dumps(payload, ensure_ascii=False)
