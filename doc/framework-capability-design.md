@@ -2027,7 +2027,8 @@ MockRuntimeAdapter
 - HTTP/Dubbo runtime 已通过包装 adapter 接入统一 manager，现有行为保持兼容；
 - `MockPlan` 校验后生成统一 `MockPlanDep[]`，HTTP/Dubbo legacy 路由均投影为协议 locator；
 - MockSemantic 已使用真实 `transport=dubbo` / `DubboMockReply`，HTTP status 不再校验 Dubbo/gRPC；
-- gRPC Plan 已具备 locator 契约，但 gRPC runtime、gripmock 接入、显式 gRPC Plan 输入和 semantic 自动采样仍属后续阶段。
+- gRPC Plan 已支持纯 `deps[]` 输入；`descriptor_source` 可为 `.proto` 或 `.protoset`，`.proto` 经 `grpc_tools.protoc` 递归编译，方法必须是 unary，所有分支 body 安装前按响应 message descriptor 严格校验，并记录 `descriptor_sha256`；
+- gRPC runtime、gripmock 接入和 semantic 自动采样仍属后续阶段；已通过 descriptor 校验的 gRPC Plan 在启动时显式阻断 `mock_grpc_runtime_unimplemented`。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 

@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from contracts import (
     DubboMockLocator,
+    GrpcMockLocator,
     HttpMockLocator,
     MockCall,
     MockInjection,
@@ -38,6 +39,7 @@ from .identity import (
     parse_dubbo_dep_id,
 )
 from .server import MockHttpServer
+from .grpc_descriptor import GrpcDescriptorError, GrpcDescriptorIndex
 from .runtime import (
     EmbeddedMockRuntimeAdapter,
     MockRuntimeManager,
@@ -103,6 +105,7 @@ def load_mock_plan(path: str | Path) -> MockPlan:
     except ValueError as exc:
         raise MockPlanError("mock_plan_invalid", str(exc)[:800]) from exc
     validate_mock_plan(plan)
+    validate_grpc_plan_descriptors(plan, base_dir=plan_path.parent)
     return plan
 
 
@@ -229,6 +232,115 @@ def _normalize_dubbo_route(
     route.version = parsed.version
 
 
+def _materialize_legacy_routes_from_deps(plan: MockPlan) -> None:
+    """允许纯 deps[] 新格式进入 Plan；legacy 路由存在时以其为事实源。
+
+    validated Plan 会同时序列化 legacy routes 与派生 deps。为了避免把派生
+    deps 误当第二事实源，只要 legacy 路由非空就忽略 deps 输入并由校验重算。
+    """
+    if plan.routes or plan.dubbo_routes or not plan.deps:
+        return
+    routes: list[MockPlanRoute] = []
+    dubbo_routes: list[MockPlanDubboRoute] = []
+    for index, dep in enumerate(plan.deps):
+        locator = dep.locator
+        if dep.transport is Transport.HTTP:
+            _require(
+                isinstance(locator, HttpMockLocator),
+                "mock_plan_dep_invalid",
+                f"deps[{index}]: HTTP transport 需要 HttpMockLocator",
+            )
+            assert isinstance(locator, HttpMockLocator)
+            routes.append(
+                MockPlanRoute(
+                    dep_id=dep.dep_id,
+                    method=locator.method,
+                    path_key=locator.path_key,
+                    host=locator.host,
+                    target=locator.target,
+                    strategy=dep.strategy,
+                    source=dep.source,
+                    route_key=dep.route_key,
+                    branches=dict(dep.branches),
+                )
+            )
+        elif dep.transport is Transport.DUBBO:
+            _require(
+                isinstance(locator, DubboMockLocator),
+                "mock_plan_dep_invalid",
+                f"deps[{index}]: Dubbo transport 需要 DubboMockLocator",
+            )
+            assert isinstance(locator, DubboMockLocator)
+            dubbo_routes.append(
+                MockPlanDubboRoute(
+                    dep_id=dep.dep_id,
+                    service=locator.service,
+                    method=locator.method,
+                    parameter_types=list(locator.parameter_types),
+                    group=locator.group,
+                    version=locator.version,
+                    source=dep.source,
+                    route_key=dep.route_key,
+                    branches=dict(dep.branches),
+                )
+            )
+        elif dep.transport is Transport.GRPC:
+            _require(
+                isinstance(locator, GrpcMockLocator),
+                "mock_plan_dep_invalid",
+                f"deps[{index}]: gRPC transport 需要 GrpcMockLocator",
+            )
+        else:
+            raise MockPlanError(
+                "mock_plan_dep_invalid",
+                f"deps[{index}]: unsupported transport={dep.transport.value}",
+            )
+    plan.routes = routes
+    plan.dubbo_routes = dubbo_routes
+
+
+def validate_grpc_plan_descriptors(
+    plan: MockPlan,
+    *,
+    base_dir: str | Path | None = None,
+) -> int:
+    """编译/加载 gRPC descriptor 并校验当前 Plan 的响应体。"""
+    root = Path(base_dir).resolve() if base_dir is not None else Path.cwd()
+    checked = 0
+    for dep in plan.deps:
+        if dep.transport is not Transport.GRPC:
+            continue
+        if not isinstance(dep.locator, GrpcMockLocator):
+            raise MockPlanError(
+                "mock_plan_dep_invalid",
+                f"{dep.dep_id}: 需要 GrpcMockLocator",
+            )
+        if not dep.locator.descriptor_source:
+            raise MockPlanError(
+                "mock_descriptor_missing",
+                f"{dep.dep_id}: descriptor_source 为空",
+            )
+        source = Path(dep.locator.descriptor_source).expanduser()
+        if not source.is_absolute():
+            source = (root / source).resolve()
+        try:
+            index = GrpcDescriptorIndex.load(source)
+            index.method(dep.locator.grpc_path)
+            for branch_name, stub in dep.branches.items():
+                try:
+                    index.validate_response(dep.locator.grpc_path, stub.body)
+                except GrpcDescriptorError as exc:
+                    raise MockPlanError(
+                        exc.code,
+                        f"{dep.dep_id}/{branch_name}: {exc.detail}",
+                    ) from exc
+        except GrpcDescriptorError as exc:
+            raise MockPlanError(exc.code, f"{dep.dep_id}: {exc.detail}") from exc
+        dep.locator.descriptor_sha256 = index.descriptor_sha256
+        checked += 1
+    return checked
+
+
 def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
     """校验并就地规范化计划；返回 route_key 与告警。"""
     _require(plan.schema_version == 1, "mock_plan_schema_unsupported", str(plan.schema_version))
@@ -260,15 +372,21 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
             raise MockPlanError("mock_host_invalid", repr(plan.host)) from exc
     plan.host = host
 
+    _materialize_legacy_routes_from_deps(plan)
+    grpc_deps = [
+        dep for dep in plan.deps if dep.transport is Transport.GRPC
+    ]
     _require(
-        bool(plan.routes) or bool(plan.dubbo_routes),
+        bool(plan.routes) or bool(plan.dubbo_routes) or bool(grpc_deps),
         "mock_plan_empty",
         "至少需要一条 route",
     )
     _require(
-        len(plan.routes) + len(plan.dubbo_routes) <= MAX_PLAN_ROUTES,
+        len(plan.routes) + len(plan.dubbo_routes) + len(grpc_deps)
+        <= MAX_PLAN_ROUTES,
         "mock_plan_too_many_routes",
-        f"{len(plan.routes) + len(plan.dubbo_routes)} > {MAX_PLAN_ROUTES}",
+        f"{len(plan.routes) + len(plan.dubbo_routes) + len(grpc_deps)} "
+        f"> {MAX_PLAN_ROUTES}",
     )
 
     validation = MockPlanValidation()
@@ -330,6 +448,55 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
             )
         )
 
+    for index, dep in enumerate(grpc_deps):
+        where = f"deps[{index}]"
+        _require(
+            dep.dep_id.startswith("grpc:"),
+            "mock_dep_id_invalid",
+            f"{where}: gRPC dep_id 必须以 grpc: 开头",
+        )
+        _require(
+            dep.dep_id not in seen_deps,
+            "mock_route_conflict",
+            f"重复 dep_id: {dep.dep_id}",
+        )
+        seen_deps.add(dep.dep_id)
+        _require(
+            isinstance(dep.locator, GrpcMockLocator),
+            "mock_plan_dep_invalid",
+            f"{where}: 需要 GrpcMockLocator",
+        )
+        assert isinstance(dep.locator, GrpcMockLocator)
+        _require(
+            dep.locator.grpc_path.startswith("/")
+            and dep.locator.grpc_path.count("/") >= 2,
+            "mock_grpc_path_invalid",
+            f"{where}: {dep.locator.grpc_path!r}",
+        )
+        _require(
+            len(dep.branches) <= MAX_BRANCHES_PER_ROUTE,
+            "mock_plan_too_many_branches",
+            f"{where}: {len(dep.branches)} > {MAX_BRANCHES_PER_ROUTE}",
+        )
+        for name in dep.branches:
+            _require(
+                bool(str(name).strip()) and len(str(name)) <= MAX_BRANCH_CHARS,
+                "mock_branch_invalid",
+                f"{where}: 分支名 {name!r}",
+            )
+        if not dep.branches:
+            validation.warnings.append(f"mock_branch_empty:{dep.dep_id}")
+        deps.append(
+            DepIdEntry(
+                dep_id=dep.dep_id,
+                downstream_key="grpc",
+                evidence="grpc_path",
+                method=dep.locator.grpc_path.rsplit("/", 1)[-1],
+                path_key=dep.locator.grpc_path,
+                target=dep.locator.target,
+            )
+        )
+
     try:
         route_keys = assign_route_keys(deps)
     except ValueError as exc:
@@ -363,6 +530,20 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
         )
         seen_keys.add(computed)
         route.route_key = computed
+    for dep in grpc_deps:
+        computed = route_keys[dep.dep_id]
+        if dep.route_key is not None and dep.route_key != computed:
+            raise MockPlanError(
+                "mock_route_key_mismatch",
+                f"{dep.dep_id}: {dep.route_key!r} != {computed!r}",
+            )
+        _require(
+            computed not in seen_keys,
+            "mock_route_conflict",
+            f"重复 route_key: {computed}",
+        )
+        seen_keys.add(computed)
+        dep.route_key = computed
     validation.route_keys = route_keys
 
     _require(
@@ -481,7 +662,7 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
             branches=dict(route.branches),
         )
         for route in plan.dubbo_routes
-    ]
+    ] + [dep.model_copy(deep=True) for dep in grpc_deps]
     return validation
 
 
@@ -650,6 +831,14 @@ class MockPlanRuntime:
 
 def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path | None):
     validation = validate_mock_plan(plan)
+    grpc_deps = [
+        dep.dep_id for dep in plan.deps if dep.transport is Transport.GRPC
+    ]
+    if grpc_deps:
+        raise MockPlanError(
+            "mock_grpc_runtime_unimplemented",
+            ",".join(grpc_deps[:10]),
+        )
     server = MockHttpServer(
         sut_id=plan.sut_id,
         namespace=plan.namespace,
@@ -753,5 +942,6 @@ __all__ = [
     "load_mock_plan",
     "resolve_plan_path",
     "start_mock_plan",
+    "validate_grpc_plan_descriptors",
     "validate_mock_plan",
 ]

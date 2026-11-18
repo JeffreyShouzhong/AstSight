@@ -111,6 +111,7 @@ class GrpcMockLocator(BaseModel):
     grpc_path: str
     target: str | None = None
     descriptor_source: str | None = None
+    descriptor_sha256: str | None = None
 
 
 MockLocator = Union[HttpMockLocator, DubboMockLocator, GrpcMockLocator]

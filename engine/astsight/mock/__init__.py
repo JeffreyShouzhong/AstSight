@@ -21,6 +21,7 @@ from .identity import (
     parse_dubbo_dep_id,
     route_key_for,
 )
+from .grpc_descriptor import GrpcDescriptorError, GrpcDescriptorIndex, GrpcMethod
 from .plan import (
     MockPlanError,
     MockPlanRuntime,
@@ -28,6 +29,7 @@ from .plan import (
     load_mock_plan,
     resolve_plan_path,
     start_mock_plan,
+    validate_grpc_plan_descriptors,
     validate_mock_plan,
 )
 from .routes import RouteEntry, RouteResolution, RouteTable
@@ -50,6 +52,9 @@ __all__ = [
     "DubboDepId",
     "DubboRouteEntry",
     "EmbeddedMockRuntimeAdapter",
+    "GrpcDescriptorError",
+    "GrpcDescriptorIndex",
+    "GrpcMethod",
     "MockEvidenceWriter",
     "MockHttpServer",
     "MockLimits",
@@ -86,5 +91,6 @@ __all__ = [
     "route_key_for",
     "start_mock_plan",
     "summarize_evidence",
+    "validate_grpc_plan_descriptors",
     "validate_mock_plan",
 ]
