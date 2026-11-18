@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`b3cdbe6`（`完善：Dubbo 直连目标解析与多服务试点`），
+> 最新提交：`f9d1b49`（`完善：用例业务实体与下游 Mock 联动`），
 > 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
@@ -12,7 +12,10 @@
 > 无 proto 时走 Dubbo 3.2.19 sidecar 泛化调用；真实 Apache Online Boutique 的
 > `tri` 服务 `run --mode full` 1/1 通过。多服务场景新增直连目标解析：
 > 来源校验、代码地址、单 endpoint 去重、服务级映射与 IP 字面量约束，
-> 注册中心不参与选 provider；三服务试点 6 条用例 5 条通过。gRPC target 配置已覆盖 Java
+> 注册中心不参与选 provider；三服务试点 6 条用例 5 条通过。
+> 用例可声明业务实体 `data`，请求与下游 Mock 通过 `$data` 引用同一份数据；
+> `mock_replies` 把实体写进 HTTP/Dubbo Mock 响应，按业务语义造数，
+> 不再依赖环境里碰巧存在的真实 ID。gRPC target 配置已覆盖 Java
 > `@Value/@ConfigurationProperties/System.getenv/System.getProperty`、Python settings、
 > Node config/env 和 Go env/viper。
 > HTTP Mock 已支持请求级 query/header/body 子集匹配与同 dep 调用序列；
