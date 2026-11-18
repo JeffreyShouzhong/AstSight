@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`cad1480`（`新增：MQ 生产者拦截与 Kafka 消息断言`），
+> 最新提交：`d3455f9`（`文档：更新当前进度存档`），
 > 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
@@ -25,12 +25,16 @@
 > 多规则同时命中失败关闭，sequence 游标按 `session + dep_id` 隔离。
 > HTTP agent 安全矩阵已覆盖 OkHttp 连接复用、同步/异步调用、客户端内部重试、
 > 3xx 重定向、pinning、HTTPS scheme guard、二次改写、计划内未命中与 Host/签名边界。
+> MQ 生产者拦截已落地 Kafka 首版：Agent 在 `KafkaProducer.send` 处截获，
+> 计划内 topic 不真正发送，用例断言 topic/key/headers/body 子集与条数；
+> 不连 broker、不验证分区与序列化。RabbitMQ、RocketMQ 按使用广泛度待做。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
-> 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。真实 gripmock、
-> Java agent、gripmock、Triple、Online Boutique 与 Dubbo sidecar 联调开启后全量为
-> **654 passed / 28 skipped**。
+> 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
+> 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
+> 默认全量为 **671 passed / 60 skipped**；真实后端联调的历史记录为
+> 654 passed / 28 skipped（本轮未重跑）。
 
 ## 当前状态
 
