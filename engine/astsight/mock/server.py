@@ -188,6 +188,11 @@ def _build_stub_response(
     case_id: str,
     response_limit: int,
 ) -> Response:
+    if 300 <= stub.status < 400:
+        raise MockResponseError(
+            "mock_redirect_unsupported",
+            f"status={stub.status}",
+        )
     forbidden = sorted(
         key for key in stub.headers if key.lower() in FORBIDDEN_RESPONSE_HEADERS
     )

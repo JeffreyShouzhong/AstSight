@@ -628,6 +628,10 @@ HTTPS 在改写后走明文，不建 TLS、不装 CA。所有 adapter 都用裸 
 `http_rewrites`、`http_errors`、`http_stack_unsupported`、`http_passthrough`、
 `passthrough_hosts`。
 
+HTTP Mock 不返回 3xx 重定向：agent 的 `newCall` 钩子无法安全覆盖客户端内部
+跟随的重定向，因此计划桩返回 300–399 时统一回 `502 mock_redirect_unsupported`，
+真实下游保持零连接。连接复用、多次调用和重定向失败关闭由安全矩阵 e2e 覆盖。
+
 可选联调测试（默认跳过，均已实测通过）：
 
 ```bash
@@ -640,7 +644,12 @@ ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
   PYTHONPATH=. python -m pytest tests/integration/test_java_agent_apache_httpclient_e2e.py -q
 
 # HTTP/2 prior-knowledge 负例（改写发生、SUT 显式失败、真实下游 0 连接）
-ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \n  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_h2_prior_knowledge_e2e.py -q
+ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_h2_prior_knowledge_e2e.py -q
+
+# 安全矩阵：连接复用多次调用、重定向失败关闭
+ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
+  PYTHONPATH=. python -m pytest tests/integration/test_java_agent_safety_matrix_e2e.py -q
 
 # Spring Boot 3.5.6 fat jar；先构建样例：
 #   cd java/samples/spring-boot-okhttp && mvn -q -DskipTests package
