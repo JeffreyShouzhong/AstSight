@@ -803,6 +803,19 @@ Dubbo Triple unary：
 - 自动 codegen 会把相对 descriptor 固化到项目根，避免生成目录 cwd 不同导致
   找不到 proto。
 
+gRPC 下游 target 配置形态：
+
+- Java `@Value("${inventory.grpc.addr}")` / application 配置键会同时注入
+  `INVENTORY_GRPC_ADDR` 与 `JAVA_TOOL_OPTIONS=-Dinventory.grpc.addr=...`，
+  因此 Spring 配置和 `System.getProperty` 两种读取方式都能覆盖；
+- `System.getenv("...")` 按原环境变量名注入；
+- `System.getProperty("...")` 按原属性名生成 `-D`；
+- Python/Node/Go 的 env target 保持原行为；
+- `ManagedChannelBuilder.forTarget("literal")` 等硬编码 target 标
+  `grpc_target_hardcoded`，不启动不可实现的“假覆盖”；
+- 不直接改写 SUT 的 `application.yml`/properties 文件，使用更高优先级的 JVM
+  系统属性和环境变量完成启动期覆盖。
+
 ```bash
 # 真 provider 端到端（codegen + run --mode full）
 ASTSIGHT_DUBBO_SIDECAR_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \

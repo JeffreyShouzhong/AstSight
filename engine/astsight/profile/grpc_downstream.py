@@ -34,6 +34,8 @@ class GrpcCallSite:
     stub: str = ""
     target: str | None = None
     property: str | None = None
+    config_key: str | None = None
+    config_kind: str | None = None
     language: str = ""
 
     def as_dict(self) -> dict[str, Any]:
@@ -45,6 +47,8 @@ class GrpcCallSite:
             "stub": self.stub,
             "target": self.target,
             "property": self.property,
+            "config_key": self.config_key,
+            "config_kind": self.config_kind,
             "language": self.language,
         }
 
@@ -60,6 +64,8 @@ class GrpcDownstreamDep:
     response_schema: Any = None
     target: str | None = None
     target_property: str | None = None
+    target_config_key: str | None = None
+    target_config_kind: str | None = None
     call_sites: list[GrpcCallSite] = field(default_factory=list)
     languages: list[str] = field(default_factory=list)
 
@@ -81,6 +87,8 @@ class GrpcDownstreamDep:
             "response_schema": self.response_schema,
             "target": self.target,
             "property": self.target_property,
+            "config_key": self.target_config_key,
+            "config_kind": self.target_config_kind,
             "call_sites": [item.as_dict() for item in self.call_sites],
             "languages": sorted(set(self.languages)),
             "evidence": "verified",
@@ -247,6 +255,7 @@ def _python_callsites(
                     stub=stub_class,
                     target=target,
                     property=property_name,
+                    config_kind="env" if property_name else None,
                     language="python",
                 )
             )
@@ -269,7 +278,15 @@ def _java_callsites(
     unsupported: list[dict[str, Any]] = []
     warnings: list[str] = []
     stub_re = re.compile(r"\b([A-Za-z0-9_]+)Stub\s+([A-Za-z_][A-Za-z0-9_]*)")
-    prop_re = re.compile(r"@Value\(\"\$\{([^}]+)\}\"\)")
+    prop_re = re.compile(
+        r"@Value\s*\(\s*(['\"])\$\{([^}:]+)(?::[^}]*)?\}\1\s*\)"
+    )
+    getenv_re = re.compile(
+        r"System\s*\.\s*getenv\s*\(\s*\"([^\"]+)\"\s*\)"
+    )
+    getprop_re = re.compile(
+        r"System\s*\.\s*getProperty\s*\(\s*\"([^\"]+)\""
+    )
     target_re = re.compile(
         r"ManagedChannelBuilder\s*\.\s*(?:forAddress|forTarget)\s*\(\s*\"([^\"]+)\""
     )
@@ -278,7 +295,16 @@ def _java_callsites(
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        properties = [_env_key(item) for item in prop_re.findall(source)]
+        bindings: list[tuple[str, str | None, str]] = []
+        for match in prop_re.finditer(source):
+            key = match.group(2).strip()
+            if key:
+                bindings.append((_env_key(key), key, "spring_property"))
+        for key in getenv_re.findall(source):
+            bindings.append((key, None, "env"))
+        for key in getprop_re.findall(source):
+            bindings.append((_env_key(key), key, "system_property"))
+        bindings = list(dict.fromkeys(bindings))
         targets = target_re.findall(source)
         for match in stub_re.finditer(source):
             service_short = re.sub(
@@ -303,7 +329,15 @@ def _java_callsites(
                         line=source.count("\n", 0, call.start()) + 1,
                         stub=f"{service_short}Stub",
                         target=targets[0] if len(set(targets)) == 1 else None,
-                        property=properties[0] if len(set(properties)) == 1 else None,
+                        property=(
+                            bindings[0][0] if len(bindings) == 1 else None
+                        ),
+                        config_key=(
+                            bindings[0][1] if len(bindings) == 1 else None
+                        ),
+                        config_kind=(
+                            bindings[0][2] if len(bindings) == 1 else None
+                        ),
                         language="java",
                     )
                 )
@@ -396,6 +430,18 @@ class GrpcDownstreamScanner:
                     if dep.target_property in (None, site.property)
                     else None
                 )
+            if site.config_key:
+                dep.target_config_key = (
+                    site.config_key
+                    if dep.target_config_key in (None, site.config_key)
+                    else None
+                )
+            if site.config_kind:
+                dep.target_config_kind = (
+                    site.config_kind
+                    if dep.target_config_kind in (None, site.config_kind)
+                    else None
+                )
         for dep in grouped.values():
             target_set = {
                 site.target for site in dep.call_sites if site.target
@@ -403,14 +449,28 @@ class GrpcDownstreamScanner:
             property_set = {
                 site.property for site in dep.call_sites if site.property
             }
+            config_key_set = {
+                site.config_key for site in dep.call_sites if site.config_key
+            }
+            config_kind_set = {
+                site.config_kind for site in dep.call_sites if site.config_kind
+            }
             dep.target = next(iter(target_set)) if len(target_set) == 1 else None
             dep.target_property = (
                 next(iter(property_set)) if len(property_set) == 1 else None
+            )
+            dep.target_config_key = (
+                next(iter(config_key_set)) if len(config_key_set) == 1 else None
+            )
+            dep.target_config_kind = (
+                next(iter(config_kind_set)) if len(config_kind_set) == 1 else None
             )
             if len(target_set) > 1:
                 warnings.append(f"grpc_target_ambiguous:{dep.dep_id}")
             if len(property_set) > 1:
                 warnings.append(f"grpc_target_property_ambiguous:{dep.dep_id}")
+            if len(config_key_set) > 1:
+                warnings.append(f"grpc_target_config_key_ambiguous:{dep.dep_id}")
         self._result = GrpcDownstreamScan(
             deps=[grouped[key].as_dict() for key in sorted(grouped)],
             unsupported=unsupported,

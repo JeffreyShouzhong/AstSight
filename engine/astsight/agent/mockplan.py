@@ -174,11 +174,24 @@ def _injection_for(dep: dict[str, Any]) -> MockPlanInjection:
             reason="dubbo_filter_requires_java_agent",
         )
     if dep_id.startswith("grpc:") or dep.get("dep_type") == "grpc":
+        property_name = dep.get("property") or None
+        if not property_name:
+            return MockPlanInjection(
+                dep_id=dep_id,
+                strategy=MockStrategy.UNSUPPORTED,
+                kind="base_url",
+                property=None,
+                original=None,
+                path_mode="replace",
+                reason="grpc_target_hardcoded",
+            )
         return MockPlanInjection(
             dep_id=dep_id,
             strategy=MockStrategy.GRPC_SERVER,
             kind="base_url",
-            property=dep.get("property") or None,
+            property=property_name,
+            config_key=dep.get("config_key") or None,
+            config_kind=dep.get("config_kind") or None,
             original=None,
             path_mode="replace",
             reason="grpc_target_rewrite_required",
@@ -358,6 +371,8 @@ def build_mock_plan(
                         grpc_path=str(dep.get("grpc_path") or ""),
                         target=dep.get("target") or None,
                         property=dep.get("property") or None,
+                        config_key=dep.get("config_key") or None,
+                        config_kind=dep.get("config_kind") or None,
                         descriptor_source=descriptor_source,
                     ),
                     branches=route_branches,

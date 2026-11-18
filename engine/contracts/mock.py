@@ -119,6 +119,12 @@ class MockInjection(BaseModel):
         default=None, description="服务发现型下游的服务名，保留原始大小写"
     )
     property: str | None = Field(default=None, description="SUT 中被覆盖的配置键")
+    config_key: str | None = Field(
+        default=None, description="Java system property 原始配置键"
+    )
+    config_kind: str | None = Field(
+        default=None, description="env / spring_property / system_property"
+    )
     kind: str = Field(description="base_url / endpoint_url / proxy")
     original: str = Field(default="")
     injected: str = Field(default="")

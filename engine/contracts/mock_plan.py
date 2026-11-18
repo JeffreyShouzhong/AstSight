@@ -72,6 +72,14 @@ class MockPlanInjection(BaseModel):
     )
     kind: str = Field(default="base_url", description="base_url / endpoint_url / proxy")
     property: str | None = Field(default=None, description="SUT 中实际覆盖的配置键")
+    config_key: str | None = Field(
+        default=None,
+        description="Java system property 原始键，例如 inventory.grpc.addr",
+    )
+    config_kind: str | None = Field(
+        default=None,
+        description="env / spring_property / system_property",
+    )
     original: str | None = Field(default=None, description="被覆盖前的值")
     path_mode: str = Field(default="append", description="append / replace")
     reason: str | None = Field(default=None, description="unsupported 时必填")
@@ -111,6 +119,8 @@ class GrpcMockLocator(BaseModel):
     grpc_path: str
     target: str | None = None
     property: str | None = None
+    config_key: str | None = None
+    config_kind: str | None = None
     descriptor_source: str | None = None
     descriptor_sha256: str | None = None
 

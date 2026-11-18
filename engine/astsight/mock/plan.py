@@ -725,6 +725,8 @@ def _injection_model(
         strategy=injection.strategy,
         service_name=injection.service_name,
         property=injection.property,
+        config_key=injection.config_key,
+        config_kind=injection.config_kind,
         kind=injection.kind,
         original=injection.original or "",
         injected=injected,

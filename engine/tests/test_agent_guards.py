@@ -216,6 +216,42 @@ def test_injection_env_grpc_target_requires_env_property() -> None:
     ) in warnings
 
 
+def test_injection_env_grpc_spring_key_sets_env_and_system_property() -> None:
+    document = {
+        "injections": [
+            {
+                "dep_id": "grpc:/inventory.v1.InventoryService/Reserve",
+                "strategy": "grpc_server",
+                "property": "INVENTORY_GRPC_ADDR",
+                "config_key": "inventory.grpc.addr",
+                "config_kind": "spring_property",
+                "injected": "127.0.0.1:41001",
+            }
+        ]
+    }
+
+    env, keys, warnings = injection_env(
+        document,
+        base_url="http://127.0.0.1:8080",
+        extra_env={
+            "JAVA_TOOL_OPTIONS": (
+                "-Xmx256m -Dinventory.grpc.addr=old:1"
+            )
+        },
+    )
+
+    assert env["INVENTORY_GRPC_ADDR"] == "127.0.0.1:41001"
+    assert env["JAVA_TOOL_OPTIONS"] == (
+        "-Xmx256m -Dinventory.grpc.addr=127.0.0.1:41001"
+    )
+    assert {"INVENTORY_GRPC_ADDR", "JAVA_TOOL_OPTIONS"} <= set(keys)
+    assert (
+        "injection_grpc_config_applied:"
+        "grpc:/inventory.v1.InventoryService/Reserve:"
+        "spring_property:inventory.grpc.addr"
+    ) in warnings
+
+
 def test_injection_for_prefers_config_override_over_discovery() -> None:
     injection = _injection_for(
         {

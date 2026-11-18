@@ -2,8 +2,9 @@
 
 支持 SUT 启动期注入：环境变量形式的 URL override、明文 HTTP 代理、
 Spring Cloud 静态服务列表（`discovery_override`，写入 `SPRING_APPLICATION_JSON`），
-以及 Java agent 改写（`agent_rewrite`，通过 `JAVA_TOOL_OPTIONS` 加载）。
-配置文件、DNS 改写不在本模块能力内，遇到就显式告警，不假装成功。
+Java gRPC 配置键（同时写环境变量与 JVM `-D`），以及 Java agent 改写
+（`agent_rewrite`，通过 `JAVA_TOOL_OPTIONS` 加载）。不直接修改 SUT 配置文件；
+DNS 改写不在本模块能力内，遇到就显式告警，不假装成功。
 """
 from __future__ import annotations
 
@@ -139,6 +140,27 @@ def injection_env(
                 continue
             env[prop] = injected
             keys.append(prop)
+            config_key = str(injection.get("config_key") or "").strip()
+            config_kind = str(injection.get("config_kind") or "").strip()
+            if config_key:
+                if not re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_.-]*",
+                    config_key,
+                ):
+                    warnings.append(
+                        f"injection_config_key_invalid:{dep_id}:{config_key}"
+                    )
+                else:
+                    env, keys = _set_java_system_property(
+                        env,
+                        keys,
+                        config_key,
+                        injected,
+                    )
+                    warnings.append(
+                        f"injection_grpc_config_applied:{dep_id}:"
+                        f"{config_kind or 'java_property'}:{config_key}"
+                    )
             warnings.append(f"injection_grpc_target_applied:{dep_id}")
         elif strategy == "unsupported":
             warnings.append(
@@ -160,6 +182,30 @@ def injection_env(
             token=agent_token,
         )
     return env, sorted(set(keys)), warnings
+
+
+def _set_java_system_property(
+    env: dict[str, str],
+    keys: list[str],
+    key: str,
+    value: str,
+) -> tuple[dict[str, str], list[str]]:
+    """通过 JAVA_TOOL_OPTIONS 设置 JVM `-D`，并替换同名旧值。"""
+    prefix = f"-D{key}="
+    existing = (
+        env.get("JAVA_TOOL_OPTIONS")
+        or os.environ.get("JAVA_TOOL_OPTIONS")
+        or ""
+    ).strip()
+    tokens = [
+        token
+        for token in existing.split()
+        if not token.startswith(prefix)
+    ]
+    tokens.append(f"{prefix}{value}")
+    env["JAVA_TOOL_OPTIONS"] = " ".join(tokens)
+    keys.append("JAVA_TOOL_OPTIONS")
+    return env, keys
 
 
 def _merge_agent_env(

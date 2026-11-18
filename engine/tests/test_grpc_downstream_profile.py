@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from astsight.mock import validate_mock_plan
 from astsight.agent.mockplan import build_mock_plan
 from astsight.mock.semantic import build_mock_semantic
@@ -108,6 +110,97 @@ public class OrderClient {
     assert dep["dep_id"] == DEP_ID
     assert dep["property"] == "INVENTORY_GRPC_ADDR"
     assert dep["languages"] == ["java"]
+    assert dep["config_key"] == "inventory.grpc.addr"
+    assert dep["config_kind"] == "spring_property"
+
+
+@pytest.mark.parametrize(
+    ("expression", "property_name", "config_key", "config_kind"),
+    [
+        (
+            'System.getenv("INVENTORY_ENV_ADDR")',
+            "INVENTORY_ENV_ADDR",
+            None,
+            "env",
+        ),
+        (
+            'System.getProperty("inventory.grpc.system.addr")',
+            "INVENTORY_GRPC_SYSTEM_ADDR",
+            "inventory.grpc.system.addr",
+            "system_property",
+        ),
+    ],
+)
+def test_java_system_env_and_system_property_targets_are_profiled(
+    tmp_path: Path,
+    expression: str,
+    property_name: str,
+    config_key: str | None,
+    config_kind: str,
+) -> None:
+    _proto(tmp_path)
+    source = tmp_path / "src" / "OrderClient.java"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        """
+public class OrderClient {
+  private final String target = %s;
+  InventoryServiceGrpc.InventoryServiceBlockingStub stub;
+  void run() {
+    stub.reserve(null);
+  }
+}
+"""
+        % expression,
+        encoding="utf-8",
+    )
+
+    result = GrpcDownstreamScanner(tmp_path).scan()
+
+    dep = result.deps[0]
+    assert dep["property"] == property_name
+    assert dep["config_key"] == config_key
+    assert dep["config_kind"] == config_kind
+
+
+def test_hardcoded_grpc_target_blocks_mock_injection(tmp_path: Path) -> None:
+    _proto(tmp_path)
+    (tmp_path / "app.py").write_text(
+        """
+import grpc
+from inventory_pb2_grpc import InventoryServiceStub
+
+channel = grpc.insecure_channel("127.0.0.1:50051")
+stub = InventoryServiceStub(channel)
+
+def handler():
+    return stub.Reserve({})
+""",
+        encoding="utf-8",
+    )
+    profiles, _unmapped = build_profiles(
+        _route(),
+        [],
+        project_root=tmp_path,
+    )
+    context = {"profiles": profiles}
+    semantic = build_mock_semantic(context)
+    draft = SimpleNamespace(
+        cases=[SimpleNamespace(mock_bindings={DEP_ID: "success"})]
+    )
+
+    plan, warnings = build_mock_plan(
+        context,
+        semantic,
+        draft,
+        sut_id="sut",
+        project_root=tmp_path,
+    )
+
+    assert plan is not None
+    assert plan.injections[0].strategy.value == "unsupported"
+    assert plan.injections[0].reason == "grpc_target_hardcoded"
+    assert f"mock_injection_unsupported:{DEP_ID}:grpc_target_hardcoded" in warnings
 
 
 def test_agent_mock_plan_contains_grpc_reply_and_injection(tmp_path: Path) -> None:

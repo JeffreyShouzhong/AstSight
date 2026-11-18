@@ -266,6 +266,10 @@ def test_java_agent_run_auto_grpc_plan_and_execution(tmp_path: Path) -> None:
     )
     assert injection["injections"][0]["strategy"] == "grpc_server"
     assert injection["injections"][0]["property"] == "INVENTORY_GRPC_ADDR"
+    assert injection["injections"][0]["config_key"] == "inventory.grpc.addr"
+    assert injection["injections"][0]["config_kind"] == "spring_property"
+    sut_log = (run_dir / "sut.log").read_text("utf-8", errors="replace")
+    assert "-Dinventory.grpc.addr=127.0.0.1:" in sut_log
     evidence = json.loads(
         (run_dir / "mock_evidence.json").read_text("utf-8")
     )

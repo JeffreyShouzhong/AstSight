@@ -1806,6 +1806,8 @@ def build_plan_from_profiles(
                     "response_type": dep.get("response_type"),
                     "descriptor_source": dep.get("descriptor_source"),
                     "property": dep.get("property"),
+                    "config_key": dep.get("config_key"),
+                    "config_kind": dep.get("config_kind"),
                 }
                 merged[dep_id] = current
             for item in dep.get("call_sites") or []:
@@ -1860,6 +1862,8 @@ def build_plan_from_profiles(
                         "grpc_path": dep["grpc_path"],
                         "target": dep["target"],
                         "property": dep["property"],
+                        "config_key": dep["config_key"],
+                        "config_kind": dep["config_kind"],
                         "descriptor_source": dep["descriptor_source"],
                     },
                     "branches": {},
@@ -1869,11 +1873,21 @@ def build_plan_from_profiles(
             injections.append(
                 {
                     "dep_id": dep_id,
-                    "strategy": "grpc_server",
+                    "strategy": (
+                        "grpc_server"
+                        if dep.get("property")
+                        else "unsupported"
+                    ),
                     "kind": "base_url",
                     "property": dep["property"],
+                    "config_key": dep["config_key"],
+                    "config_kind": dep["config_kind"],
                     "path_mode": "replace",
-                    "reason": "grpc_target_rewrite_required",
+                    "reason": (
+                        "grpc_target_rewrite_required"
+                        if dep.get("property")
+                        else "grpc_target_hardcoded"
+                    ),
                 }
             )
             continue

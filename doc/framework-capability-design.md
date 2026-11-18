@@ -2051,6 +2051,7 @@ MockRuntimeAdapter
 - `start_mock_plan(..., gripmock_path=...)` 已支持自动分配 gRPC/admin/gateway 端口、启动 `GripMockProcess`，并将三个 endpoint 写入 manifest/injection document；每个 gRPC dep 自动生成 `grpc_server` target 注入项；
 - `astsight-gripmock-bin==3.23.8` 已可按 Linux amd64/arm64 构建 manylinux wheel；包内固定 gripmock、manifest、LICENSE/NOTICE，解析器逐项校验平台、版本、source commit、大小和 sha256；`--gripmock-path` 仅作调试覆盖并标记 `degraded`；
 - `GrpcMockLocator.property` 可声明 SUT 的 gRPC target 环境变量键；`injection_env` 将 `grpc_server.injected` 写入该变量。未声明 property 时只保留 endpoint 文档并告警 `grpc_target_not_overridable`；
+- Java target 配置形态已补全：`@Value("${inventory.grpc.addr}")` 同时记录环境变量键和原始 Spring 配置键，启动时写 `INVENTORY_GRPC_ADDR` 与 JVM `-Dinventory.grpc.addr=...`；`System.getenv` 与 `System.getProperty` 分别按 env / system-property 识别；硬编码 `ManagedChannelBuilder` target 明确标 `grpc_target_hardcoded` 并阻断 Mock 注入；
 - 首版自动进程模式要求本次 run 使用单一 descriptor source，多个不同 source 报 `mock_descriptor_ambiguous`；
 - SUT 启动器已能通过环境变量应用可覆盖 target；真实 gripmock v3.23.8 Windows amd64 binary 已跑通 success / `UNAVAILABLE` / history / cleanup e2e，验证空 matcher 必须写 `input.equals={}`；
 - `run --mock-plan` 与 `agent run` 均支持 `--gripmock-path`，正式 CLI 入口可自动启动 gRPC Mock plan；
