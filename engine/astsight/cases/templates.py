@@ -277,6 +277,9 @@ def _dubbo_sample_schema(schema: dict, depth: int = 0) -> Any:
     kind = str(schema.get("kind") or "")
     type_name = str(schema.get("type") or "")
     constraints = schema.get("constraints") or {}
+    if not kind:
+        # Triple request 的 descriptor 采样已经是 protobuf JSON 骨架。
+        return schema
     if kind == "scalar":
         return _dubbo_scalar_sample(type_name, constraints)
     if kind == "temporal":
@@ -453,6 +456,10 @@ def _dubbo_case(profile: dict, case_id: str) -> TestCase:
             group=profile.get("group") or None,
             version=profile.get("version") or None,
             target_port=profile.get("protocol_port"),
+            serialization=profile.get("serialization"),
+            descriptor_source=profile.get("descriptor_source"),
+            grpc_path=profile.get("grpc_path"),
+            compatibility=profile.get("compatibility"),
         ),
     )
 

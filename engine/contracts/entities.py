@@ -269,6 +269,22 @@ class DubboCall(BaseModel):
     )
     attachments: dict[str, str] = Field(default_factory=dict)
     timeout_ms: int = Field(default=5_000, ge=1, le=600_000)
+    serialization: str | None = Field(
+        default=None,
+        description="dubbo/hessian2 或 protobuf；为空时按 URL scheme 推断",
+    )
+    descriptor_source: str | None = Field(
+        default=None,
+        description="Triple/gRPC-compatible 调用的 .proto 或 .protoset",
+    )
+    grpc_path: str | None = Field(
+        default=None,
+        description="Triple/gRPC-compatible 调用的 /package.Service/Method",
+    )
+    compatibility: str | None = Field(
+        default=None,
+        description="native 或 grpc_compatible",
+    )
 
 
 class TestCase(BaseModel):

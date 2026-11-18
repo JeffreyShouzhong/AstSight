@@ -737,7 +737,12 @@ def _execute_and_report_inner(
     data_plan_path: str | None = None
     codegen_dict: dict = {}
     if cases:
-        codegen = generate_pytest(cases, generated_dir, data_bundle=data_bundle)
+        codegen = generate_pytest(
+            cases,
+            generated_dir,
+            data_bundle=data_bundle,
+            project_root=project,
+        )
         codegen_dict = codegen.as_dict()
         run_dir.write_json("codegen.json", codegen_dict)
         if data_bundle is not None:

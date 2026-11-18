@@ -18,6 +18,7 @@ from .package import (
     SidecarJarError,
     resolve_sidecar_jar,
 )
+from .triple import TripleUnaryCaller, invoke_triple, is_grpc_compatible_target
 
 __all__ = [
     "SIDECAR_PROTOCOL",
@@ -27,6 +28,9 @@ __all__ = [
     "DubboSidecarError",
     "SidecarJar",
     "SidecarJarError",
+    "TripleUnaryCaller",
+    "invoke_triple",
+    "is_grpc_compatible_target",
     "locate_java",
     "locate_sidecar_jar",
     "resolve_sidecar_jar",

@@ -33,6 +33,11 @@ from typing import Any, Callable
 
 import yaml
 
+from ..mock.grpc_descriptor import (
+    GrpcDescriptorError,
+    GrpcDescriptorIndex,
+    GrpcMethod,
+)
 from ..mock.identity import DepIdError, build_dubbo_dep_id
 from .langscan import _call_args, _line_of, _mask_comments, _matching_brace
 
@@ -139,8 +144,12 @@ _KOTLIN_DUBBO_IMPORT = re.compile(
 _PROPERTY_PORT = re.compile(
     r"(?m)^\s*dubbo\.protocols?\.[A-Za-z0-9_.-]*port\s*=\s*(\d+)\s*$"
 )
+_PROPERTY_PROTOCOL_NAME = re.compile(
+    r"(?m)^\s*dubbo\.protocols?\.[A-Za-z0-9_.-]*name\s*=\s*([A-Za-z0-9_-]+)\s*$"
+)
 _XML_PROTOCOL = re.compile(r"<dubbo:protocol\b[^>]*>", re.S)
 _XML_PORT = re.compile(r'\bport\s*=\s*"(\d+)"')
+_XML_NAME = re.compile(r'\bname\s*=\s*"([^"]+)"')
 _CLASS_BODY = re.compile(
     r"\b(?P<kind>class|record)\s+([A-Za-z_$][\w$]*)[^{;]*\{"
 )
@@ -305,6 +314,13 @@ class _Interface:
     methods: dict[tuple[str, int], list[_MethodDecl]] = field(
         default_factory=dict
     )
+
+
+@dataclass
+class _TripleContract:
+    source: str
+    index: GrpcDescriptorIndex
+    methods: dict[str, GrpcMethod]
 
 
 @dataclass
@@ -662,6 +678,98 @@ def _dubbo_protocol_ports(raw: str, suffix: str) -> set[int]:
             if port is not None:
                 ports.add(int(port.group(1)))
     return ports
+
+
+def _dubbo_protocol_names(raw: str, suffix: str) -> set[str]:
+    names: set[str] = set()
+    if suffix == ".properties":
+        names.update(
+            match.group(1).strip().lower()
+            for match in _PROPERTY_PROTOCOL_NAME.finditer(raw)
+        )
+        return names
+    if suffix in {".yml", ".yaml"}:
+        try:
+            payload = yaml.safe_load(raw)
+        except yaml.YAMLError:
+            return names
+        if not isinstance(payload, dict):
+            return names
+        dubbo = payload.get("dubbo")
+        if not isinstance(dubbo, dict):
+            return names
+        protocol = dubbo.get("protocol")
+        if isinstance(protocol, dict) and protocol.get("name"):
+            names.add(str(protocol["name"]).strip().lower())
+        protocols = dubbo.get("protocols")
+        if isinstance(protocols, dict):
+            for value in protocols.values():
+                if isinstance(value, dict) and value.get("name"):
+                    names.add(str(value["name"]).strip().lower())
+        return names
+    if suffix == ".xml":
+        for match in _XML_PROTOCOL.finditer(raw):
+            name = _XML_NAME.search(match.group(0))
+            if name is not None:
+                names.add(name.group(1).strip().lower())
+    return names
+
+
+def _triple_contracts(
+    proto_paths: list[Path],
+    *,
+    root: Path,
+) -> tuple[dict[str, _TripleContract], list[str]]:
+    contracts: dict[str, _TripleContract] = {}
+    warnings: list[str] = []
+    include_dirs = sorted({path.parent for path in proto_paths})
+    for path in proto_paths:
+        try:
+            index = GrpcDescriptorIndex.load(path, include_dirs=include_dirs)
+        except GrpcDescriptorError as exc:
+            warnings.append(
+                f"dubbo_triple_descriptor_invalid:{path.relative_to(root).as_posix()}:"
+                f"{exc.code}"
+            )
+            continue
+        source = path.relative_to(root).as_posix()
+        services: dict[str, dict[str, GrpcMethod]] = {}
+        for method in index.unary_methods():
+            services.setdefault(method.service, {})[method.method] = method
+        for service, methods in services.items():
+            current = contracts.get(service)
+            if current is None:
+                contracts[service] = _TripleContract(
+                    source=source,
+                    index=index,
+                    methods=methods,
+                )
+            else:
+                current.methods.update(methods)
+    return contracts, warnings
+
+
+def _matches_triple_contract(
+    service: str,
+    contracts: dict[str, _TripleContract],
+) -> str | None:
+    if service in contracts:
+        return service
+    short = service.rsplit(".", 1)[-1]
+    matches = [
+        name for name in contracts if name.rsplit(".", 1)[-1] == short
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _annotation_mentions_protocol(raw: str, protocol: str) -> bool:
+    return bool(
+        re.search(
+            rf"\bprotocol\s*=\s*\{{[^}}]*[\"']{re.escape(protocol)}[\"']",
+            raw or "",
+            re.S,
+        )
+    )
 
 
 _SCALAR_JVM_TYPES = {
@@ -1317,6 +1425,75 @@ def _provider_records(
     return records
 
 
+def _triple_provider_records(
+    *,
+    service: str,
+    contract: _TripleContract,
+    impl: str,
+    group: str,
+    version: str,
+    direct_url: str | None,
+    protocol_port: int | None,
+    file: str,
+    line: int,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for method in sorted(contract.methods.values(), key=lambda item: item.method):
+        try:
+            endpoint = build_dubbo_dep_id(
+                service,
+                method.method,
+                [method.request_type],
+                group=group or None,
+                version=version or None,
+            )
+        except DepIdError:
+            continue
+        records.append(
+            {
+                "endpoint": endpoint,
+                "transport": "dubbo",
+                "protocol": "tri",
+                "service": service,
+                "method": method.method,
+                "parameter_types": [method.request_type],
+                "declared_parameter_types": [method.request_type],
+                "return_type": method.response_type,
+                "return_type_declared": method.response_type,
+                "parameter_schemas": [
+                    contract.index.sample_message(method.request_type)
+                ],
+                "result_schema": contract.index.sample_message(
+                    method.response_type
+                ),
+                "group": group,
+                "version": version,
+                "direct_url": direct_url,
+                "protocol_port": protocol_port,
+                "url_source": (
+                    "annotation"
+                    if direct_url
+                    else ("protocol_port" if protocol_port else "unresolved")
+                ),
+                "impl_class": impl,
+                "business_key": f"{impl}#{method.method}",
+                "handler": method.method,
+                "file": file,
+                "line": line,
+                "method_line": line,
+                "confidence": "verified",
+                "contract_incomplete": False,
+                "contract_incomplete_reason": None,
+                "source": "dubbo_triple_service",
+                "serialization": "protobuf",
+                "descriptor_source": contract.source,
+                "grpc_path": method.grpc_path,
+                "compatibility": "grpc_compatible",
+            }
+        )
+    return records
+
+
 def _parameter_schemas(
     declaration: _MethodDecl,
     iface: _Interface,
@@ -1370,6 +1547,8 @@ def _scan_provider_annotations(
     class_index: dict[str, _ClassInfo],
     providers: dict[str, dict[str, Any]],
     protocol_port: int | None,
+    protocols: set[str],
+    triple_contracts: dict[str, _TripleContract],
     result: DubboScanResult,
 ) -> None:
     package, imports = _package_and_imports(text)
@@ -1417,7 +1596,16 @@ def _scan_provider_annotations(
                     impl_interfaces.append(resolved)
                 else:
                     unresolved_interfaces.append(item)
-        args = _annotation_args(match.group("args") or "")
+        annotation_raw = match.group("args") or ""
+        args = _annotation_args(annotation_raw)
+        group = _clean_group_version(args.get("group", ""))
+        version = _clean_group_version(args.get("version", ""))
+        direct_url = args.get("url") or None
+        triple_enabled = (
+            protocols == {"tri"}
+            or str(direct_url or "").startswith("tri://")
+            or _annotation_mentions_protocol(annotation_raw, "tri")
+        )
         explicit = None
         if args.get("interfaceClass"):
             explicit = _resolve_type(
@@ -1428,48 +1616,66 @@ def _scan_provider_annotations(
             )
         elif args.get("interfaceName"):
             explicit = args["interfaceName"]
-        if explicit:
-            service = explicit.split("<", 1)[0]
-        elif len(impl_interfaces) == 1:
-            service = impl_interfaces[0]
-        elif not impl_interfaces:
-            if unresolved_interfaces:
-                # 实现了接口但源码不在仓库：与消费端一样标 `interface_in_jar`，
-                # 不把“解析不了”说成“没实现接口”。
-                result.unsupported.append(
-                    {
-                        "file": rel,
-                        "line": line,
-                        "reason": "dubbo_interface_in_jar",
-                        "kind": "provider",
-                        "detail": ",".join(unresolved_interfaces),
-                    }
-                )
+        triple_service = None
+        if triple_enabled:
+            candidates = [
+                explicit or args.get("interfaceClass") or args.get("interfaceName"),
+                *impl_interfaces,
+                *unresolved_interfaces,
+            ]
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                matched = _matches_triple_contract(str(candidate), triple_contracts)
+                if matched:
+                    triple_service = matched
+                    break
+
+        if triple_service:
+            service = triple_service
+        else:
+            if explicit:
+                service = explicit.split("<", 1)[0]
+            elif len(impl_interfaces) == 1:
+                service = impl_interfaces[0]
+            elif not impl_interfaces:
+                if unresolved_interfaces:
+                    # 实现了接口但源码不在仓库：与消费端一样标
+                    # `interface_in_jar`，不把“解析不了”说成“没实现接口”。
+                    result.unsupported.append(
+                        {
+                            "file": rel,
+                            "line": line,
+                            "reason": "dubbo_interface_in_jar",
+                            "kind": "provider",
+                            "detail": ",".join(unresolved_interfaces),
+                        }
+                    )
+                else:
+                    result.unsupported.append(
+                        {
+                            "file": rel,
+                            "line": line,
+                            "reason": "dubbo_provider_interface_missing",
+                            "kind": "provider",
+                            "detail": impl_fqn,
+                        }
+                    )
+                continue
             else:
                 result.unsupported.append(
                     {
                         "file": rel,
                         "line": line,
-                        "reason": "dubbo_provider_interface_missing",
+                        "reason": "dubbo_provider_ambiguous",
                         "kind": "provider",
-                        "detail": impl_fqn,
+                        "detail": ",".join(impl_interfaces),
                     }
                 )
-            continue
-        else:
-            result.unsupported.append(
-                {
-                    "file": rel,
-                    "line": line,
-                    "reason": "dubbo_provider_ambiguous",
-                    "kind": "provider",
-                    "detail": ",".join(impl_interfaces),
-                }
-            )
-            continue
+                continue
 
         iface = interfaces.get(service)
-        if iface is None:
+        if iface is None and not triple_service:
             result.unsupported.append(
                 {
                     "file": rel,
@@ -1481,22 +1687,34 @@ def _scan_provider_annotations(
             )
             continue
 
-        group = _clean_group_version(args.get("group", ""))
-        version = _clean_group_version(args.get("version", ""))
-        direct_url = args.get("url") or None
-        for record in _provider_records(
-            service=service,
-            impl=impl_fqn,
-            iface=iface,
-            class_index=class_index,
-            classes=classes,
-            group=group,
-            version=version,
-            direct_url=direct_url,
-            protocol_port=protocol_port,
-            file=rel,
-            line=line,
-        ):
+        if triple_service and triple_enabled:
+            records = _triple_provider_records(
+                service=triple_service,
+                contract=triple_contracts[triple_service],
+                impl=impl_fqn,
+                group=group,
+                version=version,
+                direct_url=direct_url,
+                protocol_port=protocol_port,
+                file=rel,
+                line=line,
+            )
+        else:
+            assert iface is not None
+            records = _provider_records(
+                service=service,
+                impl=impl_fqn,
+                iface=iface,
+                class_index=class_index,
+                classes=classes,
+                group=group,
+                version=version,
+                direct_url=direct_url,
+                protocol_port=protocol_port,
+                file=rel,
+                line=line,
+            )
+        for record in records:
             _add_provider(providers, record, result)
 
 
@@ -1517,6 +1735,8 @@ def scan_dubbo_sources(
     providers: dict[str, dict[str, Any]] = {}
     xml_services: list[dict[str, Any]] = []
     protocol_ports: set[int] = set()
+    protocol_names: set[str] = set()
+    proto_paths: list[Path] = []
     total = 0
     for path, _language in files:
         if len(sources) >= max_files:
@@ -1524,7 +1744,8 @@ def scan_dubbo_sources(
             break
         suffix = path.suffix.lower()
         if suffix not in {
-            ".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml"
+            ".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml",
+            ".proto",
         }:
             continue
         try:
@@ -1539,6 +1760,9 @@ def scan_dubbo_sources(
             continue
         total += size
         rel = path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix()
+        if suffix == ".proto":
+            proto_paths.append(path)
+            continue
         if suffix in {".kt", ".kts"}:
             if re.search(r"@(?:DubboReference|Reference)\b", raw):
                 result.unsupported.append(
@@ -1562,9 +1786,11 @@ def scan_dubbo_sources(
             continue
         if suffix in {".properties", ".yml", ".yaml"}:
             protocol_ports.update(_dubbo_protocol_ports(raw, suffix))
+            protocol_names.update(_dubbo_protocol_names(raw, suffix))
             continue
         if suffix == ".xml":
             protocol_ports.update(_dubbo_protocol_ports(raw, suffix))
+            protocol_names.update(_dubbo_protocol_names(raw, suffix))
             for match in _XML_REFERENCE.finditer(raw):
                 interface = _XML_INTERFACE.search(match.group(0))
                 result.unsupported.append(
@@ -1688,6 +1914,13 @@ def scan_dubbo_sources(
         protocol_port = next(iter(protocol_ports))
     elif len(protocol_ports) > 1:
         result.warnings.append("dubbo_protocol_port_ambiguous")
+    if len(protocol_names) > 1:
+        result.warnings.append("dubbo_protocol_name_ambiguous")
+    triple_contracts, triple_warnings = _triple_contracts(
+        proto_paths,
+        root=root,
+    )
+    result.warnings.extend(triple_warnings)
 
     # 提供方注解必须在接口索引建好之后解析，否则跨文件 implements 可能找不到。
     for rel, text in sources:
@@ -1699,11 +1932,18 @@ def scan_dubbo_sources(
             class_index=class_index,
             providers=providers,
             protocol_port=protocol_port,
+            protocols=protocol_names,
+            triple_contracts=triple_contracts,
             result=result,
         )
     for item in xml_services:
         iface = interfaces.get(item["service"])
-        if iface is None:
+        triple_service = (
+            _matches_triple_contract(item["service"], triple_contracts)
+            if protocol_names == {"tri"}
+            else None
+        )
+        if iface is None and not triple_service:
             result.unsupported.append(
                 {
                     "file": item["file"],
@@ -1714,19 +1954,34 @@ def scan_dubbo_sources(
                 }
             )
             continue
-        for record in _provider_records(
-            service=item["service"],
-            impl=item["ref"],
-            iface=iface,
-            class_index=class_index,
-            classes=classes,
-            group=_clean_group_version(item["group"]),
-            version=_clean_group_version(item["version"]),
-            direct_url=None,
-            protocol_port=protocol_port,
-            file=item["file"],
-            line=item["line"],
-        ):
+        if triple_service:
+            records = _triple_provider_records(
+                service=triple_service,
+                contract=triple_contracts[triple_service],
+                impl=item["ref"],
+                group=_clean_group_version(item["group"]),
+                version=_clean_group_version(item["version"]),
+                direct_url=None,
+                protocol_port=protocol_port,
+                file=item["file"],
+                line=item["line"],
+            )
+        else:
+            assert iface is not None
+            records = _provider_records(
+                service=item["service"],
+                impl=item["ref"],
+                iface=iface,
+                class_index=class_index,
+                classes=classes,
+                group=_clean_group_version(item["group"]),
+                version=_clean_group_version(item["version"]),
+                direct_url=None,
+                protocol_port=protocol_port,
+                file=item["file"],
+                line=item["line"],
+            )
+        for record in records:
             _add_provider(providers, record, result)
 
     result.providers = sorted(providers.values(), key=lambda item: item["endpoint"])

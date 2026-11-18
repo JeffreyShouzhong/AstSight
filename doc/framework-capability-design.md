@@ -14,7 +14,7 @@
 | 文档性质 | **纯设计文档，不含实现**。所有 JSON 为数据契约，非代码                        |
 
 > **当前口径**：本文只描述当前有效的能力规格、契约与约束。决策过程（候选对比、落选原因、被推翻的判断、版本变更历史）统一记录在 [`决策记录.md`](决策记录.md)，本文不复述“为什么”。
-> gRPC 下游 Mock 已决策（gripmock 假服务器）但未实现，落地约束见 **C3.5.4**；v4.3 报告口径不变。
+> gRPC 下游 Mock 使用 gripmock 假服务器（unary、明文），落地约束见 **C3.5.4**；v4.3 报告口径不变。
 > 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5）：实例身份、端口原子分配、持久化作用域缺一不可。
 > **v4.6 决策**：取消对 Feign 的特殊支持。Feign 不单独解析、不作契约源、不生成专用配置；
 > 只按普通 HTTP 客户端处理，由通用 HTTP 识别与注入点覆盖。通用机制覆盖不了时直接标
@@ -655,12 +655,12 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 1. HTTP 契约存在 → `transport=http`；
 2. 原生 gRPC 服务且有 proto/descriptor → `transport=grpc`；
 3. Dubbo 服务：
-   - Dubbo 3 + **Triple 协议** + **protobuf 序列化** + descriptor + 无 group/version → `transport=grpc`；
-   - 其余（Dubbo 2.7/3 非 Triple、Hessian2、有 group/version、无 descriptor）→ `transport=dubbo`，走 sidecar；
+   - Dubbo 3 + **Triple 协议** + **protobuf 序列化** + descriptor + unary → `transport=dubbo`、`protocol=tri`，执行期使用 gRPC-compatible unary adapter；group/version 可由直连 provider 的配置键固定，不触发注册中心发现；
+   - 其余（Dubbo 2.7/3 非 Triple、Hessian2、无 descriptor）→ `transport=dubbo`，走 sidecar；
    - 证据不足（协议/序列化配置不在仓库、proto 存在但不能证明实际使用、同一服务暴露多协议）→ 默认 `transport=dubbo`，标 `transport_evidence=inferred`；
    - sidecar 也无法解析（接口只在 jar、2.6、动态代理）→ `unsupported`，不得降级硬跑。
 
-> **proto 存在 ≠ 服务走 gRPC**。只有能证明“该服务实际以 Triple + protobuf 暴露”时才选 gRPC；仅仓库里有 proto 文件不够。
+> **proto 存在 ≠ 服务走 Triple**。只有能证明“该服务实际以 Triple + protobuf 暴露”时才启用 gRPC-compatible adapter；仅仓库里有 proto 文件不够。同一服务暴露多个协议且无法按配置消歧时保持 `inferred` 或阻断。
 
 **transport 元数据**：
 
@@ -742,7 +742,7 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 
 精准直连配置只接受 IPv4 / IPv6 字面量与显式端口，不接受域名、Kubernetes Service 名或 VIP 别名。用户填写的 SUT `IP:port` 被视为确定性的 provider 目标，框架按 `determinism="exact"` 记录；无法解析、协议不支持或地址不确定时必须在执行前显式阻断。
 
-Triple 等非 `dubbo://` 目标可以在地址解析阶段得到 endpoint，但当前 sidecar 尚不支持时必须以 `dubbo_protocol_unsupported` 阻断；目标地址解析成功不代表协议适配已完成。
+`tri://` 目标在满足 Protobuf + descriptor + unary + gRPC-compatible 条件时走独立 Python adapter；不满足时以 `dubbo_protocol_unsupported` / `UNSUPPORTED_PROTOCOL` 阻断，不把地址解析成功等同于协议适配完成。
 
 **Dubbo Triple 与 gRPC unary 支持边界（2026-11-18 设计口径）**：
 
@@ -804,6 +804,16 @@ Triple 与 gRPC 兼容不得只依据 URL scheme 推断。进入 `grpc-compatibl
 3. 使用真实 Triple 项目做兼容性试点；
 4. 仅在试点证明必要时增加 `tri:// + Java interface` 的 Triple-native unary；
 5. streaming、reflection 与注册中心保持明确不支持。
+
+**当前实现（2026-11-18）**：`tri://` / `grpc://` + Protobuf + descriptor +
+unary 的 gRPC-compatible 路径已打通。`TripleUnaryCaller` 使用动态 protobuf
+message、deadline 与 metadata 发起同步调用，并把 gRPC status 归一到
+`rpc_status`；Dubbo provider 画像从 `dubbo.protocol.name=tri` 与仓库 proto
+service/method 生成 `grpc_path`、`descriptor_source`、`serialization=protobuf`
+和 `compatibility=grpc_compatible`。codegen 按 URL scheme 选择 sidecar 或
+Triple adapter；自动生成时相对 descriptor 固化为项目绝对路径。真实 Dubbo
+3.2.19 Triple provider 已跑通画像 → 模板 → codegen → `run --mode full`。
+Triple-native Java interface、streaming、reflection 和注册中心仍不做。
 
 **Dubbo 识别（确定性，零 LLM）**：
 
@@ -1082,7 +1092,7 @@ Triple 与 gRPC 兼容不得只依据 URL scheme 推断。进入 `grpc-compatibl
 |---|---|---|---|
 | `http` | `method`、`path`、`params`、`responses` | — | 端点标识 `http:{METHOD} {path}`；**下游** `id` 另加下游身份：`http:{downstream_key} {METHOD} {path}`，同一下游端点的多个调用点合并为同一个 `dep_id`（见 C3.5.5） |
 | `grpc` | `service`、`method`、`grpc_path`、`request_type`、`response_type`、`descriptor_source`、`streaming` | `path`、HTTP 语义的 `params`/`responses` | 仅 `streaming="unary"`；`grpc_path` 固定 `/{package}.{Service}/{Method}`；`request_type`/`response_type` 必须是 proto 中存在的 message 全限定名 |
-| `dubbo` | `interface`、`method`、`param_types`、`return_type`、`serialization`、`direct_url`、`target_source` | `path`、HTTP 语义的 `params`/`responses` | `interface` 为 FQN 且必须在仓库源码内；`param_types` 按方法声明顺序，用于重载消歧；`serialization` 固定 `hessian2`（本版本）；测试目标只接受直连 endpoint，不做注册中心发现 |
+| `dubbo` | `interface`、`method`、`param_types`、`return_type`、`serialization`、`direct_url`、`target_source` | `path`、HTTP 语义的 `params`/`responses` | `interface` 为 FQN；Hessian2 需接口源码，Triple + protobuf 可由 proto descriptor 提供契约；`param_types` 用于重载消歧；测试目标只接受直连 endpoint，不做注册中心发现 |
 
 gRPC 附加字段：
 
@@ -1110,13 +1120,17 @@ Dubbo 附加字段：
   "version": "1.0.0",
   "serialization": "hessian2",
   "direct_url": "dubbo://10.10.2.15:20880",
+  "protocol": "dubbo | tri",
+  "grpc_path": "/com.acme.order.api.OrderService/createOrder",
+  "descriptor_source": "proto/order.proto",
+  "compatibility": "native | grpc_compatible",
   "target_source": "annotation | run_config | target_map | unresolved",
   "timeout_ms": 3000,
   "attachments": {}
 }
 ```
 
-> `group`/`version` 非空即视为依赖 Dubbo 注册中心语义，禁止路由到 gRPC；`transport=grpc` 时二者必须为空。`transport_evidence` 只在判定来自推断时写 `inferred`（见 3.3），不得用 `inferred` 掩盖 `unsupported`。
+> `group`/`version` 只用于服务身份匹配；测试目标始终由直连 endpoint 固定，不把它们解释成注册中心发现。Triple row 保留 `transport=dubbo` 和 `protocol=tri`，以便报告区分 Dubbo 入口与原生 gRPC。`transport_evidence` 只在判定来自推断时写 `inferred`（见 3.3），不得用 `inferred` 掩盖 `unsupported`。
 
 **多协议端点归组与覆盖角色**：
 
@@ -3135,11 +3149,11 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full`/`replay` + C2 召回率基准 | 20 个真实分支人工标注；replay 可重放 |
 
-> 本说明书为设计基线 **v4.15**；v4.7 明确 A4 由规则驱动（不再走“语义分析 → 用例草案”），C5 拆为 C5a 数据目录 / C5b 逐用例计划，且 C5 的 LLM 只提供语义候选、不产出 SQL；**v4.6 取消 Feign 特殊支持**（Feign 按普通 HTTP 客户端处理，覆盖不了即 `unsupported`，见文首 v4.6 决策）；**v4.6.1 收紧 HTTP Mock 范围**（仅明文 HTTP，HTTPS 标 `tls_not_supported`；`dep_id` 唯一性规则见 C3.5.5）；**v4.15 新增 `agent_rewrite`**（配置注入优先、agent 兜底；HTTPS 仅在 agent 时放开；只做 URL 改写，见 C3.5.5 与 [`决策记录.md`](决策记录.md) §17）；**v4.4 的 gRPC Mock 决策已记录（C3.5.4），但尚未实现**；v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。落地时在 [`决策记录.md`](决策记录.md) §8 的版本变更记录中升版。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书为设计基线 **v4.15**；v4.7 明确 A4 由规则驱动（不再走“语义分析 → 用例草案”），C5 拆为 C5a 数据目录 / C5b 逐用例计划，且 C5 的 LLM 只提供语义候选、不产出 SQL；**v4.6 取消 Feign 特殊支持**（Feign 按普通 HTTP 客户端处理，覆盖不了即 `unsupported`，见文首 v4.6 决策）；**v4.6.1 收紧 HTTP Mock 范围**（仅明文 HTTP，HTTPS 标 `tls_not_supported`；`dep_id` 唯一性规则见 C3.5.5）；**v4.15 新增 `agent_rewrite`**（配置注入优先、agent 兜底；HTTPS 仅在 agent 时放开；只做 URL 改写，见 C3.5.5 与 [`决策记录.md`](决策记录.md) §17）；**v4.4 的 gRPC Mock（C3.5.4）与平台 wheel 分发已落地**；v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。落地时在 [`决策记录.md`](决策记录.md) §8 的版本变更记录中升版。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
-> Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo 走 Java sidecar
-> 泛化调用。Dubbo 3 + Triple + protobuf + descriptor + 无 group/version 可路由到 gRPC；其余 Dubbo
+> Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo Hessian2 走 Java sidecar
+> 泛化调用，Dubbo 3 + Triple + protobuf + descriptor + unary 走 gRPC-compatible adapter；其余 Dubbo
 > 家族走 sidecar；证据不足标 `transport_evidence=inferred`；无可用路径标 `unsupported`，不静默回退。
 > SUT → Dubbo/gRPC 下游的 Mock 在 v4.2 不在范围（`mock="unsupported"`）；v4.3 起 Dubbo 下游改用
 > agent + ByteBuddy + Filter 拦截（低侵入），gRPC 下游仍不支持（v4.4 决策：gRPC 下游改用 gripmock 独立服务器，见 C3.5.4）。调用 SUT 仍不使用 Java agent。

@@ -261,11 +261,25 @@ class DubboSidecar:
         version: str | None = None,
         timeout_ms: int = DEFAULT_TIMEOUT_MS,
         attachments: Mapping[str, str] | None = None,
+        serialization: str | None = None,
+        descriptor_source: str | None = None,
+        grpc_path: str | None = None,
+        compatibility: str | None = None,
         timeout: float | None = None,
     ) -> DubboCallResult:
         """调用一次 Dubbo 方法。RPC 失败作为结果返回，进程故障才抛异常。"""
         if not 1 <= timeout_ms <= MAX_TIMEOUT_MS:
             raise ValueError(f"timeout_ms 必须在 1..{MAX_TIMEOUT_MS} 之间")
+        if serialization and serialization.lower() not in {"hessian2"}:
+            return DubboCallResult(
+                ok=False,
+                rpc_status="UNSUPPORTED_PROTOCOL",
+                error="dubbo_protocol_unsupported",
+                message=(
+                    "dubbo:// sidecar 只支持 hessian2；protobuf 请使用 "
+                    "tri:// 或 grpc://"
+                ),
+            )
         payload: dict[str, Any] = {
             "op": "invoke",
             "interface": interface,
@@ -281,6 +295,8 @@ class DubboSidecar:
             payload["version"] = version
         if attachments:
             payload["attachments"] = dict(attachments)
+        if serialization:
+            payload["serialization"] = serialization
 
         # sidecar 自己按 timeout_ms 收口；这里多留启动/序列化余量。
         response = self._request(

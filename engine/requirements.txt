@@ -19,6 +19,7 @@ jsonschema==4.26.0
 
 # ── gRPC 下游 Mock：descriptor 编译、动态消息与响应校验 ──
 protobuf==7.36.2
+grpcio==1.85.3
 grpcio-tools==1.85.3
 
 # ── C5 造数数据库驱动（SQLite 用 stdlib，无需额外依赖）──

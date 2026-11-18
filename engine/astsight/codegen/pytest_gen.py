@@ -719,16 +719,24 @@ def dubbo_client():
 
 
 @pytest.fixture()
-def dubbo_call(dubbo_client):
+def dubbo_call(request):
     def call(*, url=None, target_port=None, **kwargs):
         target = str(url or "").strip() or DUBBO_URL
         if not target and target_port:
-            target = f"dubbo://{DUBBO_HOST}:{int(target_port)}"
+            serialization = str(kwargs.get("serialization") or "").lower()
+            scheme = "tri" if serialization in {"protobuf", "proto"} else "dubbo"
+            target = f"{scheme}://{DUBBO_HOST}:{int(target_port)}"
         if not target:
             pytest.skip(
                 "dubbo_target_unresolved: 设置 ASTSIGHT_DUBBO_URL 或 "
                 "ASTSIGHT_DUBBO_HOST；不回退成 HTTP"
             )
+        scheme = target.partition("://")[0].lower()
+        if scheme in {"tri", "grpc"}:
+            from astsight.sidecar.triple import invoke_triple
+
+            return invoke_triple(url=target, **kwargs)
+        dubbo_client = request.getfixturevalue("dubbo_client")
         return dubbo_client.invoke(url=target, **kwargs)
 
     return call
@@ -1030,6 +1038,10 @@ def _dubbo_invoke_lines(
         f"            version={call.version!r},",
         f"            attachments={call.attachments!r},",
         f"            timeout_ms={int(call.timeout_ms)},",
+        f"            serialization={call.serialization!r},",
+        f"            descriptor_source={call.descriptor_source!r},",
+        f"            grpc_path={call.grpc_path!r},",
+        f"            compatibility={call.compatibility!r},",
         "        )",
     ]
 
@@ -1308,6 +1320,7 @@ def generate_pytest(
     *,
     generated_at: str | None = None,
     data_bundle: DataPlanBundle | None = None,
+    project_root: str | Path | None = None,
 ) -> CodegenResult:
     """生成 conftest.py + 每接口一个测试文件，并做语法自检。
 
@@ -1319,6 +1332,8 @@ def generate_pytest(
     result = CodegenResult()
     stamp = generated_at or utc_now()
     plan_index = _plan_index(data_bundle)
+    if project_root is not None:
+        cases = _resolve_case_descriptors(cases, Path(project_root))
 
     conftest = out / "conftest.py"
     existing = conftest.read_text(encoding="utf-8") if conftest.exists() else ""
@@ -1399,4 +1414,37 @@ def generate_pytest(
         target.write_text(source, encoding="utf-8")
         result.files.append(target)
 
+    return result
+
+
+def _resolve_case_descriptors(
+    cases: list[TestCase],
+    project_root: Path,
+) -> list[TestCase]:
+    """把自动画像中的相对 descriptor 固化到项目根，生成代码可脱离 cwd。"""
+    root = project_root.expanduser().resolve()
+
+    def normalized(call):
+        if call is None or not call.descriptor_source:
+            return call
+        descriptor = Path(call.descriptor_source).expanduser()
+        if descriptor.is_absolute():
+            return call
+        return call.model_copy(
+            update={"descriptor_source": str((root / descriptor).resolve())}
+        )
+
+    result: list[TestCase] = []
+    for case in cases:
+        updates: dict[str, Any] = {}
+        if case.dubbo is not None:
+            updates["dubbo"] = normalized(case.dubbo)
+        if case.steps:
+            updates["steps"] = [
+                step.model_copy(update={"dubbo": normalized(step.dubbo)})
+                if step.transport is Transport.DUBBO and step.dubbo is not None
+                else step
+                for step in case.steps
+            ]
+        result.append(case.model_copy(update=updates) if updates else case)
     return result

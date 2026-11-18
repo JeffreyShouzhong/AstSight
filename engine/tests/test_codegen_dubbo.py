@@ -163,3 +163,60 @@ def test_dubbo_error_assertions_are_generated(tmp_path: Path) -> None:
     assert "result.rpc_status in ['TIMEOUT', 'NETWORK']" in text
     assert "result.error == 'rpc_timeout'" in text
     assert "'timeout' in str(result.message or '')" in text
+
+
+def test_triple_case_generates_descriptor_and_grpc_compatible_dispatch(
+    tmp_path: Path,
+) -> None:
+    endpoint = (
+        "dubbo:inventory.v1.InventoryService#Reserve"
+        "(inventory.v1.ReserveRequest)"
+    )
+    case = TestCase(
+        id="TC-TRIPLE",
+        transport=Transport.DUBBO,
+        endpoint=endpoint,
+        category="positive",
+        method="Reserve",
+        path="",
+        source="dubbo:triple",
+        asserts=[
+            Assertion(kind="rpc_status", op="eq", expect="OK"),
+            Assertion(
+                kind="result_field",
+                target="reservation_id",
+                op="exists",
+            ),
+        ],
+        dubbo=DubboCall(
+            interface="inventory.v1.InventoryService",
+            method="Reserve",
+            parameter_types=["inventory.v1.ReserveRequest"],
+            arguments=[{"sku": "SKU-1"}],
+            url="tri://127.0.0.1:50053",
+            serialization="protobuf",
+            descriptor_source="src/main/proto/inventory.proto",
+            grpc_path="/inventory.v1.InventoryService/Reserve",
+            compatibility="grpc_compatible",
+        ),
+    )
+
+    result = generate_pytest([case], tmp_path, project_root=tmp_path)
+
+    assert result.errors == []
+    text = next(
+        path for path in result.files if path.name.startswith("test_dubbo_")
+    ).read_text(encoding="utf-8")
+    assert "url='tri://127.0.0.1:50053'" in text
+    assert "serialization='protobuf'" in text
+    assert (
+        f"descriptor_source={str((tmp_path / 'src/main/proto/inventory.proto').resolve())!r}"
+        in text
+    )
+    assert "grpc_path='/inventory.v1.InventoryService/Reserve'" in text
+    assert "compatibility='grpc_compatible'" in text
+    conftest = (tmp_path / "conftest.py").read_text(encoding="utf-8")
+    assert 'scheme in {"tri", "grpc"}' in conftest
+    assert "from astsight.sidecar.triple import invoke_triple" in conftest
+    compile(text, str(tmp_path / "test_triple.py"), "exec")
+    compile(conftest, str(tmp_path / "conftest.py"), "exec")

@@ -1632,6 +1632,14 @@ def _hydrate_dubbo(
         updates["url"] = profile.get("direct_url")
     if call.target_port is None:
         updates["target_port"] = profile.get("protocol_port")
+    if call.serialization is None:
+        updates["serialization"] = profile.get("serialization")
+    if not call.descriptor_source:
+        updates["descriptor_source"] = profile.get("descriptor_source")
+    if not call.grpc_path:
+        updates["grpc_path"] = profile.get("grpc_path")
+    if call.compatibility is None:
+        updates["compatibility"] = profile.get("compatibility")
     if updates:
         call = call.model_copy(update=updates)
     return call
@@ -1744,6 +1752,63 @@ def _check_dubbo_call_fields(
                 "dubbo.arguments_count",
                 f"arguments 数量 {len(call.arguments)} 与参数类型数量 "
                 f"{len(call.parameter_types)} 不一致",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if call.serialization and call.serialization.lower() not in {
+        "hessian2",
+        "protobuf",
+        "proto",
+    }:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.serialization_unsupported",
+                f"不支持的 Dubbo serialization: {call.serialization}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if call.compatibility and call.compatibility not in {
+        "native",
+        "grpc_compatible",
+    }:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.compatibility_unsupported",
+                f"不支持的 Triple compatibility: {call.compatibility}",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if call.serialization and call.serialization.lower() in {
+        "protobuf",
+        "proto",
+    } and not call.descriptor_source:
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.descriptor_missing",
+                "Triple/gRPC-compatible 调用必须提供 descriptor_source",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if call.grpc_path and (
+        not call.grpc_path.startswith("/")
+        or call.grpc_path.count("/") != 2
+    ):
+        result.errors.append(
+            _issue(
+                "error",
+                "dubbo.grpc_path_invalid",
+                f"grpc_path 必须形如 /package.Service/Method: {call.grpc_path}",
                 case_key=case_key,
                 endpoint=endpoint,
                 path=path,

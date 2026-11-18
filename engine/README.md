@@ -46,7 +46,7 @@ Thrift 不考虑。C2 只感知被测仓库的**提供方**端点（HTTP 客户�
 默认 primary 全量 + alias 契约冒烟。`unsupported` 端点显式列出，不静默降级；调用 SUT 不使用
 Java agent；v4.3 起 Mock 覆盖 SUT → HTTP 与 Dubbo 2.7+ 下游（Dubbo 走 agent 注入消费端
 Filter，定位为低侵入；v4.21 首版已落地 `-javaagent` 形态，SUT → gRPC 下游 v4.3 仍
-`mock="unsupported"`，v4.4 决策为 gripmock 假服务器 + target 重定向，尚未实现）。v4.6 起删除 Feign 特殊支持：HTTP 客户端（含 Feign）
+`mock="unsupported"`，v4.4 起使用 gripmock 假服务器 + target 重定向）。v4.6 起删除 Feign 特殊支持：HTTP 客户端（含 Feign）
 一律按普通出站调用处理，通用机制覆盖不了的下游直接标 `mock="unsupported"` / `unidentified`。
 v4.6.1 起 HTTP Mock 首版只做明文 HTTP，HTTPS 标 `tls_not_supported`；v4.15 起仅在
 Java agent 激活且该 dep 选 `agent_rewrite` 时放开 HTTPS（改写为明文 Mock 端点），
@@ -759,9 +759,9 @@ Dubbo 有效，无法覆盖 HTTP）。矩阵外的 Dubbo 版本不做运行期�
 - RPC 失败（`TIMEOUT`/`SERIALIZATION`/`NETWORK`/`NO_PROVIDER`/
   `RPC_EXCEPTION`）作为 `DubboCallResult` 返回；进程崩溃、协议错才抛
   `DubboSidecarError`；
-- 首版只支持直连 `url` + Hessian2；传 `registry` 返回
-  `registry_not_supported`；Triple 协议不支持，需要把 provider 改成
-  `dubbo` + `hessian2`；
+- `dubbo://` 直连走 sidecar + Hessian2；传 `registry` 返回
+  `registry_not_supported`。Triple 不走 sidecar：`tri://` + protobuf
+  descriptor + unary 由 Python gRPC-compatible adapter 直接调用；
 - jar 解析顺序：`ASTSIGHT_DUBBO_SIDECAR_JAR` → 已安装的
   `astsight-dubbo-sidecar` wheel（校验 manifest/版本/协议/sha256/size）→
   仓库 `java/astsight-sidecar-dubbo/target/astsight-dubbo-sidecar.jar`；
@@ -789,10 +789,24 @@ Dubbo 入口用例已打通模板 → codegen → 执行：
 - A4 提示词已收 Dubbo 画像与 `parameter_schemas`，可直接生成
   `transport=dubbo` 草案；草案只填 `dubbo.arguments`，其余由画像回填。
 
+Dubbo Triple unary：
+
+- 只支持 `tri://host:port` 或 `grpc://host:port`、Protobuf、仓库 `.proto` /
+  `.protoset`、单请求单响应；不接 streaming、reflection、注册中心；
+- 画像从 Dubbo `tri` 配置与 proto service/method 生成 `grpc_path`、
+  `descriptor_source`、`serialization=protobuf` 和
+  `compatibility=grpc_compatible`；
+- `dubbo_call` 按 URL scheme 自动选择 sidecar 或 Triple adapter；请求/响应走
+  动态 protobuf message，错误映射为统一 `rpc_status`；
+- 自动 codegen 会把相对 descriptor 固化到项目根，避免生成目录 cwd 不同导致
+  找不到 proto。
+
 ```bash
 # 真 provider 端到端（codegen + run --mode full）
 ASTSIGHT_DUBBO_SIDECAR_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \
   python -m pytest tests/integration/test_dubbo_case_e2e.py -q
+ASTSIGHT_DUBBO_TRIPLE_E2E=1 JAVA_HOME=<JDK> PYTHONPATH=. \
+  python -m pytest tests/integration/test_dubbo_triple_e2e.py -q
 ```
 
 Dubbo 多步骤与诊断：

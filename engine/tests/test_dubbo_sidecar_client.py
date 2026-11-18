@@ -70,6 +70,24 @@ def test_rpc_failure_is_returned_not_raised() -> None:
     assert result.message == "boom"
 
 
+def test_protobuf_on_dubbo_scheme_is_rejected_without_starting_sidecar() -> None:
+    sidecar = DubboSidecar(command=[sys.executable, "-c", "raise SystemExit(9)"])
+
+    result = sidecar.invoke(
+        INTERFACE,
+        "create",
+        ["java.lang.String"],
+        ["O-1"],
+        url="dubbo://127.0.0.1:20880",
+        serialization="protobuf",
+        descriptor_source="inventory.proto",
+    )
+
+    assert result.ok is False
+    assert result.rpc_status == "UNSUPPORTED_PROTOCOL"
+    assert result.error == "dubbo_protocol_unsupported"
+
+
 def test_raise_for_error_turns_result_into_exception() -> None:
     with _client() as sidecar:
         result = sidecar.invoke(

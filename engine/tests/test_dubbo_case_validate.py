@@ -157,6 +157,42 @@ def test_dubbo_draft_is_hydrated_and_resolved(tmp_path: Path) -> None:
     assert case.dubbo.parameter_types == ["java.lang.String"]
 
 
+def test_triple_runtime_fields_are_hydrated_from_profile(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    profile = _dubbo_profile(context)
+    profile.update(
+        {
+            "protocol": "tri",
+            "serialization": "protobuf",
+            "descriptor_source": "src/main/proto/inventory.proto",
+            "grpc_path": "/com.acme.OrderService/byId",
+            "compatibility": "grpc_compatible",
+        }
+    )
+    draft = _draft(
+        context,
+        profile,
+        dubbo=DubboCall(
+            interface="com.acme.OrderService",
+            method="byId",
+            parameter_types=["java.lang.String"],
+            arguments=["O-1"],
+            group="order",
+            version="1.0.0",
+        ),
+    )
+
+    result = validate_draft(draft, context, project=root)
+
+    assert result.errors == []
+    call = result.resolved[0].case.dubbo
+    assert call is not None
+    assert call.serialization == "protobuf"
+    assert call.descriptor_source == "src/main/proto/inventory.proto"
+    assert call.grpc_path == "/com.acme.OrderService/byId"
+    assert call.compatibility == "grpc_compatible"
+
+
 def test_interface_mismatch_is_rejected(tmp_path: Path) -> None:
     root, context = _context(tmp_path)
     draft = _draft(

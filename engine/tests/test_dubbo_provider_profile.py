@@ -239,6 +239,60 @@ public class ExternalServiceImpl implements ExternalService {
     assert result.unsupported[0]["reason"] == "dubbo_interface_in_jar"
 
 
+def test_triple_provider_uses_proto_contract_when_interface_is_generated(
+    tmp_path: Path,
+) -> None:
+    proto = tmp_path / "src" / "main" / "proto" / "inventory.proto"
+    proto.parent.mkdir(parents=True)
+    proto.write_text(
+        """
+        syntax = "proto3";
+        package com.acme.triple;
+        message ReserveRequest { string sku = 1; }
+        message ReserveResponse {
+          bool available = 1;
+          string reservation_id = 2;
+        }
+        service InventoryService {
+          rpc Reserve(ReserveRequest) returns (ReserveResponse);
+        }
+        """,
+        encoding="utf-8",
+    )
+    _write(
+        tmp_path,
+        "InventoryServiceImpl.java",
+        """package com.acme.triple;
+
+import org.apache.dubbo.config.annotation.DubboService;
+
+@DubboService(
+    interfaceClass = InventoryService.class,
+    url = "tri://127.0.0.1:50053",
+    group = "inventory",
+    version = "1.0.0"
+)
+public class InventoryServiceImpl
+        extends DubboInventoryServiceTriple.InventoryServiceImplBase {
+}
+""",
+    )
+
+    result = _scan(tmp_path)
+
+    assert len(result.providers) == 1
+    provider = result.providers[0]
+    assert provider["service"] == "com.acme.triple.InventoryService"
+    assert provider["method"] == "Reserve"
+    assert provider["protocol"] == "tri"
+    assert provider["serialization"] == "protobuf"
+    assert provider["compatibility"] == "grpc_compatible"
+    assert provider["grpc_path"] == (
+        "/com.acme.triple.InventoryService/Reserve"
+    )
+    assert provider["descriptor_source"] == "src/main/proto/inventory.proto"
+
+
 def test_xml_service_emits_profiles(tmp_path: Path) -> None:
     root = _project(tmp_path)
     (root / "dubbo-provider.xml").write_text(
