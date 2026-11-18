@@ -2035,6 +2035,7 @@ MockRuntimeAdapter
 - `GrpcMockLocator.property` 可声明 SUT 的 gRPC target 环境变量键；`injection_env` 将 `grpc_server.injected` 写入该变量。未声明 property 时只保留 endpoint 文档并告警 `grpc_target_not_overridable`；
 - 首版自动进程模式要求本次 run 使用单一 descriptor source，多个不同 source 报 `mock_descriptor_ambiguous`；
 - SUT 启动器已能通过环境变量应用可覆盖 target；真实 gripmock v3.23.8 Windows amd64 binary 已跑通 success / `UNAVAILABLE` / history / cleanup e2e，验证空 matcher 必须写 `input.equals={}`；
+- `run --mock-plan` 与 `agent run` 均支持 `--gripmock-path`，正式 CLI 入口可自动启动 gRPC Mock plan；
 - 更多 gRPC 客户端配置形态、Linux binary 分发和 semantic 自动采样仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）

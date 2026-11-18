@@ -524,6 +524,9 @@ token、namespace 和 `mock_calls.jsonl` 路径传给 pytest；运行结束（�
 通过 `GrpcMockLocator.property` 指定的环境变量注入 SUT；未提供 property 时
 显式报 `grpc_target_not_overridable`。
 
+CLI 的 `run --mock-plan` 和 `agent run` 均支持 `--gripmock-path`。前者可直接运行
+手工 gRPC Plan；后者在计划含 gRPC dep 时使用该二进制启动 Mock。
+
 SESSION 生命周期已统一：create 安装 stubs，drain 拉取 history 并写入
 `mock_calls.jsonl`，delete 清理 stubs。真实 binary e2e：
 

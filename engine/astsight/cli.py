@@ -181,6 +181,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Mock 计划 JSON；启动内嵌 Mock 服务并自动注入 admin 地址/token",
     )
     run_parser.add_argument(
+        "--gripmock-path",
+        default=None,
+        help="gRPC Mock Plan 使用的 gripmock 可执行文件",
+    )
+    run_parser.add_argument(
         "--mock-admin-url", default=None,
         help="已启动的 HTTP Mock 管理地址；提供后用用例级会话执行",
     )
@@ -651,6 +656,11 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_run.add_argument("--min-pass-rate", type=float, default=0.95)
     agent_run.add_argument("--mock-host", default="127.0.0.1")
     agent_run.add_argument("--mock-port", type=int, default=0)
+    agent_run.add_argument(
+        "--gripmock-path",
+        default=None,
+        help="gRPC 下游 Mock 使用的 gripmock 可执行文件",
+    )
     agent_run.add_argument("--json", action="store_true")
     return parser
 
@@ -697,6 +707,7 @@ def _run_command(args) -> int:
         ruleset=args.ruleset,
         allow_stale_rules=args.allow_stale_rules,
         mock_plan=args.mock_plan,
+        gripmock_path=args.gripmock_path,
         mock_admin_url=args.mock_admin_url,
         mock_token=args.mock_token,
         mock_namespace=args.mock_namespace,
@@ -1961,6 +1972,7 @@ def _agent_command(args) -> int:
             min_pass_rate=args.min_pass_rate,
             mock_host=args.mock_host,
             mock_port=args.mock_port,
+            gripmock_path=args.gripmock_path,
             rule_base=args.rule_base,
             data_ddl=list(args.ddl),
             data_seed=args.seed,

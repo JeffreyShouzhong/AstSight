@@ -96,6 +96,7 @@ class RunConfig:
     ruleset: str | None = None
     allow_stale_rules: bool = False
     mock_plan: str | None = None
+    gripmock_path: str | None = None
     mock_admin_url: str | None = None
     mock_token: str | None = None
     mock_namespace: str | None = None
@@ -943,6 +944,7 @@ def _execute_and_report(
         runtime = start_mock_plan(
             plan_path,
             history_path=run_dir.path / "mock_calls.jsonl",
+            gripmock_path=config.gripmock_path,
         )
     except MockPlanError as exc:
         raise MockPlanError(exc.code, f"{exc.detail}（plan: {plan_path}）") from exc

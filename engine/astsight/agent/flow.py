@@ -123,6 +123,7 @@ class FlowConfig:
     min_pass_rate: float = 0.95
     mock_host: str = "127.0.0.1"
     mock_port: int = 0
+    gripmock_path: str | None = None
     rule_base: str | None = None
     data_ddl: list[str] = field(default_factory=list)
     data_seed: str | None = None
@@ -953,7 +954,9 @@ def run_flow(
             save_json_atomic(plan_path, plan.model_dump(mode="json"))
             try:
                 runtime = start_mock_plan(
-                    plan_path, history_path=run_dir.path / "mock_calls.jsonl"
+                    plan_path,
+                    history_path=run_dir.path / "mock_calls.jsonl",
+                    gripmock_path=config.gripmock_path,
                 )
             except MockPlanError as exc:
                 raise AgentError(
