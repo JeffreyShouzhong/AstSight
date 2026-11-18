@@ -97,6 +97,26 @@ def _rule_view(ruleset: RuleSet) -> list[dict[str, Any]]:
     return items[:MAX_RULES_IN_PROMPT]
 
 
+_MAX_BRANCH_BODY_CHARS = 4_000
+
+
+def _branch_body(branch: Any) -> Any:
+    if branch.reply is not None:
+        return branch.reply.body
+    return branch.stub.body
+
+
+def _body_view(body: Any) -> Any:
+    """限制进入提示词的响应体大小，避免一个巨大桩撑爆上下文。"""
+    try:
+        text = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    if len(text) > _MAX_BRANCH_BODY_CHARS:
+        return {"truncated": True, "preview": text[:_MAX_BRANCH_BODY_CHARS]}
+    return body
+
+
 def _semantic_view(semantic: MockSemantic | None) -> list[dict[str, Any]]:
     if semantic is None:
         return []
@@ -114,6 +134,7 @@ def _semantic_view(semantic: MockSemantic | None) -> list[dict[str, Any]]:
                     "semantics": branch.semantics,
                     "source_kind": branch.source.kind,
                     "rule_keys": list(branch.source.rule_keys),
+                    "body": _body_view(_branch_body(branch)),
                 }
                 for branch in dep.branches
             ],
@@ -282,6 +303,27 @@ def _auto_bind_single_dependency(
     return warnings
 
 
+def _auto_bind_mock_replies(
+    draft: CaseDraft, semantic: MockSemantic | None
+) -> list[str]:
+    """模型给了 mock_replies 却漏了 binding 时补 success，并留下告警。"""
+    warnings: list[str] = []
+    if semantic is None:
+        return warnings
+    branches = semantic.branch_index()
+    for case in draft.cases:
+        for dep_id in case.mock_replies:
+            if dep_id in case.mock_bindings:
+                continue
+            if (dep_id, "success") not in branches:
+                continue
+            case.mock_bindings[dep_id] = "success"
+            warnings.append(
+                f"default_success_binding:{case.case_key}:{dep_id}"
+            )
+    return warnings
+
+
 def generate_case_design(
     context: dict[str, Any],
     *,
@@ -344,6 +386,7 @@ def generate_case_design(
         )
 
     warnings = _auto_bind_single_dependency(draft, mock_semantic, context)
+    warnings.extend(_auto_bind_mock_replies(draft, mock_semantic))
     validation = validate_draft(
         draft,
         context,

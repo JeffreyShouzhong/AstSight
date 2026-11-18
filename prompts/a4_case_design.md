@@ -34,7 +34,9 @@
     / `result_schema` / `group` / `version`。
   - 两种都带 `coverage_role` 与 `downstream_deps`。
 - `ruleset.rules[]`：A1 业务规则与 CR 契约规则；只可引用其中的 `rule_key`。
-- `mock_semantics[]`：每个 `dep_id` 的可用 `branches[]`；可能为 `null`。
+- `mock_semantics[]`：每个 `dep_id` 的可用 `branches[]`，每个分支带
+  `body`（该分支实际返回的响应体，可能被截断）、`outcome` 和 `semantics`；
+  可能为 `null`。
 - `data_catalog`：可用表、列、枚举和 `states[].state_key`；可能为 `null`。
 - `changed_apis[]`：delta 模式的变更来源。
 - `documents[]`：需求原文，用于 `requirement_refs`。
@@ -116,7 +118,9 @@
 | `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op。HTTP：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`，`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`。Dubbo：`rpc_status` 用 `eq/ne/in`，`result_present` 用 `exists/absent`，`result_field` 用 `exists/eq/ne/in/gte/lte/contains`，`error_code` 用 `eq/ne/in/contains`，`exception_type` 用 `eq/ne/contains`，`error_message` 用 `eq/contains`。HTTP 与 Dubbo 断言不能混用；Dubbo 用例至少 1 条 `rpc_status`。值必须来自规则原文或契约。关系式只允许 `context.assert_expression_ops` 中的受限运算 |
 | `steps` | HTTP/Dubbo 多请求用例至少 2 步。每步 `{name, endpoint, asserts, ...}`；Dubbo 步骤用 `dubbo.arguments`，可用 `{"$ref": "<step>.<field>"}` 引用更早步骤的返回值字段。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中；每个 Dubbo 步骤至少一条 `rpc_status` |
 | `assert_strength` | 按断言内容填写：`L1` 状态码/字段存在/结构；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨两个及以上步骤的不变量。框架会按内容重新推导，不一致时产生 `assert_strength.mismatch` warning 并以推导值为准 |
+| `data` | 用例级业务实体，`{实体名: {字段: 值}}`，实体名匹配 `[a-z][a-z0-9_]{0,63}`。请求、断言和 `mock_replies` 用 `{"$data": "实体.字段"}` 引用；不要从环境里“找一条真实数据”，ID 自己造 |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
+| `mock_replies` | `{dep_id: 部分响应体}`；在该 dep 的 default 分支响应体上递归合并。只能用 `mock_semantics[].branches[].body` 里已有的字段；必须同时有该 dep 的 `mock_bindings`；仅 HTTP/Dubbo 下游 |
 | `mock_rules` | 仅 HTTP：`[{dep_id, branch, match}]`。`match` 支持 `query` / `headers` / `body` 子集匹配；规则优先于 sequence，同一请求命中多条会在运行期失败关闭。只有需求明确要求按参数返回不同结果时才填 |
 | `mock_sequences` | 仅 HTTP：`{dep_id: [branch, ...]}`。规则未命中时按调用次数取分支，序列耗尽后回退 `mock_bindings` 的 default branch；只有需求明确描述连续调用差异时使用 |
 | `path_params` / `query` / `headers` / `body` | 仅 HTTP。字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
@@ -169,6 +173,46 @@ Dubbo 多步骤用 `steps`，后续步骤参数可用 `{"$ref": "first.orderId"}
 否则导入会产生 `assertion.db_catalog_missing` warning 或表/列不存在错误。
 需求明确说明写入是异步/最终一致时，可给 `db_row` 增加 `wait_ms`（0–60000）轮询落库，
 例如 `"wait_ms": 2000`；没有异步依据时保持 0，避免把真实缺失去等成超时。
+
+### 业务实体与下游 Mock（`data` / `mock_replies`）
+
+规则需要“一个手机商品”“一个已支付订单”这类业务实体时，**不要从环境里找真实
+ID**。用例自己造实体，请求和下游 Mock 引用同一份数据：
+
+```json
+{
+  "case_key": "recommend_phone_category",
+  "endpoint": "GET /recommendations",
+  "category": "business",
+  "data": {
+    "product": {"id": "P-1001", "category": "phone", "name": "Mock 手机"}
+  },
+  "query": {"product_id": {"$data": "product.id"}},
+  "mock_bindings": {"http:svc:catalog GET /products/{}": "success"},
+  "mock_replies": {
+    "http:svc:catalog GET /products/{}": {
+      "id": {"$data": "product.id"},
+      "category": {"$data": "product.category"}
+    }
+  },
+  "asserts": [
+    {"kind": "status_code", "op": "eq", "expect": 200},
+    {"kind": "body_field", "target": "items.0.category", "op": "eq", "expect": "phone"}
+  ]
+}
+```
+
+规则：
+
+- `data` 只放该用例真正需要的实体字段；ID 用稳定、可读的合成值（如 `P-1001`）。
+- `$data` 只支持对象形式 `{"$data": "实体.字段"}`，可用在 `path_params`、`query`、
+  `body`、Dubbo `arguments`/`attachments`、断言 `expect`/`where` 和 `mock_replies`；
+  `headers` 不支持。
+- `mock_replies` 只能覆盖 `mock_semantics[].branches[].body` 中已经存在的字段，
+  不要编造下游响应字段；修改的是“这个用例里该实体长什么样”，不是改下游契约。
+- 需要下游失败/超时时，选对应分支并用 `mock_replies` 只补该分支需要的实体字段。
+- 下游是 gRPC 时不要写 `mock_replies`。
+- 实体没被任何请求、断言或 Mock 引用会被告警；引用不存在的字段会阻断导入。
 
 ### 多请求用例（`steps`）
 
@@ -267,6 +311,9 @@ Dubbo 多步骤用 `steps`，后续步骤参数可用 `{"$ref": "first.orderId"}
 6. **下游分支**：相关 `dep_id` 在 `mock_semantics` 有分支时，成功/失败分支各至少
    一条；断言主流程是否受影响（例如短信网关失败不阻断注册）。`downstream_deps`
    为空但需求明确提到下游时，写入 `uncovered_requirements`，不要编造 `dep_id`。
+7. **业务实体一致性**：规则依赖实体的具体属性（品类、状态、库存）时，用 `data`
+   声明实体并让请求与下游 Mock 引用同一份数据；不要写“先查列表拿真实 ID”的用例，
+   也不要把实体 ID 在请求和 Mock 里各写一遍。
 7. **契约 CR**：缺 Content-Type、非法 JSON、未知/多余字段、缺 required header/path
    param、成功响应结构、错误响应结构；只引用 CR 规则给出的期望，不猜错误码。
 
@@ -306,4 +353,6 @@ Dubbo 多步骤用 `steps`，后续步骤参数可用 `{"$ref": "first.orderId"}
    不要生成无法执行的用例。单请求用例只调用一次 `endpoint`；连续请求规则必须用
    `steps`，不要把“第二次请求返回 429”“第三次请求要求验证码”写成单请求断言。
    该 section 下未覆盖的 A/B 级业务规则必须写进 `rule_keys`；不允许静默丢弃规则。
-6. 只输出 JSON object。
+6. 测试数据由用例构造：需要某类实体时写 `data` 并让下游 Mock 返回它，
+   不要假定环境里存在某条真实记录，也不要用真实业务 ID 碰运气。
+7. 只输出 JSON object。

@@ -35,6 +35,7 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
+| A4 自动生成实体与 Mock | ✅ 2026-11-18 | A4 提示词要求按业务实体建模：规则依赖实体属性时生成 `data`，请求/断言/`mock_replies` 引用同一实体；`mock_semantics` 分支实际响应体进入提示词；漏写 binding 自动补 `success` 并告警；补充未知字段给 `mock.reply_field_unknown` 告警；新增 3 条测试，全量 652 passed / 60 skipped |
 | 用例业务实体与 Mock 联动 | ✅ 2026-11-18 | `TestCase`/`DraftCase` 新增 `data` 与 `mock_replies`；请求、Dubbo 参数、断言和下游 Mock 统一引用 `{"$data": "实体.字段"}`；会话 binding 携带 `reply`，HTTP/Dubbo 分支 body 递归合并；校验未知引用、无绑定补充与 gRPC 拒绝；codegen 生成前替换为字面量；新增 10 条测试，全量 649 passed / 60 skipped；A4 自动生成实体待做 |
 | Apache Online Boutique 多服务试点 | ✅ 2026-11-18 | 检出广告/购物车/商品目录三服务，目标映射 `tri://127.0.0.1:20880/20881/20886`；画像与来源校验通过，生成 6 条用例、5 通过；`getProduct` 因采样商品 ID 不存在返回空值，属 DTO/种子数据边界而非目标解析问题；修复 `implements Serializable` 被误判为多接口的画像缺陷 |
 | Dubbo Triple unary | ✅ 2026-11-18 | `tri://` Protobuf descriptor 走 Python gRPC-compatible；Java interface 走 Dubbo 3.2.19 sidecar；真实 `online_bontique_demo` full run 1/1 |

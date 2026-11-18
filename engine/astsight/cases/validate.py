@@ -2262,6 +2262,12 @@ def _dep_contracts(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return contracts
 
 
+def _semantic_branch_body(branch: Any) -> Any:
+    if getattr(branch, "reply", None) is not None:
+        return branch.reply.body
+    return branch.stub.body
+
+
 def _stub_object(body: Any) -> dict[str, Any] | None:
     if isinstance(body, dict):
         content = body.get("content")
@@ -2382,7 +2388,7 @@ def _check_mock_semantics(
                     path=path,
                 )
             )
-    for dep_id in draft_case.mock_replies:
+    for dep_id, reply in draft_case.mock_replies.items():
         dep = deps.get(dep_id)
         if dep is not None and dep.transport not in (
             Transport.HTTP,
@@ -2398,6 +2404,30 @@ def _check_mock_semantics(
                     path=path,
                 )
             )
+        branch_name = draft_case.mock_bindings.get(dep_id)
+        spec = next(
+            (
+                item
+                for item in (dep.branches if dep is not None else [])
+                if item.branch == branch_name
+            ),
+            None,
+        )
+        body = _semantic_branch_body(spec) if spec is not None else None
+        if isinstance(body, dict) and body and isinstance(reply, dict):
+            unknown = sorted(set(reply) - set(body))
+            if unknown:
+                result.warnings.append(
+                    _issue(
+                        "warning",
+                        "mock.reply_field_unknown",
+                        f"{dep_id!r} 的 mock_replies 含分支响应体没有的字段: "
+                        f"{', '.join(unknown)}；请确认不是造数越界",
+                        case_key=case_key,
+                        endpoint=endpoint,
+                        path=path,
+                    )
+                )
 
 
 def _check_requirement_refs(

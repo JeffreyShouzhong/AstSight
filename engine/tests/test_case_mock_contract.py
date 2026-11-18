@@ -4,6 +4,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from astsight.agent.case_design import (
+    _prompt_input,
+    generate_case_design,
+    load_case_design_prompt,
+)
 from astsight.cases.context import build_context
 from astsight.cases.draft import CaseDraft
 from astsight.cases.validate import validate_draft
@@ -17,6 +22,10 @@ from contracts import (
     MockRequestMatch,
     MockStub,
     MockStrategy,
+    Rule,
+    RuleAuthority,
+    RuleSet,
+    RuleSource,
     Transport,
 )
 
@@ -331,3 +340,119 @@ def test_mock_reply_rejects_grpc_downstream(tmp_path: Path) -> None:
     )
     codes = {item.code for item in result.errors}
     assert "mock.reply_transport_unsupported" in codes
+
+
+class _ScriptedLLM:
+    def __init__(self, payloads: list[dict]):
+        self.payloads = list(payloads)
+
+    def complete_json(self, *, system: str, user: str):
+        return self.payloads.pop(0)
+
+
+def _ruleset() -> RuleSet:
+    return RuleSet(
+        ruleset_id="rules-a4-data",
+        rules=[
+            Rule(
+                rule_key="RK-a4-data",
+                rule_id="BR-01",
+                text="创建订单时 customer_id 指向一个手机商品",
+                authority=RuleAuthority.B,
+                source=RuleSource(
+                    doc="docs/api.md",
+                    section="订单服务 > POST /orders",
+                    quote="customer_id",
+                ),
+            )
+        ],
+    )
+
+
+def _a4_payload(context: dict, *, binding: dict[str, str]) -> dict:
+    payload = _draft(context).model_dump(mode="json")
+    case = payload["cases"][0]
+    case.update(
+        {
+            "rule_refs": [
+                {"rule_key": "RK-a4-data", "rule_id": "BR-01"}
+            ],
+            "data": {
+                "product": {"id": "P-1001", "name": "Mock 手机"}
+            },
+            "body": {"customer_id": {"$data": "product.id"}},
+            "mock_bindings": binding,
+            "mock_replies": {
+                DEP_ID: {
+                    "id": {"$data": "product.id"},
+                    "name": {"$data": "product.name"},
+                }
+            },
+        }
+    )
+    return payload
+
+
+def test_a4_prompt_exposes_mock_branch_body_and_entity_fields(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context, semantic = _with_contract(
+        context, types=[ITEM_TYPE], body={"id": 1, "name": "box"}
+    )
+    prompt_input = _prompt_input(
+        context,
+        ruleset=_ruleset(),
+        mode="full",
+        changed_apis=None,
+        mock_semantic=semantic,
+        data_catalog=None,
+    )
+    branch = prompt_input["mock_semantics"][0]["branches"][0]
+    assert branch["body"] == {"id": 1, "name": "box"}
+    case_properties = prompt_input["schema"]["$defs"]["DraftCase"]["properties"]
+    assert "data" in case_properties
+    assert "mock_replies" in case_properties
+    prompt = load_case_design_prompt()
+    assert "mock_replies" in prompt
+    assert "不要从环境里找真实" in prompt
+
+
+def test_a4_generates_entity_and_mock_reply(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context, semantic = _with_contract(
+        context, types=[ITEM_TYPE], body={"id": 1, "name": "box"}
+    )
+    result = generate_case_design(
+        context,
+        ruleset=_ruleset(),
+        llm=_ScriptedLLM([_a4_payload(context, binding={})]),
+        project=tmp_path,
+        mock_semantic=semantic,
+    )
+    case = result.draft.cases[0]
+    assert case.data["product"]["id"] == "P-1001"
+    assert case.mock_replies[DEP_ID]["name"] == {"$data": "product.name"}
+    assert case.mock_bindings == {DEP_ID: "success"}
+    assert any(
+        warning.startswith("default_success_binding:")
+        for warning in result.warnings
+    )
+
+
+def test_mock_reply_unknown_field_warns(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context, semantic = _with_contract(
+        context, types=[ITEM_TYPE], body={"id": 1, "name": "box"}
+    )
+    draft = _with_case_data(
+        _draft(context),
+        mock_replies={DEP_ID: {"id": 1, "ghost": "invented"}},
+    )
+    result = validate_draft(
+        draft, context, project=tmp_path, mock_semantic=semantic
+    )
+    warnings = [
+        item for item in result.warnings
+        if item.code == "mock.reply_field_unknown"
+    ]
+    assert len(warnings) == 1
+    assert "ghost" in warnings[0].message

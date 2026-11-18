@@ -1367,7 +1367,9 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
   `data.nested_ref`；声明了实体但没人引用只给 `data.unused` 告警。
 - 生成的 pytest 里 `$data` 已换成字面量，便于阅读和排错。
 - `data` 和 `mock_replies` 进入用例指纹，改实体等于改用例，需要重新审核。
-- A4 自动生成实体与 Mock 补充还没接，当前由草案/人工填写。
+- A4 会按业务实体生成 `data` 和 `mock_replies`：提示词拿到下游分支的实际响应体，
+  模型漏写 `mock_bindings` 时框架自动补 `success` 并告警；补充了分支响应体里
+  不存在的字段会给 `mock.reply_field_unknown` 告警，方便审核时重点看。
 
 ---
 
