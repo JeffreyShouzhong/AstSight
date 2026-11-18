@@ -302,7 +302,7 @@ def _grpc_stub(
     return {
         "service": service,
         "method": method,
-        "input": {},
+        "input": {"equals": {}},
         "output": output,
     }
 

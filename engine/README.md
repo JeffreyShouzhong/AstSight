@@ -513,6 +513,29 @@ token、namespace 和 `mock_calls.jsonl` 路径传给 pytest；运行结束（�
 - `run --mock-plan` 不启动 SUT，也不改写 SUT 配置，只负责“起 Mock + 产出注入事实”；
   需要一条命令完成注入与启动时使用 `agent run`（`astsight/agent/sut.py`）。
 
+### gRPC 下游 Mock（P0/P1 已打通）
+
+统一 `MockPlan.deps[]` 支持 `transport=grpc`。每个 gRPC branch 必须提供
+`GrpcMockReply`；`descriptor_source` 可以是 `.proto` 或 `.protoset`。加载计划时
+会编译/校验 descriptor，拒绝 streaming，并按响应 message 严格校验 body。
+
+`start_mock_plan(..., gripmock_path=...)` 会自动分配 gRPC/admin/gateway 端口，
+启动 gripmock 子进程，并把三个 endpoint 写入 manifest。`grpc_server` injection
+通过 `GrpcMockLocator.property` 指定的环境变量注入 SUT；未提供 property 时
+显式报 `grpc_target_not_overridable`。
+
+SESSION 生命周期已统一：create 安装 stubs，drain 拉取 history 并写入
+`mock_calls.jsonl`，delete 清理 stubs。真实 binary e2e：
+
+```bash
+export GRIPMOCK_BIN=/path/to/gripmock
+cd engine
+python -m pytest tests/integration/test_grpc_gripmock_e2e.py -q
+```
+
+当前限制：只接 unary、明文 gRPC、可 env 覆盖的 target；streaming、reflection、
+TLS/mTLS、配置文件/编程式 target 改写仍不支持。
+
 ### Java HTTP agent（OkHttp / Feign / RestTemplate / Apache HttpClient）
 
 agent 从 `GET /_admin/agent/routes` 拉取只读路由表，在出站 HTTP 客户端调用前把
