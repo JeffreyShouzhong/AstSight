@@ -198,6 +198,91 @@ class GrpcDescriptorIndex:
                 f"{grpc_path}: {type(exc).__name__}: {exc}",
             ) from exc
 
+    def sample_message(
+        self,
+        type_name: str,
+        *,
+        depth: int = 4,
+        _seen: set[str] | None = None,
+    ) -> Any:
+        """按 descriptor 生成可解析的 protobuf JSON 默认值。"""
+        if depth <= 0:
+            return {}
+        seen = set(_seen or ())
+        if type_name in seen:
+            return {}
+        seen.add(type_name)
+        try:
+            message_type = self.pool.FindMessageTypeByName(type_name)
+        except KeyError:
+            return {}
+        if type_name == "google.protobuf.Timestamp":
+            return "1970-01-01T00:00:00Z"
+        if type_name == "google.protobuf.Duration":
+            return "0s"
+        if type_name == "google.protobuf.Any":
+            return {}
+        result: dict[str, Any] = {}
+        oneofs: set[str] = set()
+        for field in message_type.fields:
+            if field.containing_oneof is not None:
+                oneof_name = field.containing_oneof.name
+                if oneof_name in oneofs:
+                    continue
+                oneofs.add(oneof_name)
+            if (
+                field.message_type is not None
+                and field.message_type.GetOptions().map_entry
+            ):
+                result[field.json_name] = {}
+                continue
+            if field.is_repeated:
+                result[field.json_name] = []
+                continue
+            result[field.json_name] = self._sample_field(
+                field,
+                depth=depth,
+                seen=seen,
+            )
+        return result
+
+    def _sample_field(
+        self,
+        field,
+        *,
+        depth: int,
+        seen: set[str],
+    ) -> Any:
+        if field.enum_type is not None and field.enum_type.values:
+            return field.enum_type.values[0].name
+        if field.message_type is not None:
+            return self.sample_message(
+                field.message_type.full_name,
+                depth=depth - 1,
+                _seen=seen,
+            )
+        type_name = field.type
+        if type_name == field.TYPE_STRING:
+            return ""
+        if type_name == field.TYPE_BOOL:
+            return False
+        if type_name in (
+            field.TYPE_INT64,
+            field.TYPE_UINT64,
+            field.TYPE_SINT64,
+            field.TYPE_FIXED64,
+            field.TYPE_SFIXED64,
+        ):
+            return "0"
+        if type_name in (
+            field.TYPE_DOUBLE,
+            field.TYPE_FLOAT,
+        ):
+            return 0.0
+        if type_name == field.TYPE_BYTES:
+            return ""
+        return 0
+
 
 __all__ = [
     "GrpcDescriptorError",

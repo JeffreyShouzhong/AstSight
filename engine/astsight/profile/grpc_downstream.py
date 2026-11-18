@@ -57,6 +57,7 @@ class GrpcDownstreamDep:
     request_type: str
     response_type: str
     descriptor_source: str
+    response_schema: Any = None
     target: str | None = None
     target_property: str | None = None
     call_sites: list[GrpcCallSite] = field(default_factory=list)
@@ -77,6 +78,7 @@ class GrpcDownstreamDep:
             "request_type": self.request_type,
             "response_type": self.response_type,
             "descriptor_source": self.descriptor_source,
+            "response_schema": self.response_schema,
             "target": self.target,
             "property": self.target_property,
             "call_sites": [item.as_dict() for item in self.call_sites],
@@ -338,6 +340,7 @@ class GrpcDownstreamScanner:
             descriptors.append((str(path.relative_to(self.root)).replace("\\", "/"), index))
         by_short: dict[str, dict[str, GrpcMethod]] = {}
         descriptor_by_path: dict[tuple[str, str], str] = {}
+        response_samples: dict[str, Any] = {}
         ambiguous: set[str] = set()
         for source, index in descriptors:
             for method in index.unary_methods():
@@ -347,6 +350,9 @@ class GrpcDownstreamScanner:
                     ambiguous.add(short)
                 methods[method.method] = method
                 descriptor_by_path[(method.grpc_path, method.method)] = source
+                response_samples[method.grpc_path] = index.sample_message(
+                    method.response_type
+                )
         for short in sorted(ambiguous):
             by_short.pop(short, None)
             unsupported.append(
@@ -377,6 +383,7 @@ class GrpcDownstreamScanner:
                     request_type=method.request_type,
                     response_type=method.response_type,
                     descriptor_source=source or "",
+                    response_schema=response_samples.get(key),
                 )
                 grouped[key] = dep
             dep.call_sites.append(site)

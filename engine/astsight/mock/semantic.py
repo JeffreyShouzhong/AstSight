@@ -70,7 +70,17 @@ class MockSemanticApplyResult:
 
 def _dep_tokens(dep: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
-    for key in ("service_name", "target", "route_host", "path_key", "config_key"):
+    for key in (
+        "service_name",
+        "service",
+        "grpc_path",
+        "method",
+        "target",
+        "route_host",
+        "path_key",
+        "config_key",
+        "property",
+    ):
         value = str(dep.get(key) or "")
         if not value:
             continue
@@ -187,6 +197,9 @@ def _default_branch(
     transport: Transport = Transport.HTTP,
 ) -> MockBranch:
     body = _contract_body(raw)
+    if body is None and transport is Transport.GRPC and raw is not None:
+        candidate = raw.get("response_schema")
+        body = candidate if isinstance(candidate, (dict, list)) else None
     value = body if body is not None else {}
     reply = None
     if transport is Transport.DUBBO:
@@ -217,6 +230,7 @@ def _rule_branch(rule: Rule, transport: Transport) -> MockBranch:
     if transport is Transport.DUBBO:
         reply = DubboMockReply(body=body)
     elif transport is Transport.GRPC:
+        body = {}
         grpc_status = GrpcStatus.INTERNAL
         if status == 400:
             grpc_status = GrpcStatus.INVALID_ARGUMENT

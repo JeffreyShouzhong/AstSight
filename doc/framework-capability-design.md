@@ -2039,7 +2039,9 @@ MockRuntimeAdapter
 - 真实 Python SUT → gRPC 下游 e2e 已跑通：SUT 从 `INVENTORY_GRPC_ADDR` 读取注入 target，success 返回 protobuf 字段，`UNAVAILABLE` 映射为 SUT 上游错误，两段 session 的 history 均进入统一证据；
 - gRPC downstream 自动画像已支持仓库 `.proto` unary service/method 索引，以及常见 Python `*Stub(channel)` 和 Java `*BlockingStub/FutureStub` 调用；识别 `os.environ`/`os.getenv`/`@Value` target 配置键并生成 `grpc:/service/method` dep；
 - `build_profiles` 将 gRPC deps 附到 profile，`build_plan_from_profiles` 产出统一 `deps[]` + `grpc_server` injection；
-- 更多 gRPC 客户端配置形态、Linux binary 分发和 semantic 自动采样仍属后续阶段。
+- gRPC MockSemantic 默认 success body 从 proto response message descriptor 采样；规则分支按 HTTP 语义错误码映射为 canonical gRPC code（400/404/502/503/504 等），错误分支 body 固定为可解析空消息；
+- gRPC dep 的 service/grpc_path/method/property 参与规则 token 匹配，不再只按 HTTP path 匹配；
+- 更多 gRPC 客户端配置形态、Linux binary 分发和 gRPC plan 的 `agent run` 接线仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 
