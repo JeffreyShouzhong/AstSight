@@ -810,7 +810,12 @@ gRPC 下游 target 配置形态：
   因此 Spring 配置和 `System.getProperty` 两种读取方式都能覆盖；
 - `System.getenv("...")` 按原环境变量名注入；
 - `System.getProperty("...")` 按原属性名生成 `-D`；
-- Python/Node/Go 的 env target 保持原行为；
+- Java `@ConfigurationProperties(prefix="inventory.grpc")` 的字段/getter 会
+  还原为 `inventory.grpc.addr`；
+- Python `settings.inventory_grpc_addr`、dotenv/BaseSettings 属性按
+  `INVENTORY_GRPC_ADDR` 覆盖；
+- Node 生成客户端 `new InventoryServiceClient(...)` 支持 `process.env` 和
+  config 对象别名；Go 生成客户端支持 `os.Getenv`、`viper.GetString` target；
 - `ManagedChannelBuilder.forTarget("literal")` 等硬编码 target 标
   `grpc_target_hardcoded`，不启动不可实现的“假覆盖”；
 - 不直接改写 SUT 的 `application.yml`/properties 文件，使用更高优先级的 JVM

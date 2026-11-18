@@ -203,6 +203,117 @@ def handler():
     assert f"mock_injection_unsupported:{DEP_ID}:grpc_target_hardcoded" in warnings
 
 
+def test_java_configuration_properties_prefix_and_field_are_profiled(
+    tmp_path: Path,
+) -> None:
+    _proto(tmp_path)
+    source = tmp_path / "src" / "OrderClient.java"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        """
+@ConfigurationProperties(prefix = "inventory.grpc")
+class InventoryProperties {
+  private String addr;
+  String getAddr() { return addr; }
+}
+
+class OrderClient {
+  private final InventoryProperties properties;
+  InventoryServiceGrpc.InventoryServiceBlockingStub stub;
+  void run() {
+    String target = properties.getAddr();
+    stub.reserve(null);
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    dep = GrpcDownstreamScanner(tmp_path).scan().deps[0]
+    assert dep["property"] == "INVENTORY_GRPC_ADDR"
+    assert dep["config_key"] == "inventory.grpc.addr"
+    assert dep["config_kind"] == "configuration_properties"
+
+
+def test_python_settings_object_target_is_profiled(tmp_path: Path) -> None:
+    _proto(tmp_path)
+    (tmp_path / "app.py").write_text(
+        """
+import grpc
+from settings import settings
+from inventory_pb2_grpc import InventoryServiceStub
+
+channel = grpc.insecure_channel(settings.inventory_grpc_addr)
+stub = InventoryServiceStub(channel)
+
+def handler():
+    return stub.Reserve({})
+""",
+        encoding="utf-8",
+    )
+
+    dep = GrpcDownstreamScanner(tmp_path).scan().deps[0]
+    assert dep["property"] == "INVENTORY_GRPC_ADDR"
+    assert dep["config_kind"] == "env"
+    assert dep["target"] is None
+
+
+def test_node_generated_client_and_config_alias_are_profiled(
+    tmp_path: Path,
+) -> None:
+    _proto(tmp_path)
+    (tmp_path / "config.js").write_text(
+        """
+export const config = {
+  inventoryGrpcAddr: process.env.NODE_INVENTORY_GRPC_ADDR,
+};
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "client.ts").write_text(
+        """
+const client = new InventoryServiceClient(config.inventoryGrpcAddr, creds);
+export function reserve() {
+  return client.reserve({ sku: "S" });
+}
+""",
+        encoding="utf-8",
+    )
+
+    result = GrpcDownstreamScanner(tmp_path).scan()
+    dep = next(item for item in result.deps if item["languages"] == ["node"])
+    assert dep["property"] == "NODE_INVENTORY_GRPC_ADDR"
+    assert dep["config_kind"] == "env"
+
+
+def test_go_generated_client_and_viper_target_are_profiled(
+    tmp_path: Path,
+) -> None:
+    _proto(tmp_path)
+    (tmp_path / "client.go").write_text(
+        """
+package main
+
+import "google.golang.org/grpc"
+
+func reserve() {
+    conn, err := grpc.NewClient(
+        viper.GetString("inventory.grpc.addr"),
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    )
+    client := NewInventoryServiceClient(conn)
+    client.Reserve(context.Background(), &ReserveRequest{Sku: "S"})
+}
+""",
+        encoding="utf-8",
+    )
+
+    result = GrpcDownstreamScanner(tmp_path).scan()
+    dep = next(item for item in result.deps if item["languages"] == ["go"])
+    assert dep["property"] == "INVENTORY_GRPC_ADDR"
+    assert dep["config_kind"] == "env"
+
+
 def test_agent_mock_plan_contains_grpc_reply_and_injection(tmp_path: Path) -> None:
     _proto(tmp_path)
     (tmp_path / "app.py").write_text(

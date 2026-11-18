@@ -139,6 +139,12 @@ def _expr_value(node: ast.AST) -> tuple[str | None, str | None]:
             key, _ = _expr_value(node.slice)
             if key:
                 return None, key
+        key, _ = _expr_value(node.slice)
+        if key and _looks_like_target_key(key):
+            return None, _env_key(key)
+    if isinstance(node, ast.Attribute):
+        if _looks_like_target_key(node.attr):
+            return None, _env_key(node.attr)
     if isinstance(node, ast.Call):
         name = _attr_name(node.func)
         if name in {"os.environ.get", "os.getenv", "environ.get"}:
@@ -151,6 +157,21 @@ def _expr_value(node: ast.AST) -> tuple[str | None, str | None]:
             if key:
                 return default, key
     return None, None
+
+
+def _looks_like_target_key(value: str) -> bool:
+    text = str(value or "").strip()
+    upper = text.upper()
+    return bool(
+        text
+        and (
+            upper == text
+            or any(
+                token in upper
+                for token in ("GRPC", "ADDR", "ADDRESS", "TARGET", "HOST")
+            )
+        )
+    )
 
 
 def _attr_name(node: ast.AST) -> str:
@@ -287,14 +308,32 @@ def _java_callsites(
     getprop_re = re.compile(
         r"System\s*\.\s*getProperty\s*\(\s*\"([^\"]+)\""
     )
+    config_properties_re = re.compile(
+        r"@ConfigurationProperties\s*\(\s*(?:prefix\s*=\s*)?"
+        r"[\"']([^\"']+)[\"']"
+    )
+    config_field_re = re.compile(
+        r"\b(?:String|URI|URL|int|Integer|long|Long|boolean|Boolean)"
+        r"\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:[;=])"
+    )
     target_re = re.compile(
         r"ManagedChannelBuilder\s*\.\s*(?:forAddress|forTarget)\s*\(\s*\"([^\"]+)\""
     )
+    documents: list[tuple[Path, str]] = []
+    config_fields: dict[str, str] = {}
     for path in _files(root, {".java"}, _MAX_FILES):
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        documents.append((path, source))
+        for match in config_properties_re.finditer(source):
+            prefix = match.group(1).strip().rstrip(".")
+            window = source[match.end() : match.end() + 4_000]
+            for field in config_field_re.findall(window):
+                config_fields[field] = f"{prefix}.{_camel_to_kebab(field)}"
+    for path, source in documents:
+        before = len(sites)
         bindings: list[tuple[str, str | None, str]] = []
         for match in prop_re.finditer(source):
             key = match.group(2).strip()
@@ -304,6 +343,14 @@ def _java_callsites(
             bindings.append((key, None, "env"))
         for key in getprop_re.findall(source):
             bindings.append((_env_key(key), key, "system_property"))
+        getters = {
+            name[0].lower() + name[1:]
+            for name in re.findall(r"\bget([A-Z][A-Za-z0-9_]*)\s*\(\s*\)", source)
+        }
+        for field in getters:
+            key = config_fields.get(field)
+            if key:
+                bindings.append((_env_key(key), key, "configuration_properties"))
         bindings = list(dict.fromkeys(bindings))
         targets = target_re.findall(source)
         for match in stub_re.finditer(source):
@@ -341,9 +388,220 @@ def _java_callsites(
                         language="java",
                     )
                 )
-        if not sites and "_grpc" in source.lower():
+        if len(sites) == before and "_grpc" in source.lower():
             warnings.append(f"grpc_java_stub_unresolved:{path.relative_to(root)}")
     return sites, unsupported, warnings
+
+
+def _camel_to_kebab(value: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", value).lower()
+
+
+def _node_callsites(
+    root: Path,
+    proto_methods: dict[str, dict[str, GrpcMethod]],
+) -> tuple[list[GrpcCallSite], list[dict[str, Any]], list[str]]:
+    sites: list[GrpcCallSite] = []
+    warnings: list[str] = []
+    paths = _files(
+        root,
+        {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"},
+        _MAX_FILES,
+    )
+    documents: list[tuple[Path, str]] = []
+    config_map: dict[str, str] = {}
+    config_re = re.compile(
+        r"([A-Za-z_$][\w$]*)\s*[:=]\s*"
+        r"(?:process\.)?env(?:\.([A-Za-z_$][\w$]*)|\[\s*['\"]([^'\"]+)['\"]\s*\])"
+    )
+    for path in paths:
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        documents.append((path, source))
+        for match in config_re.finditer(source):
+            config_map[match.group(1)] = match.group(2) or match.group(3)
+
+    client_re = re.compile(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+"
+        r"([A-Za-z0-9_$]+)Client\s*\(\s*([^,\n]+)"
+    )
+    for path, source in documents:
+        if "grpc" not in source.lower():
+            continue
+        before = len(sites)
+        for match in client_re.finditer(source):
+            variable, class_name, target_expr = match.groups()
+            service_short = re.sub(r"Client$", "", class_name)
+            methods = proto_methods.get(service_short)
+            if not methods:
+                continue
+            target, property_name = _node_target(target_expr, config_map)
+            call_re = re.compile(
+                rf"\b{re.escape(variable)}\s*\.\s*"
+                r"([A-Za-z_$][\w$]*)\s*\("
+            )
+            for call in call_re.finditer(source, match.end()):
+                method = _match_method(methods, call.group(1))
+                if method is None:
+                    continue
+                sites.append(
+                    GrpcCallSite(
+                        service=method.service,
+                        method=method.method,
+                        file=str(path.relative_to(root)).replace("\\", "/"),
+                        line=source.count("\n", 0, call.start()) + 1,
+                        stub=f"{service_short}Client",
+                        target=target,
+                        property=property_name,
+                        config_kind="env" if property_name else None,
+                        language="node",
+                    )
+                )
+        if len(sites) == before:
+            warnings.append(f"grpc_node_stub_unresolved:{path.relative_to(root)}")
+    return sites, [], warnings
+
+
+def _node_target(
+    expression: str,
+    config_map: dict[str, str],
+) -> tuple[str | None, str | None]:
+    value = expression.strip()
+    quoted = re.fullmatch(r"""['"]([^'"]+)['"]""", value)
+    if quoted:
+        return quoted.group(1), None
+    for pattern in (
+        r"process\.env\.([A-Za-z_$][\w$]*)",
+        r"process\.env\[\s*['\"]([^'\"]+)['\"]\s*\]",
+        r"(?<!process\.)\benv\.([A-Za-z_$][\w$]*)",
+        r"(?<!process\.)\benv\[\s*['\"]([^'\"]+)['\"]\s*\]",
+    ):
+        match = re.search(pattern, value)
+        if match:
+            return None, match.group(1)
+    config_match = re.fullmatch(
+        r"(?:config|settings)\s*\.\s*([A-Za-z_$][\w$]*)",
+        value,
+    )
+    if config_match:
+        return None, config_map.get(config_match.group(1))
+    return value or None, None
+
+
+def _go_callsites(
+    root: Path,
+    proto_methods: dict[str, dict[str, GrpcMethod]],
+) -> tuple[list[GrpcCallSite], list[dict[str, Any]], list[str]]:
+    sites: list[GrpcCallSite] = []
+    warnings: list[str] = []
+    paths = _files(root, {".go"}, _MAX_FILES)
+    documents: list[tuple[Path, str]] = []
+    config_map: dict[str, str] = {}
+    config_re = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*"
+        r"viper\.GetString\(\s*\"([^\"]+)\"\s*\)"
+    )
+    for path in paths:
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        documents.append((path, source))
+        config_map.update(
+            {
+                field: _env_key(key)
+                for field, key in config_re.findall(source)
+            }
+        )
+
+    connection_re = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)"
+        r"(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?"
+        r"\s*:=\s*grpc\.(?:Dial|NewClient)"
+        r"\(\s*([^,\n]+)",
+        re.S,
+    )
+    dial_context_re = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)"
+        r"(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?"
+        r"\s*:=\s*grpc\.DialContext"
+        r"\(\s*[^,\n]+,\s*([^,\n]+)",
+        re.S,
+    )
+    client_re = re.compile(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*New([A-Za-z0-9_]+)Client"
+        r"\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*[,)]",
+        re.S,
+    )
+    for path, source in documents:
+        if "grpc" not in source:
+            continue
+        before = len(sites)
+        connections: dict[str, tuple[str | None, str | None]] = {}
+        for pattern in (connection_re, dial_context_re):
+            for match in pattern.finditer(source):
+                connections[match.group(1)] = _go_target(
+                    match.group(2),
+                    config_map,
+                )
+        for match in client_re.finditer(source):
+            variable, service_short, connection = match.groups()
+            methods = proto_methods.get(service_short)
+            if not methods:
+                continue
+            target, property_name = connections.get(
+                connection,
+                (None, None),
+            )
+            call_re = re.compile(
+                rf"\b{re.escape(variable)}\s*\.\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
+            )
+            for call in call_re.finditer(source, match.end()):
+                method = _match_method(methods, call.group(1))
+                if method is None:
+                    continue
+                sites.append(
+                    GrpcCallSite(
+                        service=method.service,
+                        method=method.method,
+                        file=str(path.relative_to(root)).replace("\\", "/"),
+                        line=source.count("\n", 0, call.start()) + 1,
+                        stub=f"{service_short}Client",
+                        target=target,
+                        property=property_name,
+                        config_kind="env" if property_name else None,
+                        language="go",
+                    )
+                )
+        if len(sites) == before:
+            warnings.append(f"grpc_go_stub_unresolved:{path.relative_to(root)}")
+    return sites, [], warnings
+
+
+def _go_target(
+    expression: str,
+    config_map: dict[str, str],
+) -> tuple[str | None, str | None]:
+    value = expression.strip()
+    quoted = re.fullmatch(r'`([^`]+)`|"([^"]+)"', value)
+    if quoted:
+        return quoted.group(1) or quoted.group(2), None
+    match = re.search(r"(?:os\.Getenv|os\.LookupEnv)\(\s*\"([^\"]+)\"", value)
+    if match:
+        return None, match.group(1)
+    match = re.search(r"viper\.GetString\(\s*\"([^\"]+)\"", value)
+    if match:
+        return None, _env_key(match.group(1))
+    config_match = re.fullmatch(
+        r"(?:config|cfg)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)",
+        value,
+    )
+    if config_match:
+        return None, config_map.get(config_match.group(1))
+    return value or None, None
 
 
 class GrpcDownstreamScanner:
@@ -398,11 +656,23 @@ class GrpcDownstreamScanner:
             )
         python_sites, py_unsupported, py_warnings = _python_callsites(self.root, by_short)
         java_sites, java_unsupported, java_warnings = _java_callsites(self.root, by_short)
-        sites = python_sites + java_sites
+        node_sites, node_unsupported, node_warnings = _node_callsites(
+            self.root,
+            by_short,
+        )
+        go_sites, go_unsupported, go_warnings = _go_callsites(
+            self.root,
+            by_short,
+        )
+        sites = python_sites + java_sites + node_sites + go_sites
         unsupported.extend(py_unsupported)
         unsupported.extend(java_unsupported)
+        unsupported.extend(node_unsupported)
+        unsupported.extend(go_unsupported)
         warnings.extend(py_warnings)
         warnings.extend(java_warnings)
+        warnings.extend(node_warnings)
+        warnings.extend(go_warnings)
         grouped: dict[str, GrpcDownstreamDep] = {}
         for site in sites:
             key = f"/{site.service}/{site.method}"
