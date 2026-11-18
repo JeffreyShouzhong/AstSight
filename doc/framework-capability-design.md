@@ -1834,6 +1834,7 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
 | 动态 URL / 自定义传输 | **不支持** | 目标地址无法静态确定时 dep 身份不成立；agent 改写不改变该边界。除非可经明文代理覆盖，否则 `unsupported` |
 | HTTP query/header/body 子集匹配、同 dep 调用序列 | **支持** | `mock_rules` 优先；`mock_sequences` 按 session+dep 游标推进，耗尽回退 default branch；多条规则同时命中 `mock_request_ambiguous` |
 | HTTP 3xx 重定向桩 | **不支持（失败关闭）** | agent 只在 `newCall` 入口改写，无法安全覆盖客户端内部 follow-up；Mock 见 300–399 直接 `mock_redirect_unsupported`，真实下游零连接 |
+| HTTP 业务 Host/签名 | **条件支持（显式边界）** | `newCall` 前生成的 Host/签名头原样保留；`newCall` 后的应用拦截器看到 Mock host/path，agent 不重算签名；需要原签名语义时由 Mock 规则按保留头匹配 |
 | h2c、WebSocket、流式 | **不支持** | 明确边界 |
 
 **选择规则**：C3 按 `url_override`（专用配置）> `discovery_override`（仅环境支持时）> `http_proxy`（显式）> `agent_rewrite`（agent 激活且适配器覆盖）> `unsupported` 选择；一个 dep 只选一种策略，运行期不自动降级、不改选。配置能覆盖的 dep 不因 agent 可用而改选；选不出即 `unsupported`，依赖用例 `blocked`。
@@ -1869,10 +1870,21 @@ Mock 错误响应统一为 502 + JSON `{error, route_key?, dep_id?}` 并写调�
   Mock 无法解析 HTTP/2 preface，SUT 得到 IOException。失败必须显式（SUT 非 0
   退出）且真实下游 0 连接，不允许悄悄回落或把该失败当用例通过；负例 e2e
   `test_java_agent_h2_prior_knowledge_e2e.py` 固定这一行为。
-- **安全矩阵（2026-11-18）**：同一 OkHttpClient 连续调用必须逐次命中 Mock；连接复用
-  不得把后续请求带回真实 host；Mock 不返回 3xx，避免客户端内部重定向绕过
-  `newCall` 钩子。安全 e2e 同时断言真实下游连接数为 0、Mock 调用次数和
-  `original_host`/adapter 证据。未支持客户端仍由计划期 `client_unsupported` hard-block。
+- **安全矩阵（2026-11-18）**：同一 OkHttpClient 的同步与异步连续调用必须逐次命中
+  Mock；连接复用不得把后续请求带回真实 host；客户端内部重试复用已改写 URL，
+  只允许触发一次 agent 改写，但每次实际请求均产生独立 Mock 证据。Mock 不返回
+  3xx，避免内部 follow-up 绕过 `newCall`。CertificatePinner 在目标已显式改写为
+  明文 Mock 后不参与 TLS；应用拦截器若拒绝 `https → http`，调用必须显式失败且
+  真实下游零连接。已是 `/_dep/`、`/_agent/` 的请求跳过改写；计划内 host 的未知
+  路径进入 `/_agent/unmatched` 并返回 502 证据，不计透传。
+- **Host/签名边界（2026-11-18）**：agent 只改出站 URL，不改写或重算业务签名。
+  调用方在 `newCall` 前写入的显式 `Host`、预签名头保持不变；应用拦截器在
+  `newCall` 之后执行，看到的是 Mock host 和 `/_dep/<route_key>/...` 路径。若签名
+  算法依赖实际 URL，它签的是 Mock URL；Mock 不据此推断原始签名，也不恢复真实
+  URL。需要验证“签名生成”本身时，用例应使用预签名头或显式跳过该边界。
+- **安全 e2e 验收**：每类场景都同时核对 SUT 成功/失败口径、真实下游 TCP 连接数 0、
+  Mock 证据数、`original_host`/`adapter` 和 heartbeat 改写/透传计数。未支持客户端
+  仍由计划期 `client_unsupported` hard-block。
 - **匹配边界（v4.19）**：同一 host + method 下字面量路径优先于 `{}` 模板（`/orders/7` 命中字面量路由，`/orders/8` 才落到 `/orders/{}`）；两个字面量或两个模板同时命中时仍是 `mock_route_ambiguous` → `/_agent/unmatched` 502，零透传，要求画像消歧；不做更细的模板特异性排序。
 - **阶段**：P0 OkHttp + HTTPS + 心跳 + 证据（已落地）；P1 Feign + RestTemplate + 计划期策略选择 + `JAVA_TOOL_OPTIONS` 启动注入 + 失败关闭（已落地，Spring Boot 3.5.6 fat jar 三客户端联调通过）；P1.5 直连 Apache HttpClient 4.3+/5.x classic（已落地，HC 4.5.3 + 5.4.1 同 JVM 联调通过）；版本矩阵（JDK 8/11/17/21/26 × OkHttp 3/4/5 × Feign 10–13 × HC 4.3–4.5/5.0–5.6）已全部通过；wheel 分发闭环与真实 `agent run` 全链路 e2e 已落地（2026-11-16）；同 host 字面量/模板路径并存时字面量优先已补齐（2026-11-16）；Dubbo 消费端 Filter 首版已接入同一 core（`-javaagent` + 会话取桩 + 同步/异步/future/oneway/泛化 + 零真实调用 e2e，2026-11-16；版本矩阵待补，classpath 形态明确不做）；WebClient / JDK HttpClient / 自有传输或 shaded HTTP 客户端明确不建设 adapter。HTTP/2 prior-knowledge 负例已落地（2026-11-16）；第三方 SDK 端点发现明确不做（理由见 `doc/决策记录.md` §17 范围收敛）；Dubbo 剩余项（JDK/Dubbo 版本矩阵）见 `doc/决策记录.md` §3「首版实现」与 §17「后续工作」。
 

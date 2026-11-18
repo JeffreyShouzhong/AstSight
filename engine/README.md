@@ -630,7 +630,14 @@ HTTPS 在改写后走明文，不建 TLS、不装 CA。所有 adapter 都用裸 
 
 HTTP Mock 不返回 3xx 重定向：agent 的 `newCall` 钩子无法安全覆盖客户端内部
 跟随的重定向，因此计划桩返回 300–399 时统一回 `502 mock_redirect_unsupported`，
-真实下游保持零连接。连接复用、多次调用和重定向失败关闭由安全矩阵 e2e 覆盖。
+真实下游保持零连接。安全矩阵 e2e 还覆盖同步/异步调用、连接复用、客户端内部
+重试只改写一次、CertificatePinner、HTTPS scheme guard、已改写 URL 幂等、计划内
+未知路径的 `/_agent/unmatched` 502，以及业务 Host/签名边界。
+
+agent 不重算业务签名。`newCall` 之前写入的显式 `Host` 和预签名头会原样保留；
+`newCall` 之后的应用拦截器看到的是 Mock host 与 `/_dep/<route_key>/...` 路径，
+因此按最终 URL 计算的签名会使用 Mock URL。需要验证原始签名输入时，应由 Mock
+header 规则匹配预签名头，或把该边界显式排除。
 
 可选联调测试（默认跳过，均已实测通过）：
 
@@ -647,7 +654,7 @@ ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
 ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
   PYTHONPATH=. python -m pytest tests/integration/test_java_agent_h2_prior_knowledge_e2e.py -q
 
-# 安全矩阵：连接复用多次调用、重定向失败关闭
+# 安全矩阵：同步/异步、连接复用、重试、重定向、pinning、scheme、幂等与签名边界
 ASTSIGHT_JAVA_AGENT_E2E=1 ASTSIGHT_JAVA_AGENT_E2E_JAVA=<JDK> \
   PYTHONPATH=. python -m pytest tests/integration/test_java_agent_safety_matrix_e2e.py -q
 
