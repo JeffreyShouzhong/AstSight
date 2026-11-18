@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`554f6ae`（`完善：明确测试数据两来源，禁用调接口造数`），
+> 最新提交：`03e2601`（`完善：实体与插表造数闭环校验`），
 > 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
