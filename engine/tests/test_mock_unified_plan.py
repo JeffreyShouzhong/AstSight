@@ -117,7 +117,7 @@ def test_mock_semantic_uses_dubbo_transport_and_reply() -> None:
     assert isinstance(dep.branches[0].reply, DubboMockReply)
 
 
-def test_grpc_deps_only_plan_validates_and_blocks_missing_runtime(
+def test_grpc_deps_only_plan_validates_and_blocks_missing_binary(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "inventory.proto").write_text(
@@ -159,7 +159,7 @@ def test_grpc_deps_only_plan_validates_and_blocks_missing_runtime(
     )
     with pytest.raises(MockPlanError) as error:
         start_mock_plan(plan_path)
-    assert error.value.code == "mock_grpc_runtime_unimplemented"
+    assert error.value.code == "mock_binary_missing"
 
 
 def test_grpc_plan_rejects_invalid_response_body(tmp_path: Path) -> None:

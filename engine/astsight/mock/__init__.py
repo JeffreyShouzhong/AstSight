@@ -22,6 +22,13 @@ from .identity import (
     route_key_for,
 )
 from .grpc_descriptor import GrpcDescriptorError, GrpcDescriptorIndex, GrpcMethod
+from .gripmock_binary import (
+    DISTRIBUTION_NAME as GRIPMOCK_DISTRIBUTION_NAME,
+    GRIPMOCK_VERSION,
+    GripMockBinary,
+    GripMockBinaryError,
+    resolve_gripmock_binary,
+)
 from .grpc_runtime import (
     GripMockBackend,
     GripMockHttpBackend,
@@ -63,6 +70,10 @@ __all__ = [
     "GrpcDescriptorError",
     "GrpcDescriptorIndex",
     "GrpcMethod",
+    "GRIPMOCK_DISTRIBUTION_NAME",
+    "GRIPMOCK_VERSION",
+    "GripMockBinary",
+    "GripMockBinaryError",
     "GripMockBackend",
     "GripMockHttpBackend",
     "GripMockProcess",
@@ -102,6 +113,7 @@ __all__ = [
     "reply_from_legacy_stub",
     "resolve_plan_path",
     "resolve_branch_reply",
+    "resolve_gripmock_binary",
     "route_key_for",
     "start_mock_plan",
     "summarize_evidence",

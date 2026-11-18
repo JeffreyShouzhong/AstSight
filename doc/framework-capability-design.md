@@ -2030,8 +2030,9 @@ MockRuntimeAdapter
 - gRPC Plan 已支持纯 `deps[]` 输入；`descriptor_source` 可为 `.proto` 或 `.protoset`，`.proto` 经 `grpc_tools.protoc` 递归编译，方法必须是 unary，所有分支 body 安装前按响应 message descriptor 严格校验，并记录 `descriptor_sha256`；
 - `GrpcMockRuntimeAdapter` 已实现按 session 清理/安装 stubs、`GET /api/history` 归一化、canonical gRPC status 映射；`GripMockHttpBackend` 使用官方 `/api/stubs`、`/api/history`、readiness API；`GripMockProcess` 管理子进程、端口环境、日志和启动就绪；
 - `MockHttpServer` session lifecycle 已接入 `RuntimeSessionBridge`：创建 session 时激活全部 runtime，drain 时采集并去重写入统一证据，关闭时清理 stubs；gRPC-only Plan 使用内嵌 HTTP 控制面管理 session/health/evidence；
-- `start_mock_plan(..., grpc_backend=...)` 已允许注入 `GripMockBackend`；未提供 backend 时仍显式阻断 `mock_grpc_runtime_unimplemented`；
+- `start_mock_plan(..., grpc_backend=...)` 已允许注入 `GripMockBackend`；未注入 backend 时从已安装的 `astsight-gripmock-bin` 平台 wheel 解析二进制，缺包或校验失败显式报 `mock_binary_missing`；
 - `start_mock_plan(..., gripmock_path=...)` 已支持自动分配 gRPC/admin/gateway 端口、启动 `GripMockProcess`，并将三个 endpoint 写入 manifest/injection document；每个 gRPC dep 自动生成 `grpc_server` target 注入项；
+- `astsight-gripmock-bin==3.23.8` 已可按 Linux amd64/arm64 构建 manylinux wheel；包内固定 gripmock、manifest、LICENSE/NOTICE，解析器逐项校验平台、版本、source commit、大小和 sha256；`--gripmock-path` 仅作调试覆盖并标记 `degraded`；
 - `GrpcMockLocator.property` 可声明 SUT 的 gRPC target 环境变量键；`injection_env` 将 `grpc_server.injected` 写入该变量。未声明 property 时只保留 endpoint 文档并告警 `grpc_target_not_overridable`；
 - 首版自动进程模式要求本次 run 使用单一 descriptor source，多个不同 source 报 `mock_descriptor_ambiguous`；
 - SUT 启动器已能通过环境变量应用可覆盖 target；真实 gripmock v3.23.8 Windows amd64 binary 已跑通 success / `UNAVAILABLE` / history / cleanup e2e，验证空 matcher 必须写 `input.equals={}`；
@@ -2042,7 +2043,7 @@ MockRuntimeAdapter
 - gRPC MockSemantic 默认 success body 从 proto response message descriptor 采样；规则分支按 HTTP 语义错误码映射为 canonical gRPC code（400/404/502/503/504 等），错误分支 body 固定为可解析空消息；
 - gRPC dep 的 service/grpc_path/method/property 参与规则 token 匹配，不再只按 HTTP path 匹配；
 - `agent run` 的 `build_mock_plan` 已把 gRPC binding 转成统一 `MockPlanDep` + `GrpcMockReply` + `grpc_server` injection；A5 Mock 热更新会刷新 plan 中的 gRPC replies，下一轮 session 重新安装 stubs；
-- 更多 gRPC 客户端配置形态、Linux binary 分发和完整 gRPC `agent run` 样例仍属后续阶段。
+- 更多 gRPC 客户端配置形态、Linux CI 和完整 gRPC `agent run` 样例仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 

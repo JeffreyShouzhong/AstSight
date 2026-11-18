@@ -524,8 +524,18 @@ token、namespace 和 `mock_calls.jsonl` 路径传给 pytest；运行结束（�
 通过 `GrpcMockLocator.property` 指定的环境变量注入 SUT；未提供 property 时
 显式报 `grpc_target_not_overridable`。
 
-CLI 的 `run --mock-plan` 和 `agent run` 均支持 `--gripmock-path`。前者可直接运行
-手工 gRPC Plan；后者在计划含 gRPC dep 时使用该二进制启动 Mock。
+Linux 正式路径从已安装的 `astsight-gripmock-bin==3.23.8` 平台 wheel
+（`manylinux_2_17_x86_64` / `manylinux_2_17_aarch64`）解析二进制，并校验
+平台、版本、source commit、大小和 sha256；manifest 的 `grpc_binary` 记录来源。
+不查询 PATH，也不在运行期联网下载。构建两个平台 wheel：
+
+```bash
+python tools/build_gripmock_wheels.py --download
+```
+
+CLI 的 `run --mock-plan` 和 `agent run` 仍支持 `--gripmock-path`，但该路径仅用于
+不能安装平台 wheel 的调试/应急场景；报告标记 `source=override`、`degraded=true`。
+Windows 开发机也可通过该参数跑真实 Mock。
 
 SESSION 生命周期已统一：create 安装 stubs，drain 拉取 history 并写入
 `mock_calls.jsonl`，delete 清理 stubs。真实 binary e2e：
@@ -538,7 +548,8 @@ python -m pytest tests/integration/test_grpc_downstream_sut_e2e.py -q
 ```
 
 当前限制：只接 unary、明文 gRPC、可 env 覆盖的 target；streaming、reflection、
-TLS/mTLS、配置文件/编程式 target 改写仍不支持。
+TLS/mTLS、配置文件/编程式 target 改写仍不支持。平台矩阵外未安装 wheel 时显式报
+`mock_binary_missing`。
 
 ### Java HTTP agent（OkHttp / Feign / RestTemplate / Apache HttpClient）
 

@@ -41,6 +41,10 @@ from .identity import (
 )
 from .server import MockHttpServer
 from .grpc_descriptor import GrpcDescriptorError, GrpcDescriptorIndex
+from .gripmock_binary import (
+    GripMockBinaryError,
+    resolve_gripmock_binary,
+)
 from .grpc_runtime import GripMockBackend, GripMockProcess, GrpcMockRuntimeAdapter
 from .runtime import (
     EmbeddedMockRuntimeAdapter,
@@ -744,6 +748,7 @@ class MockPlanRuntime:
     grpc_admin_endpoint: str | None = None
     grpc_gateway_endpoint: str | None = None
     grpc_process: GripMockProcess | None = None
+    grpc_binary: dict[str, Any] | None = None
 
     @property
     def evidence_path(self) -> Path | None:
@@ -772,6 +777,7 @@ class MockPlanRuntime:
             "grpc_endpoint": self.grpc_endpoint,
             "grpc_admin_endpoint": self.grpc_admin_endpoint,
             "grpc_gateway_endpoint": self.grpc_gateway_endpoint,
+            "grpc_binary": self.grpc_binary,
             "token_fingerprint": model.token_fingerprint,
             "history_path": str(self.evidence_path) if self.evidence_path else None,
             "route_count": model.route_count,
@@ -805,6 +811,7 @@ class MockPlanRuntime:
             "grpc_endpoint": self.grpc_endpoint,
             "grpc_admin_endpoint": self.grpc_admin_endpoint,
             "grpc_gateway_endpoint": self.grpc_gateway_endpoint,
+            "grpc_binary": self.grpc_binary,
             # 服务发现型注入需要 route.host（即服务名）才能写静态实例表。
             "routes": [
                 {
@@ -837,6 +844,7 @@ class MockPlanRuntime:
             "endpoint": self.server.endpoint,
             "grpc_endpoint": self.grpc_endpoint,
             "grpc_admin_endpoint": self.grpc_admin_endpoint,
+            "grpc_binary": self.grpc_binary,
             "route_count": len(self.plan.routes),
             "dubbo_route_count": len(self.plan.dubbo_routes),
             "dep_count": len(self.plan.deps),
@@ -892,11 +900,6 @@ def _build_runtime(
     grpc_deps = [
         dep.dep_id for dep in plan.deps if dep.transport is Transport.GRPC
     ]
-    if grpc_deps and grpc_backend is None and gripmock_path is None:
-        raise MockPlanError(
-            "mock_grpc_runtime_unimplemented",
-            ",".join(grpc_deps[:10]),
-        )
     if grpc_deps and grpc_backend is not None and gripmock_path is not None:
         raise MockPlanError(
             "mock_grpc_backend_conflict",
@@ -914,9 +917,29 @@ def _build_runtime(
     grpc_endpoint: str | None = None
     grpc_admin_endpoint: str | None = None
     grpc_gateway_endpoint: str | None = None
+    grpc_binary: dict[str, Any] | None = None
+    binary_warnings: list[str] = []
     effective_grpc_backend = grpc_backend
     if grpc_deps and effective_grpc_backend is None:
-        assert gripmock_path is not None
+        if gripmock_path is None:
+            try:
+                resolved_binary = resolve_gripmock_binary()
+            except GripMockBinaryError as error:
+                raise MockPlanError(error.code, str(error)) from error
+            gripmock_path = resolved_binary.path
+            grpc_binary = {
+                **resolved_binary.manifest_fragment(),
+                "degraded": False,
+            }
+        else:
+            grpc_binary = {
+                "source": "override",
+                "path": str(Path(gripmock_path).expanduser().resolve()),
+                "degraded": True,
+            }
+            binary_warnings.append(
+                "gripmock 使用 --gripmock-path 调试覆盖，二进制来源标记为 degraded"
+            )
         grpc_objects = [
             dep for dep in plan.deps if dep.transport is Transport.GRPC
         ]
@@ -1027,12 +1050,13 @@ def _build_runtime(
             plan=plan,
             plan_path=plan_path,
             route_keys=dict(validation.route_keys),
-            warnings=list(validation.warnings),
+            warnings=[*validation.warnings, *binary_warnings],
             runtimes=runtimes,
             grpc_endpoint=grpc_endpoint,
             grpc_admin_endpoint=grpc_admin_endpoint,
             grpc_gateway_endpoint=grpc_gateway_endpoint,
             grpc_process=grpc_process,
+            grpc_binary=grpc_binary,
         )
         server.start()
         runtimes.start()

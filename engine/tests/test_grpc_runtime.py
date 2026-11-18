@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from astsight.mock import (
+    GripMockBinary,
     GripMockHttpBackend,
     GripMockProcess,
     GrpcMockRuntimeAdapter,
@@ -397,6 +398,12 @@ def test_grpc_plan_starts_process_factory_and_exposes_endpoints(
         assert runtime.grpc_gateway_endpoint == "127.0.0.1:41003"
         manifest = runtime.manifest(run_id="run-1")
         assert manifest["grpc_endpoint"] == "127.0.0.1:41001"
+        assert runtime.grpc_binary == {
+            "path": str(tmp_path / "gripmock"),
+            "source": "override",
+            "degraded": True,
+        }
+        assert any("degraded" in warning for warning in runtime.warnings)
         injection = runtime.injection_document()["injections"][0]
         assert injection["strategy"] == "grpc_server"
         assert injection["injected"] == "127.0.0.1:41001"
@@ -404,3 +411,90 @@ def test_grpc_plan_starts_process_factory_and_exposes_endpoints(
     finally:
         runtime.stop()
     assert process.stopped == 1
+
+
+def test_grpc_plan_resolves_verified_wheel_binary_when_override_is_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "inventory.proto").write_text(
+        """
+        syntax = "proto3";
+        package inventory.v1;
+        message ReserveRequest { string sku = 1; }
+        message ReserveResponse { bool available = 1; }
+        service InventoryService {
+          rpc Reserve(ReserveRequest) returns (ReserveResponse);
+        }
+        """,
+        encoding="utf-8",
+    )
+    plan = MockPlan(
+        sut_id="sut",
+        deps=[
+            MockPlanDep(
+                dep_id="grpc:/inventory.v1.InventoryService/Reserve",
+                transport=Transport.GRPC,
+                locator=GrpcMockLocator(
+                    grpc_path="/inventory.v1.InventoryService/Reserve",
+                    descriptor_source="inventory.proto",
+                    property="INVENTORY_GRPC_ADDR",
+                ),
+                branches={"success": MockStub(body={"available": True})},
+                replies={"success": GrpcMockReply(body={"available": True})},
+            )
+        ],
+    )
+    plan_path = tmp_path / "grpc-wheel-plan.json"
+    plan_path.write_text(
+        json.dumps(plan.model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    binary = GripMockBinary(
+        path=tmp_path / "wheel" / "gripmock",
+        version="3.23.8",
+        sha256="a" * 64,
+        size=1234,
+        platform="linux",
+        architecture="amd64",
+        source_commit="b" * 40,
+    )
+    monkeypatch.setattr(
+        "astsight.mock.plan.resolve_gripmock_binary",
+        lambda: binary,
+    )
+    created: dict = {}
+
+    class FakeProcess:
+        def __init__(self, **kwargs) -> None:
+            created.update(kwargs)
+            self.backend = FakeBackend()
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    runtime = start_mock_plan(
+        plan_path,
+        grpc_process_factory=FakeProcess,
+        grpc_ports=(41011, 41012, 41013),
+    )
+    try:
+        assert created["executable"] == binary.path
+        assert runtime.grpc_binary == {
+            "version": "3.23.8",
+            "sha256": "a" * 64,
+            "size": 1234,
+            "platform": "linux",
+            "architecture": "amd64",
+            "source_commit": "b" * 40,
+            "source": "wheel",
+            "degraded": False,
+        }
+        assert runtime.manifest(run_id="run-wheel")["grpc_binary"] == (
+            runtime.grpc_binary
+        )
+    finally:
+        runtime.stop()
