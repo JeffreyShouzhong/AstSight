@@ -326,9 +326,9 @@ def validate_grpc_plan_descriptors(
         try:
             index = GrpcDescriptorIndex.load(source)
             index.method(dep.locator.grpc_path)
-            for branch_name, stub in dep.branches.items():
+            for branch_name, reply in dep.replies.items():
                 try:
-                    index.validate_response(dep.locator.grpc_path, stub.body)
+                    index.validate_response(dep.locator.grpc_path, reply.body)
                 except GrpcDescriptorError as exc:
                     raise MockPlanError(
                         exc.code,
@@ -484,6 +484,22 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
                 "mock_branch_invalid",
                 f"{where}: 分支名 {name!r}",
             )
+            reply = dep.replies.get(name)
+            _require(
+                reply is not None,
+                "mock_reply_required",
+                f"{where}: gRPC branch={name!r} 缺少 reply",
+            )
+            _require(
+                reply.transport == "grpc",
+                "mock_reply_transport_mismatch",
+                f"{where}: gRPC branch={name!r}",
+            )
+        _require(
+            set(dep.replies) == set(dep.branches),
+            "mock_branch_invalid",
+            f"{where}: branches/replies 名称必须一致",
+        )
         if not dep.branches:
             validation.warnings.append(f"mock_branch_empty:{dep.dep_id}")
         deps.append(

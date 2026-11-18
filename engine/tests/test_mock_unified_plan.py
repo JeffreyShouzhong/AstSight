@@ -17,6 +17,7 @@ from contracts import (
     DubboMockLocator,
     DubboMockReply,
     GrpcMockLocator,
+    GrpcMockReply,
     HttpMockLocator,
     MockPlan,
     MockPlanDep,
@@ -141,6 +142,7 @@ def test_grpc_deps_only_plan_validates_and_blocks_missing_runtime(
             descriptor_source="inventory.proto",
         ),
         branches={"success": MockStub(body={"available": True})},
+        replies={"success": GrpcMockReply(body={"available": True})},
     )
     plan = MockPlan(sut_id="sut", deps=[grpc_dep])
 
@@ -185,6 +187,7 @@ def test_grpc_plan_rejects_invalid_response_body(tmp_path: Path) -> None:
                     descriptor_source="inventory.proto",
                 ),
                 branches={"success": MockStub(body={"unknown": True})},
+                replies={"success": GrpcMockReply(body={"unknown": True})},
             )
         ],
     )

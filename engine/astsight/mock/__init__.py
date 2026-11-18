@@ -22,6 +22,13 @@ from .identity import (
     route_key_for,
 )
 from .grpc_descriptor import GrpcDescriptorError, GrpcDescriptorIndex, GrpcMethod
+from .grpc_runtime import (
+    GripMockBackend,
+    GripMockHttpBackend,
+    GripMockProcess,
+    GrpcMockRuntimeAdapter,
+    GrpcMockRuntimeError,
+)
 from .plan import (
     MockPlanError,
     MockPlanRuntime,
@@ -55,6 +62,11 @@ __all__ = [
     "GrpcDescriptorError",
     "GrpcDescriptorIndex",
     "GrpcMethod",
+    "GripMockBackend",
+    "GripMockHttpBackend",
+    "GripMockProcess",
+    "GrpcMockRuntimeAdapter",
+    "GrpcMockRuntimeError",
     "MockEvidenceWriter",
     "MockHttpServer",
     "MockLimits",

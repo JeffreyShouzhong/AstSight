@@ -12,7 +12,7 @@ from typing import Literal, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from .enums import MockStrategy, Transport
-from .mock import MockStub
+from .mock import MockReply, MockStub
 
 
 class MockPlanRoute(BaseModel):
@@ -133,6 +133,10 @@ class MockPlanDep(BaseModel):
     source: str = "plan"
     locator: MockLocator
     branches: dict[str, MockStub] = Field(default_factory=dict)
+    replies: dict[str, MockReply] = Field(
+        default_factory=dict,
+        description="协议专属响应；gRPC plan 必须显式提供",
+    )
 
 
 class MockPlan(BaseModel):
