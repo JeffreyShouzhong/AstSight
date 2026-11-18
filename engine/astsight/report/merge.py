@@ -253,6 +253,23 @@ def build_report(
                 "跳过 Hessian2 链路，序列化保真未验证（degraded）"
             )
 
+    mq_routes = int(plan.get("mq_route_count") or 0)
+    if mq_routes:
+        agent_state = mock.get("agent") or {}
+        heartbeat = agent_state.get("heartbeat") or {}
+        mq_agent = heartbeat.get("mq") or {}
+        if not heartbeat:
+            blockers.append(
+                "计划内 MQ 下游未确认生产者拦截已安装"
+                f"（mq_producer_not_installed）："
+                f"{agent_state.get('reason') or 'agent_heartbeat_missing'}"
+            )
+        elif not mq_agent.get("installed"):
+            blockers.append(
+                "计划内 MQ 下游已登记，但 agent 心跳未上报 MQ 生产者拦截"
+                "（mq_producer_not_installed：mq.installed=false）"
+            )
+
     route_health = (route_audit or {}).get("health") or {}
     if route_health.get("status") == "degraded":
         reasons = "，".join(route_health.get("reasons") or [])
@@ -610,6 +627,24 @@ def render_markdown(report: dict) -> str:
         lines.append("## 下游 Mock")
         lines.append("")
         lines.append(f"- 证据未读取：`{mock.get('reason')}`")
+        lines.append("")
+
+    if int((mock.get("plan") or {}).get("mq_route_count") or 0):
+        heartbeat = agent_state.get("heartbeat") or {}
+        mq_agent = heartbeat.get("mq") or {}
+        lines.append("## MQ 生产者拦截")
+        lines.append("")
+        if not heartbeat:
+            lines.append(
+                f"- 生产者拦截未确认：`{agent_state.get('reason') or 'agent_heartbeat_missing'}`"
+            )
+        else:
+            lines.append(
+                f"- 已上报 {mq_agent.get('published', 0)} 次 / "
+                f"拦截 {mq_agent.get('suppressed', 0)} 次 / "
+                f"错误 {mq_agent.get('errors', 0)} 次"
+            )
+            lines.append("- 消息未真正发送到 broker；只验证 SUT 准备发出的内容")
         lines.append("")
 
     plan = mock.get("plan") or {}

@@ -233,6 +233,15 @@ class MockHttpAdapter(BaseModel):
     active: bool = False
 
 
+class MockMqAgent(BaseModel):
+    """Agent 心跳里的 MQ 生产者拦截状态。"""
+
+    installed: bool = False
+    published: int = Field(default=0, ge=0)
+    suppressed: int = Field(default=0, ge=0)
+    errors: int = Field(default=0, ge=0)
+
+
 class MockDubboAgent(BaseModel):
     """Agent 心跳里的 Dubbo Filter 状态（C3.5.3）。
 
@@ -267,6 +276,7 @@ class MockAgent(BaseModel):
     http_stack_unsupported: list[str] = Field(default_factory=list)
     http_passthrough: int = Field(default=0, ge=0)
     passthrough_hosts: dict[str, int] = Field(default_factory=dict)
+    mq: MockMqAgent | None = None
     dubbo: MockDubboAgent | None = None
     at: str
 

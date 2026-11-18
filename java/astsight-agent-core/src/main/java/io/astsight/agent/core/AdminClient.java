@@ -27,6 +27,10 @@ final class AdminClient {
         request("POST", "/_admin/agent/heartbeat", json);
     }
 
+    String publishMq(String json) throws IOException {
+        return request("POST", "/_admin/mq/publish", json);
+    }
+
     private String request(String method, String path, String body) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
         try {

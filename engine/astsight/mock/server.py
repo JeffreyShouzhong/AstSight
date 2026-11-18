@@ -287,6 +287,10 @@ class MockHttpServer:
         self.capture_bodies = capture_bodies
         self.route_table = RouteTable()
         self.dubbo_deps: dict[str, DubboRouteEntry] = {}
+        # MQ 生产者拦截：dep_id -> {topic, client}，topic -> dep_id。
+        self.mq_deps: dict[str, dict[str, str]] = {}
+        self.mq_by_topic: dict[str, str] = {}
+        self.mq_messages: list[dict[str, Any]] = []
         self.sessions = SessionManager(sut_id=self.sut_id, namespace=self.namespace)
         self.evidence = MockEvidenceWriter(history_path)
         self._app: FastAPI | None = None
@@ -372,6 +376,27 @@ class MockHttpServer:
         )
         self.dubbo_deps[dep_id] = entry
         return entry
+
+    def add_mq_dep(
+        self,
+        dep_id: str,
+        *,
+        topic: str,
+        client: str = "",
+    ) -> None:
+        """登记一个 MQ 生产 topic；Agent 截获后不再真正发送。"""
+        if self._server is not None:
+            raise RuntimeError("cannot add mq dep after server start")
+        topic = str(topic or "").strip()
+        if not dep_id or not topic:
+            raise DepIdError("mock_dep_id_invalid", dep_id or topic)
+        if dep_id in self.mq_deps:
+            raise DepIdError("mock_route_conflict", f"dep_id={dep_id}")
+        existing = self.mq_by_topic.get(topic)
+        if existing is not None and existing != dep_id:
+            raise DepIdError("mock_route_conflict", f"topic={topic}")
+        self.mq_deps[dep_id] = {"topic": topic, "client": client}
+        self.mq_by_topic[topic] = dep_id
 
     # ------------------------------------------------------------- 生命周期
 
@@ -555,7 +580,79 @@ class MockHttpServer:
                     for entry in self.route_table.entries
                 ],
                 "dubbo_deps": sorted(self.dubbo_deps),
+                "mq_deps": [
+                    {"dep_id": dep_id, "topic": item["topic"]}
+                    for dep_id, item in sorted(self.mq_deps.items())
+                ],
             }
+
+        @app.post("/_admin/mq/publish")
+        async def _mq_publish(request: Request):
+            """Agent 生产者拦截上报；规划内 topic 返回 handled=true，不真正发送。"""
+            try:
+                payload = await request.json()
+            except ValueError:
+                return _error_response(400, "invalid_json")
+            if not isinstance(payload, dict):
+                return _error_response(400, "invalid_json")
+            if payload.get("sut_id") != self.sut_id:
+                return _error_response(400, "agent_sut_mismatch")
+            topic = str(payload.get("topic") or "").strip()
+            if not topic:
+                return _error_response(400, "mq_topic_missing")
+            dep_id = self.mq_by_topic.get(topic)
+            if dep_id is None:
+                return {"handled": False}
+            session, session_error = self.sessions.for_request()
+            message = {
+                "dep_id": dep_id,
+                "topic": topic,
+                "client": str(payload.get("client") or ""),
+                "key": payload.get("key"),
+                "headers": {
+                    str(name): str(value)
+                    for name, value in (payload.get("headers") or {}).items()
+                },
+                "body": payload.get("body"),
+                "session_id": session.session_id if session else None,
+                "case_id": session.case_id if session else None,
+                "at": _now_iso(),
+            }
+            self.mq_messages.append(message)
+            if len(self.mq_messages) > 10_000:
+                del self.mq_messages[: len(self.mq_messages) - 10_000]
+            self._record_mq(
+                message,
+                session=session,
+                result=(
+                    MockCallResult.OK
+                    if session_error is None
+                    else MockCallResult.UNBOUND
+                ),
+                error=session_error,
+            )
+            response: dict[str, Any] = {
+                "handled": True,
+                "dep_id": dep_id,
+                "suppressed": True,
+            }
+            if session_error:
+                response["error"] = session_error
+            return response
+
+        @app.get("/_admin/mq/messages")
+        async def _mq_messages(request: Request):
+            session_id = request.query_params.get("session_id") or None
+            if session_id is None:
+                active = self.sessions.current()
+                session_id = active.session_id if active is not None else None
+            if session_id is None:
+                return {"count": 0, "messages": []}
+            messages = [
+                item for item in self.mq_messages
+                if item.get("session_id") == session_id
+            ]
+            return {"count": len(messages), "messages": messages}
 
         @app.post("/_admin/agent/heartbeat")
         async def _agent_heartbeat(request: Request):
@@ -1236,6 +1333,54 @@ class MockHttpServer:
             adapter="dubbo-filter",
             mode="agent_filter",
             original_host=None,
+            at=_now_iso(),
+        )
+        self.evidence.write(call)
+
+    def _record_mq(
+        self,
+        message: dict[str, Any],
+        *,
+        session,
+        result: MockCallResult,
+        error: str | None = None,
+    ) -> None:
+        """MQ 生产者拦截的证据行；不访问 broker。"""
+        raw = json.dumps(
+            {
+                "key": message.get("key"),
+                "headers": message.get("headers") or {},
+                "body": message.get("body"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
+        call = MockCall(
+            call_id=secrets.token_hex(16),
+            session_id=session.session_id if session else None,
+            case_id=session.case_id if session else None,
+            dep_id=message.get("dep_id"),
+            transport=Transport.MQ,
+            route_match=None,
+            method="PUBLISH",
+            original_path=f"mq:{message.get('topic')}",
+            query_keys=sorted((message.get("headers") or {}).keys()),
+            request_headers=dict(message.get("headers") or {}),
+            body_sha256=hashlib.sha256(raw).hexdigest(),
+            body_bytes=len(raw),
+            request_body=(
+                message.get("body") if self.capture_bodies else None
+            ),
+            branch=None,
+            response_status=None,
+            delay_ms=0,
+            drop_mode=None,
+            result=result,
+            error=error,
+            adapter="mq-producer",
+            mode="producer_intercept",
+            original_host=str(message.get("topic") or ""),
             at=_now_iso(),
         )
         self.evidence.write(call)

@@ -48,6 +48,7 @@ from .mock import (
     MockCall,
     MockDrainResult,
     MockDubboAgent,
+    MockMqAgent,
     MockHttpAdapter,
     MockInjection,
     MockRoute,
@@ -67,7 +68,9 @@ from .mock_plan import (
     MockPlanDep,
     MockPlanDubboRoute,
     MockPlanInjection,
+    MockPlanMqRoute,
     MockPlanRoute,
+    MqMockLocator,
 )
 from .entities import (
     Assertion,
@@ -80,6 +83,7 @@ from .entities import (
     DBLineage,
     DownstreamDep,
     DubboCall,
+    MqAssertion,
     Precondition,
     Profile,
     Report,
@@ -122,6 +126,7 @@ from .rules import (
 )
 
 __all__ = [
+    "MqAssertion",
     "ActionTarget",
     "Assertion",
     "AssertStrength",
@@ -178,6 +183,7 @@ __all__ = [
     "MockDep",
     "MockDrainResult",
     "MockDubboAgent",
+    "MockMqAgent",
     "MockHttpAdapter",
     "MockInjection",
     "MockMode",
@@ -186,7 +192,9 @@ __all__ = [
     "MockPlanDep",
     "MockPlanDubboRoute",
     "MockPlanInjection",
+    "MockPlanMqRoute",
     "MockPlanRoute",
+    "MqMockLocator",
     "MockRoute",
     "MockRouteMatch",
     "MockReply",

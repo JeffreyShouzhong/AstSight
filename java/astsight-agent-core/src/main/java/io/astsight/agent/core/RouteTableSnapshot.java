@@ -111,16 +111,27 @@ final class RouteTableSnapshot {
     private final String endpoint;
     private final List<Route> routes;
     private final Set<String> dubboDeps;
+    private final Set<String> mqTopics;
 
     RouteTableSnapshot(String endpoint, List<Route> routes) {
         this(endpoint, routes, Collections.<String>emptySet());
     }
 
     RouteTableSnapshot(String endpoint, List<Route> routes, Set<String> dubboDeps) {
+        this(endpoint, routes, dubboDeps, Collections.<String>emptySet());
+    }
+
+    RouteTableSnapshot(
+            String endpoint,
+            List<Route> routes,
+            Set<String> dubboDeps,
+            Set<String> mqTopics) {
         this.endpoint = endpoint;
         this.routes = Collections.unmodifiableList(new ArrayList<Route>(routes));
         this.dubboDeps = Collections.unmodifiableSet(
                 new LinkedHashSet<String>(dubboDeps == null ? Collections.<String>emptySet() : dubboDeps));
+        this.mqTopics = Collections.unmodifiableSet(
+                new LinkedHashSet<String>(mqTopics == null ? Collections.<String>emptySet() : mqTopics));
     }
 
     String endpoint() {
@@ -161,11 +172,25 @@ final class RouteTableSnapshot {
                 }
             }
         }
-        return new RouteTableSnapshot(trimSlash(endpoint), parsed, dubbo);
+        Set<String> mq = new LinkedHashSet<String>();
+        JsonNode mqItems = root.get("mq_deps");
+        if (mqItems != null && mqItems.isArray()) {
+            for (JsonNode item : mqItems) {
+                String topic = text(item, "topic");
+                if (topic != null && !topic.isEmpty()) {
+                    mq.add(topic);
+                }
+            }
+        }
+        return new RouteTableSnapshot(trimSlash(endpoint), parsed, dubbo, mq);
     }
 
     boolean isDubboPlanned(String depId) {
         return depId != null && dubboDeps.contains(depId);
+    }
+
+    boolean isMqPlanned(String topic) {
+        return topic != null && mqTopics.contains(topic);
     }
 
     Match resolve(String method, String hostHeader, String rawPath) {

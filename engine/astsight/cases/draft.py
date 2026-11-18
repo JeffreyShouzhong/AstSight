@@ -21,6 +21,7 @@ from contracts import (
     ChangeRef,
     CoverageRole,
     DubboCall,
+    MqAssertion,
     Precondition,
     Priority,
     RuleRef,
@@ -165,6 +166,11 @@ class DraftCase(BaseModel):
         default_factory=dict,
         max_length=100,
         description="dep_id → 有序分支序列",
+    )
+    mq_assertions: list[MqAssertion] = Field(
+        default_factory=list,
+        max_length=50,
+        description="MQ 生产者消息断言；只校验消息，不连 broker",
     )
     dubbo: DubboCall | None = Field(
         default=None,
@@ -388,6 +394,9 @@ def to_test_case(
             key: list(value)
             for key, value in draft_case.mock_sequences.items()
         },
+        mq_assertions=[
+            item.model_copy(deep=True) for item in draft_case.mq_assertions
+        ],
         dubbo=draft_case.dubbo.model_copy(deep=True) if draft_case.dubbo else None,
     )
 
@@ -512,6 +521,16 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
                 ]
             }
             if case.mock_rules
+            else {}
+        ),
+        **(
+            {
+                "mq_assertions": [
+                    item.model_dump(mode="json")
+                    for item in case.mq_assertions
+                ]
+            }
+            if case.mq_assertions
             else {}
         ),
         **(

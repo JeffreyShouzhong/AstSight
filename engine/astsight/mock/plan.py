@@ -23,7 +23,9 @@ from contracts import (
     MockPlanDep,
     MockPlanDubboRoute,
     MockPlanInjection,
+    MockPlanMqRoute,
     MockPlanRoute,
+    MqMockLocator,
     MockRoute,
     MockSession,
     MockStrategy,
@@ -252,10 +254,11 @@ def _materialize_legacy_routes_from_deps(plan: MockPlan) -> None:
     validated Plan 会同时序列化 legacy routes 与派生 deps。为了避免把派生
     deps 误当第二事实源，只要 legacy 路由非空就忽略 deps 输入并由校验重算。
     """
-    if plan.routes or plan.dubbo_routes or not plan.deps:
+    if plan.routes or plan.dubbo_routes or plan.mq_routes or not plan.deps:
         return
     routes: list[MockPlanRoute] = []
     dubbo_routes: list[MockPlanDubboRoute] = []
+    mq_routes: list[MockPlanMqRoute] = []
     for index, dep in enumerate(plan.deps):
         locator = dep.locator
         if dep.transport is Transport.HTTP:
@@ -304,6 +307,21 @@ def _materialize_legacy_routes_from_deps(plan: MockPlan) -> None:
                 "mock_plan_dep_invalid",
                 f"deps[{index}]: gRPC transport 需要 GrpcMockLocator",
             )
+        elif dep.transport is Transport.MQ:
+            _require(
+                isinstance(locator, MqMockLocator),
+                "mock_plan_dep_invalid",
+                f"deps[{index}]: MQ transport 需要 MqMockLocator",
+            )
+            assert isinstance(locator, MqMockLocator)
+            mq_routes.append(
+                MockPlanMqRoute(
+                    dep_id=dep.dep_id,
+                    topic=locator.topic,
+                    client=locator.client,
+                    source=dep.source,
+                )
+            )
         else:
             raise MockPlanError(
                 "mock_plan_dep_invalid",
@@ -311,6 +329,7 @@ def _materialize_legacy_routes_from_deps(plan: MockPlan) -> None:
             )
     plan.routes = routes
     plan.dubbo_routes = dubbo_routes
+    plan.mq_routes = mq_routes
 
 
 def validate_grpc_plan_descriptors(
@@ -391,16 +410,23 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
         dep for dep in plan.deps if dep.transport is Transport.GRPC
     ]
     _require(
-        bool(plan.routes) or bool(plan.dubbo_routes) or bool(grpc_deps),
+        bool(plan.routes)
+        or bool(plan.dubbo_routes)
+        or bool(plan.mq_routes)
+        or bool(grpc_deps),
         "mock_plan_empty",
         "至少需要一条 route",
     )
+    total_routes = (
+        len(plan.routes)
+        + len(plan.dubbo_routes)
+        + len(plan.mq_routes)
+        + len(grpc_deps)
+    )
     _require(
-        len(plan.routes) + len(plan.dubbo_routes) + len(grpc_deps)
-        <= MAX_PLAN_ROUTES,
+        total_routes <= MAX_PLAN_ROUTES,
         "mock_plan_too_many_routes",
-        f"{len(plan.routes) + len(plan.dubbo_routes) + len(grpc_deps)} "
-        f"> {MAX_PLAN_ROUTES}",
+        f"{total_routes} > {MAX_PLAN_ROUTES}",
     )
 
     validation = MockPlanValidation()
@@ -461,6 +487,31 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
                 target=None,
             )
         )
+
+    seen_mq_topics: set[str] = set()
+    for index, route in enumerate(plan.mq_routes):
+        _require(
+            route.dep_id.startswith("mq:"),
+            "mock_dep_id_invalid",
+            f"mq_routes[{index}]: dep_id 必须以 mq: 开头",
+        )
+        _require(
+            bool(route.topic.strip()) and len(route.topic) <= MAX_DEP_ID_CHARS,
+            "mock_mq_topic_invalid",
+            f"mq_routes[{index}]: topic={route.topic!r}",
+        )
+        _require(
+            route.topic not in seen_mq_topics,
+            "mock_route_conflict",
+            f"重复 MQ topic: {route.topic}",
+        )
+        seen_mq_topics.add(route.topic)
+        _require(
+            route.dep_id not in seen_deps,
+            "mock_route_conflict",
+            f"重复 dep_id: {route.dep_id}",
+        )
+        seen_deps.add(route.dep_id)
 
     for index, dep in enumerate(grpc_deps):
         where = f"deps[{index}]"
@@ -692,7 +743,18 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
             branches=dict(route.branches),
         )
         for route in plan.dubbo_routes
-    ] + [dep.model_copy(deep=True) for dep in grpc_deps]
+    ] + [dep.model_copy(deep=True) for dep in grpc_deps] + [
+        MockPlanDep(
+            dep_id=route.dep_id,
+            transport=Transport.MQ,
+            source=route.source,
+            locator=MqMockLocator(
+                topic=route.topic,
+                client=route.client,
+            ),
+        )
+        for route in plan.mq_routes
+    ]
     return validation
 
 
@@ -788,6 +850,10 @@ class MockPlanRuntime:
             "dubbo_routes": [
                 route.model_dump(mode="json") for route in self.plan.dubbo_routes
             ],
+            "mq_route_count": len(self.plan.mq_routes),
+            "mq_routes": [
+                route.model_dump(mode="json") for route in self.plan.mq_routes
+            ],
             "deps": [
                 dep.model_dump(mode="json") for dep in self.plan.deps
             ],
@@ -826,6 +892,10 @@ class MockPlanRuntime:
                 for route in self.plan.routes
             ],
             "dubbo_deps": [route.dep_id for route in self.plan.dubbo_routes],
+            "mq_deps": [
+                {"dep_id": route.dep_id, "topic": route.topic}
+                for route in self.plan.mq_routes
+            ],
             "deps": [
                 dep.model_dump(mode="json") for dep in self.plan.deps
             ],
@@ -849,6 +919,7 @@ class MockPlanRuntime:
             "grpc_binary": self.grpc_binary,
             "route_count": len(self.plan.routes),
             "dubbo_route_count": len(self.plan.dubbo_routes),
+            "mq_route_count": len(self.plan.mq_routes),
             "dep_count": len(self.plan.deps),
             "injection_count": len(self.injections),
             "unsupported_count": sum(
@@ -1011,6 +1082,14 @@ def _build_runtime(
                 transport=Transport.DUBBO,
             )
         )
+    if plan.mq_routes:
+        runtimes.register(
+            EmbeddedMockRuntimeAdapter(
+                server,
+                name="mq_producer",
+                transport=Transport.MQ,
+            )
+        )
     if grpc_deps:
         assert effective_grpc_backend is not None
         runtimes.register(
@@ -1046,6 +1125,12 @@ def _build_runtime(
                 route.dep_id,
                 route_key=route.route_key,
                 branches=dict(route.branches),
+            )
+        for route in plan.mq_routes:
+            server.add_mq_dep(
+                route.dep_id,
+                topic=route.topic,
+                client=route.client,
             )
         runtime = MockPlanRuntime(
             server=server,

@@ -4,7 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from astsight.codegen import generate_pytest
-from contracts import Assertion, CaseStep, DubboCall, TestCase, Transport
+from contracts import (
+    Assertion,
+    CaseStep,
+    DubboCall,
+    MqAssertion,
+    TestCase,
+    Transport,
+)
 
 ENDPOINT = (
     "dubbo:com.acme.OrderService#create(com.acme.CreateOrderRequest)"
@@ -279,3 +286,35 @@ def test_unresolved_case_data_ref_fails_codegen(tmp_path: Path) -> None:
     assert not any(
         path.name.startswith("test_dubbo_") for path in result.files
     )
+
+
+def test_mq_assertion_generates_producer_message_check(tmp_path: Path) -> None:
+    case = _case().model_copy(
+        update={
+            "mq_assertions": [
+                MqAssertion(
+                    dep_id="mq:kafka:orders-topic",
+                    topic="orders-topic",
+                    key="O-1",
+                    headers={"trace": "t1"},
+                    body={"orderId": "O-1"},
+                    count=1,
+                )
+            ]
+        }
+    )
+    result = generate_pytest([case], tmp_path)
+    assert result.errors == []
+    text = next(
+        path for path in result.files if path.name.startswith("test_dubbo_")
+    ).read_text(encoding="utf-8")
+    assert "def test_tc_0001_positive(self" in text
+    assert "mq_tools" in text
+    assert "mq_tools.expect(topic='orders-topic'" in text
+    assert "dep_id='mq:kafka:orders-topic'" in text
+    assert "count=1" in text
+    conftest = (tmp_path / "conftest.py").read_text(encoding="utf-8")
+    assert "class _MqTools" in conftest
+    assert "/_admin/mq/messages" in conftest
+    compile(text, str(tmp_path / "test_mq.py"), "exec")
+    compile(conftest, str(tmp_path / "conftest.py"), "exec")

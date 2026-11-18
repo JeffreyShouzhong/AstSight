@@ -102,4 +102,17 @@ final class RouteTableSnapshotTest {
         assertFalse(table.isDubboPlanned("dubbo:com.acme.OrderService#cancel"));
         assertFalse(table.isDubboPlanned(null));
     }
+
+    @Test
+    void parsesMqProducerTopics() throws Exception {
+        RouteTableSnapshot table = RouteTableSnapshot.parse(
+                "{\"endpoint\":\"http://127.0.0.1:9999\",\"routes\":[],"
+                        + "\"mq_deps\":[{\"dep_id\":\"mq:kafka:orders\","
+                        + "\"topic\":\"orders\"}]}",
+                "http://127.0.0.1:9999");
+
+        assertTrue(table.isMqPlanned("orders"));
+        assertFalse(table.isMqPlanned("other"));
+        assertFalse(table.isMqPlanned(null));
+    }
 }

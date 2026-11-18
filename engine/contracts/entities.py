@@ -233,6 +233,23 @@ class Assertion(BaseModel):
     )
 
 
+class MqAssertion(BaseModel):
+    """MQ 生产者消息断言；只校验 SUT 准备发出的消息，不碰 broker。
+
+    Agent 在生产者侧截获消息并上报，消息不会真正发送。`body`/`headers` 都是
+    子集匹配；`count` 为空表示至少一条，否则要求精确条数。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dep_id: str = Field(default="", max_length=512)
+    topic: str = Field(min_length=1, max_length=512)
+    key: Any = Field(default=None, description="消息 key；None 表示不约束")
+    headers: dict[str, str] = Field(default_factory=dict, max_length=50)
+    body: Any = Field(default=None, description="消息体 JSON 子集")
+    count: int | None = Field(default=None, ge=0, le=10_000)
+
+
 class CaseStep(BaseModel):
     """多请求用例中的一步；`method/path` 由 context 回填，不接受草案自报。"""
 
@@ -359,6 +376,10 @@ class TestCase(BaseModel):
     mock_sequences: dict[str, list[str]] = Field(
         default_factory=dict,
         description="dep_id → 有序分支；规则未命中时按调用次数选择",
+    )
+    mq_assertions: list[MqAssertion] = Field(
+        default_factory=list,
+        description="MQ 生产者消息断言；Agent 拦截，不依赖 broker",
     )
     dubbo: DubboCall | None = Field(
         default=None,

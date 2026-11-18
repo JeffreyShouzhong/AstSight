@@ -594,6 +594,15 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 precision/recall/expression_accuracy，比较目标字段、关系运算、运算集合、
 `response/request/step` 来源与字段路径；不比较操作数顺序。脚本不随测试自动
 调用模型。
+**MQ 生产者拦截（v4.75，Kafka 首版）**：Agent 在生产者侧截获消息，**不真正
+发送、不连 broker**；用例断言 topic/key/headers/payload 子集与条数。计划内
+topic 由 Agent 抑制并返回合成成功，计划外 topic 继续走原始发送。它验证的是
+SUT 准备发什么，不验证 broker 接收、分区路由与序列化字节；回调拿到的
+RecordMetadata 为 null 是已知限制。RabbitMQ、RocketMQ 按使用广泛度排在 Kafka
+之后，尚未实现。消息内容进入统一 Mock 证据（`transport=mq`、
+`adapter=mq-producer`），门禁在计划含 MQ topic 但心跳缺 `mq.installed` 时
+阻断 `mq_producer_not_installed`。
+
 **异步断言优先级（v4.74）**：有消息边界时先断言消息——是否发出、topic/key、
 payload/headers、次数与顺序；不启动消费者，也不轮询数据库。只有 SUT 内部异步
 （线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用

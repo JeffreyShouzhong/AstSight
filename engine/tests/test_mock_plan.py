@@ -21,6 +21,7 @@ from astsight.mock import (
     load_mock_plan,
     route_key_for,
     start_mock_plan,
+    validate_mock_plan,
 )
 from astsight.pipeline import RunConfig, run
 from contracts import (
@@ -30,7 +31,10 @@ from contracts import (
     CaseSet,
     CaseStatus,
     MockPlan,
+    MockPlanMqRoute,
+    MqMockLocator,
     ReviewDecision,
+    Transport,
     TestCase as CaseModel,
 )
 
@@ -471,3 +475,58 @@ def test_mock_plan_conflicts_with_external_mock_flags(tmp_path: Path) -> None:
                 mock_admin_url="http://127.0.0.1:2",
             )
         )
+
+
+def test_mq_plan_derives_dep_and_validates_topic() -> None:
+    plan = MockPlan(
+        sut_id="mq-sut",
+        mq_routes=[
+            MockPlanMqRoute(
+                dep_id="mq:kafka:orders-topic", topic="orders-topic"
+            )
+        ],
+    )
+    validation = validate_mock_plan(plan)
+    assert validation.warnings == []
+    assert len(plan.deps) == 1
+    dep = plan.deps[0]
+    assert dep.transport is Transport.MQ
+    assert isinstance(dep.locator, MqMockLocator)
+    assert dep.locator.topic == "orders-topic"
+
+
+def test_mq_plan_rejects_conflicting_topic() -> None:
+    plan = MockPlan(
+        sut_id="mq-sut",
+        mq_routes=[
+            MockPlanMqRoute(dep_id="mq:kafka:a", topic="same-topic"),
+            MockPlanMqRoute(dep_id="mq:kafka:b", topic="same-topic"),
+        ],
+    )
+    with pytest.raises(MockPlanError):
+        validate_mock_plan(plan)
+
+
+def test_build_mock_plan_collects_mq_only_case() -> None:
+    from types import SimpleNamespace
+
+    from astsight.agent.mockplan import build_mock_plan
+    from contracts import MockSemantic, MqAssertion
+
+    case = SimpleNamespace(
+        mock_bindings={},
+        mock_rules=[],
+        mock_sequences={},
+        mq_assertions=[MqAssertion(topic="orders-topic")],
+    )
+    plan, warnings = build_mock_plan(
+        {},
+        MockSemantic(),
+        SimpleNamespace(cases=[case]),
+        sut_id="mq-sut",
+    )
+    assert plan is not None, warnings
+    assert plan.routes == []
+    assert len(plan.mq_routes) == 1
+    assert plan.mq_routes[0].topic == "orders-topic"
+    assert plan.mq_routes[0].dep_id == "mq:orders-topic"

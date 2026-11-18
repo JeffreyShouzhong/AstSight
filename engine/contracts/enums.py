@@ -294,6 +294,7 @@ class Transport(str, Enum):
     HTTP = "http"
     GRPC = "grpc"
     DUBBO = "dubbo"
+    MQ = "mq"
 
 
 class CoverageRole(str, Enum):

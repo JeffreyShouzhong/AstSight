@@ -853,3 +853,79 @@ def test_binding_reply_merges_case_entity_into_branch_body(tmp_path: Path) -> No
     }
     calls = server.evidence.records
     assert calls[0].branch == "success"
+
+
+def test_mq_publish_is_captured_and_suppressed(tmp_path: Path) -> None:
+    server = MockHttpServer(sut_id="sut1", token=TOKEN)
+    server.add_mq_dep(
+        "mq:kafka:orders-topic", topic="orders-topic", client="kafka"
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            await _call(
+                client,
+                "POST",
+                "/_admin/sessions",
+                headers=ADMIN,
+                json=_session_body("mq:kafka:orders-topic"),
+            )
+            published = await _call(
+                client,
+                "POST",
+                "/_admin/mq/publish",
+                headers=ADMIN,
+                json={
+                    "sut_id": "sut1",
+                    "client": "kafka",
+                    "topic": "orders-topic",
+                    "key": "O-1001",
+                    "headers": {"trace": "t1"},
+                    "body": {"order_id": "O-1001", "status": "paid"},
+                },
+            )
+            messages = await _call(
+                client, "GET", "/_admin/mq/messages", headers=ADMIN
+            )
+            routes = await _call(
+                client, "GET", "/_admin/agent/routes", headers=ADMIN
+            )
+            unplanned = await _call(
+                client,
+                "POST",
+                "/_admin/mq/publish",
+                headers=ADMIN,
+                json={
+                    "sut_id": "sut1",
+                    "topic": "other-topic",
+                    "body": {"ignored": True},
+                },
+            )
+            return published, messages, routes, unplanned
+
+    published, messages, routes, unplanned = _run(scenario())
+    assert published.status_code == 200
+    assert published.json() == {
+        "handled": True,
+        "dep_id": "mq:kafka:orders-topic",
+        "suppressed": True,
+    }
+    payload = messages.json()
+    assert payload["count"] == 1
+    message = payload["messages"][0]
+    assert message["topic"] == "orders-topic"
+    assert message["key"] == "O-1001"
+    assert message["headers"] == {"trace": "t1"}
+    assert message["body"] == {"order_id": "O-1001", "status": "paid"}
+    assert routes.json()["mq_deps"] == [
+        {"dep_id": "mq:kafka:orders-topic", "topic": "orders-topic"}
+    ]
+    assert unplanned.json() == {"handled": False}
+
+    calls = server.evidence.records
+    assert len(calls) == 1
+    assert calls[0].transport == "mq"
+    assert calls[0].adapter == "mq-producer"
+    assert calls[0].mode == "producer_intercept"
+    assert calls[0].original_path == "mq:orders-topic"

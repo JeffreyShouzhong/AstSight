@@ -15,6 +15,7 @@ from contracts import (
     MockPlanDep,
     MockPlanDubboRoute,
     MockPlanInjection,
+    MockPlanMqRoute,
     MockPlanRoute,
     MockSemantic,
     MockStrategy,
@@ -325,7 +326,21 @@ def build_mock_plan(
             bindings.setdefault(str(dep_id), set()).update(
                 str(branch) for branch in sequence
             )
-    if not bindings:
+    mq_topics: dict[str, str] = {}
+    for case in getattr(draft, "cases", []) or []:
+        for item in getattr(case, "mq_assertions", []) or []:
+            topic = str(getattr(item, "topic", "") or "").strip()
+            if not topic:
+                continue
+            dep_id = str(getattr(item, "dep_id", "") or "").strip() or f"mq:{topic}"
+            existing = mq_topics.get(topic)
+            if existing is not None and existing != dep_id:
+                raise AgentError(
+                    "mock_mq_topic_conflict",
+                    f"topic {topic!r} 对应多个 dep_id: {existing!r} / {dep_id!r}",
+                )
+            mq_topics[topic] = dep_id
+    if not bindings and not mq_topics:
         return None, ["mock_plan_skipped:no_case_bindings"]
 
     deps = _dep_index(context)
@@ -436,6 +451,10 @@ def build_mock_plan(
         port=port,
         routes=routes,
         dubbo_routes=dubbo_routes,
+        mq_routes=[
+            MockPlanMqRoute(dep_id=dep_id, topic=topic, client="producer")
+            for topic, dep_id in sorted(mq_topics.items())
+        ],
         deps=grpc_deps,
         injections=injections,
     )

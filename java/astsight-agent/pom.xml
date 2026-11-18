@@ -29,6 +29,11 @@
       <artifactId>astsight-agent-dubbo</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <dependency>
+      <groupId>io.astsight</groupId>
+      <artifactId>astsight-agent-kafka</artifactId>
+      <version>${project.version}</version>
+    </dependency>
   </dependencies>
 
   <build>

@@ -1487,6 +1487,8 @@ def _case_data_refs(draft_case: DraftCase) -> list[str]:
         values.extend([assertion.expect, assertion.where])
     for precondition in draft_case.preconditions:
         values.extend([precondition.where, precondition.set])
+    for item in draft_case.mq_assertions:
+        values.extend([item.key, item.body])
     refs: list[str] = []
     for value in values:
         refs.extend(iter_data_refs(value))
@@ -1629,6 +1631,105 @@ def _check_case_data(
                     path=path,
                 )
             )
+
+
+def _check_mq_assertions(
+    draft_case: DraftCase,
+    *,
+    case_key: str,
+    endpoint: str,
+    path: str,
+    result: ValidationResult,
+) -> None:
+    """MQ 消息断言只校验生产者拦截结果，必须有 topic，dep_id 前缀固定。"""
+    if draft_case.transport is Transport.MQ:
+        result.errors.append(
+            _issue(
+                "error",
+                "case.transport_mq_unsupported",
+                "transport=mq 不能作为被测入口；MQ 只作为下游消息断言",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    seen_topics: set[str] = set()
+    for index, item in enumerate(draft_case.mq_assertions):
+        topic = str(item.topic or "").strip()
+        if not topic or len(topic) > _MAX_DEP_ID_LENGTH:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mq.topic_invalid",
+                    f"mq_assertions[{index}] 的 topic 为空或过长",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if topic in seen_topics:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mq.topic_duplicate",
+                    f"mq_assertions 中 topic 重复: {topic!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        seen_topics.add(topic)
+        dep_id = str(item.dep_id or "").strip()
+        if dep_id and (
+            not dep_id.startswith("mq:") or len(dep_id) > _MAX_DEP_ID_LENGTH
+        ):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mq.dep_id_invalid",
+                    f"mq_assertions[{index}] 的 dep_id 必须以 mq: 开头",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if item.body is not None and (
+            body_depth(item.body) > MAX_BODY_DEPTH
+            or body_item_count(item.body) > MAX_BODY_ITEMS
+        ):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mq.body_too_large",
+                    f"mq_assertions[{index}] 的 body 超过深度/条目上限",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        for name, value in item.headers.items():
+            if not str(name).strip() or len(str(name)) > 200:
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "mq.header_invalid",
+                        f"mq_assertions[{index}] 的 header 名非法: {name!r}",
+                        case_key=case_key,
+                        endpoint=endpoint,
+                        path=path,
+                    )
+                )
+            if not isinstance(value, str):
+                result.errors.append(
+                    _issue(
+                        "error",
+                        "mq.header_invalid",
+                        f"mq_assertions[{index}] 的 header 值必须是字符串",
+                        case_key=case_key,
+                        endpoint=endpoint,
+                        path=path,
+                    )
+                )
 
 
 def _check_mock_bindings(
@@ -2849,6 +2950,13 @@ def validate_draft(
                     path=pseudo_path,
                 )
             )
+        _check_mq_assertions(
+            draft_case,
+            case_key=key,
+            endpoint=endpoint_raw,
+            path=pseudo_path,
+            result=result,
+        )
         _check_case_data(
             draft_case,
             case_key=key,

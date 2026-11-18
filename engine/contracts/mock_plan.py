@@ -125,7 +125,28 @@ class GrpcMockLocator(BaseModel):
     descriptor_sha256: str | None = None
 
 
-MockLocator = Union[HttpMockLocator, DubboMockLocator, GrpcMockLocator]
+class MqMockLocator(BaseModel):
+    """统一 Plan 中的 MQ 生产者定位信息；只按 topic 识别，不连 broker。"""
+
+    transport: Literal["mq"] = "mq"
+    topic: str = Field(min_length=1, max_length=512)
+    client: str = Field(default="", max_length=64)
+
+
+MockLocator = Union[
+    HttpMockLocator, DubboMockLocator, GrpcMockLocator, MqMockLocator
+]
+
+
+class MockPlanMqRoute(BaseModel):
+    """一个 MQ 生产 topic；Agent 截获后不再真正发送。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dep_id: str = Field(min_length=1, max_length=512)
+    topic: str = Field(min_length=1, max_length=512)
+    client: str = Field(default="", max_length=64)
+    source: str = "plan"
 
 
 class MockPlanDep(BaseModel):
@@ -165,6 +186,7 @@ class MockPlan(BaseModel):
     capture_bodies: bool = False
     routes: list[MockPlanRoute] = Field(default_factory=list)
     dubbo_routes: list[MockPlanDubboRoute] = Field(default_factory=list)
+    mq_routes: list[MockPlanMqRoute] = Field(default_factory=list)
     deps: list[MockPlanDep] = Field(
         default_factory=list,
         description="由 validated routes/dubbo_routes 派生的协议中立视图",
@@ -181,5 +203,7 @@ __all__ = [
     "MockPlanDep",
     "MockPlanDubboRoute",
     "MockPlanInjection",
+    "MockPlanMqRoute",
     "MockPlanRoute",
+    "MqMockLocator",
 ]

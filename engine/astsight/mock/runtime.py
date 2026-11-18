@@ -62,7 +62,7 @@ class EmbeddedMockRuntimeAdapter(MockRuntimeAdapter):
         name: str,
         transport: Transport,
     ):
-        if transport not in (Transport.HTTP, Transport.DUBBO):
+        if transport not in (Transport.HTTP, Transport.DUBBO, Transport.MQ):
             raise ValueError(f"unsupported embedded transport: {transport.value}")
         self.server = server
         self.name = name
@@ -82,8 +82,13 @@ class EmbeddedMockRuntimeAdapter(MockRuntimeAdapter):
         return None
 
     def _owns(self, call: MockCall) -> bool:
+        is_mq = call.transport is Transport.MQ or call.adapter == "mq-producer"
         is_dubbo = call.adapter == "dubbo-filter" or call.mode == "agent_filter"
-        return is_dubbo if self.transport is Transport.DUBBO else not is_dubbo
+        if self.transport is Transport.MQ:
+            return is_mq
+        if self.transport is Transport.DUBBO:
+            return is_dubbo
+        return not is_dubbo and not is_mq
 
 
 class MockRuntimeManager:

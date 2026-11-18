@@ -1412,6 +1412,35 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 
 ---
 
+## 11C. MQ 消息断言（Kafka 首版）
+
+异步消息不连 broker，也不启动消费者：Java agent 在生产者侧截获消息，命中
+计划内 topic 时不真正发送，只把内容交给 AstSight 做断言。
+
+```json
+"mq_assertions": [
+  {
+    "topic": "orders-topic",
+    "key": "O-1001",
+    "headers": {"trace": "t1"},
+    "body": {"order_id": "O-1001", "status": "paid"},
+    "count": 1
+  }
+]
+```
+
+- `topic` 必填；`key`、`headers`、`body` 都是子集匹配，`count` 为空表示至少一条。
+- 需要 SUT 通过 Java agent 启动；计划内 topic 必须能从
+  `/_admin/agent/routes` 的 `mq_deps` 读到。
+- 消息不会真正发到 broker；报告里 `transport=mq`、`mode=producer_intercept`。
+- 只验证“SUT 准备发什么”，不验证 broker 接收、分区路由和序列化字节；
+  Agent 返回的 `RecordMetadata` 为 null，依赖元数据的回调需要自行容错。
+- 计划含 MQ topic 但 Agent 心跳没有 `mq.installed` 时，门禁阻断为
+  `mq_producer_not_installed`，不会静默当作已拦截。
+- 当前只支持 Kafka；RabbitMQ、RocketMQ 按使用广泛度排在后面，尚未实现。
+
+---
+
 ## 12. 运行模式
 
 同一个引擎，差异只在范围。`run` 默认 `--mode delta`。

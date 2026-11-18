@@ -24,6 +24,7 @@ from contracts import (
     MockRequestMatch,
     MockStub,
     MockStrategy,
+    MqAssertion,
     Precondition,
     Rule,
     RuleAuthority,
@@ -531,3 +532,30 @@ def test_db_unchanged_requires_where_and_rejects_expect(tmp_path: Path) -> None:
     assert "assertion.db_expect_unexpected" in codes
     assert "assertion.db_unchanged_wait_unsupported" in codes
     assert "assertion.db_ignore_unexpected" in codes
+
+
+def test_mq_assertions_validate_topic_and_dep(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        mq_assertions=[
+            MqAssertion(topic="orders-topic", dep_id="mq:kafka:orders"),
+            MqAssertion(topic="orders-topic", dep_id="bad:orders"),
+        ],
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    codes = {item.code for item in result.errors}
+    assert "mq.topic_duplicate" in codes
+    assert "mq.dep_id_invalid" in codes
+
+
+def test_mq_cannot_be_case_transport(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        transport=Transport.MQ,
+        mq_assertions=[MqAssertion(topic="orders-topic")],
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    codes = {item.code for item in result.errors}
+    assert "case.transport_mq_unsupported" in codes

@@ -70,8 +70,8 @@ DBML `Enum` note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量、Java/Python/Go/TS
 **异步断言的优先级**：如果异步边界是消息，应该断言消息本身（是否发出、topic/key、
 payload/headers、次数与顺序），不启动消费者、也不去轮询数据库；只有 SUT 内部
 异步（线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用
-`db_row.wait_ms` 等数据库最终状态。MQ 消息捕获与断言目前尚未实现，是比
-“多行异步轮询”更值得做的方向。
+`db_row.wait_ms` 等数据库最终状态。MQ 生产者拦截已落地 Kafka 首版（不连
+broker、消息不真正发送），RabbitMQ 与 RocketMQ 按使用广泛度排在后面。
 真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务判断仍回需求原文”。
 
 ### 3. 文档差异化定位落到门面（已完成）

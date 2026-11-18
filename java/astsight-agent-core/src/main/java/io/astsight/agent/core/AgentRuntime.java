@@ -1,5 +1,6 @@
 package io.astsight.agent.core;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -44,6 +45,10 @@ public final class AgentRuntime {
     private final AtomicLong dubboFilterHits = new AtomicLong();
     private final AtomicLong dubboPassthrough = new AtomicLong();
     private final AtomicLong dubboErrors = new AtomicLong();
+    private final AtomicLong mqPublished = new AtomicLong();
+    private final AtomicLong mqSuppressed = new AtomicLong();
+    private final AtomicLong mqErrors = new AtomicLong();
+    private volatile boolean mqInstalled;
     private volatile boolean dubboInstalled;
     private volatile String dubboVersion;
     private volatile RouteTableSnapshot routes;
@@ -209,6 +214,65 @@ public final class AgentRuntime {
         note("rewrite failed [" + adapterId + "]: " + failure);
     }
 
+    // ----------------------------------------------------------- MQ Producer
+
+    public void mqModuleInstalled() {
+        mqInstalled = true;
+    }
+
+    /**
+     * 上报一条生产者消息。计划内 topic 返回 true，调用方必须抑制真实发送；
+     * admin 不可用时同样返回 true（失败关闭），并计入 mqErrors。
+     */
+    public boolean publishMq(
+            String client,
+            String topic,
+            JsonNode key,
+            java.util.Map<String, String> headers,
+            JsonNode body) {
+        mqPublished.incrementAndGet();
+        RouteTableSnapshot snapshot = routes;
+        if (snapshot == null || !snapshot.isMqPlanned(topic)) {
+            return false;
+        }
+        try {
+            ObjectNode payload = Json.MAPPER.createObjectNode();
+            payload.put("sut_id", options.sutId());
+            payload.put("client", client == null ? "" : client);
+            payload.put("topic", topic == null ? "" : topic);
+            if (key == null) {
+                payload.putNull("key");
+            } else {
+                payload.set("key", key);
+            }
+            ObjectNode headerNode = payload.putObject("headers");
+            if (headers != null) {
+                for (java.util.Map.Entry<String, String> entry : headers.entrySet()) {
+                    headerNode.put(entry.getKey(), entry.getValue());
+                }
+            }
+            if (body == null) {
+                payload.putNull("body");
+            } else {
+                payload.set("body", body);
+            }
+            String response = admin.publishMq(payload.toString());
+            JsonNode node = Json.MAPPER.readTree(response);
+            boolean handled = node != null
+                    && node.has("handled")
+                    && node.get("handled").asBoolean(false);
+            if (handled) {
+                mqSuppressed.incrementAndGet();
+            }
+            return handled;
+        } catch (Throwable failure) {
+            mqErrors.incrementAndGet();
+            note("mq publish failed: " + failure);
+            // 计划内 MQ 不能因为 admin 故障退化为真实发送。
+            return true;
+        }
+    }
+
     // ----------------------------------------------------------- Dubbo Filter
 
     public String adminUrl() {
@@ -333,6 +397,13 @@ public final class AgentRuntime {
         ObjectNode hosts = node.putObject("passthrough_hosts");
         for (Map.Entry<String, Long> entry : passthroughHosts.entrySet()) {
             hosts.put(entry.getKey(), entry.getValue());
+        }
+        if (mqInstalled) {
+            ObjectNode mq = node.putObject("mq");
+            mq.put("installed", true);
+            mq.put("published", mqPublished.get());
+            mq.put("suppressed", mqSuppressed.get());
+            mq.put("errors", mqErrors.get());
         }
         if (dubboInstalled) {
             ObjectNode dubbo = node.putObject("dubbo");

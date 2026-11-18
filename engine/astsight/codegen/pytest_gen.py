@@ -726,6 +726,106 @@ class _DbTools:
             self._conn = None
 
 
+class _MqTools:
+    """MQ 生产者消息断言；只读取 Agent 拦截结果，不连 broker。"""
+
+    def expect(
+        self,
+        *,
+        topic=None,
+        dep_id=None,
+        key=None,
+        headers=None,
+        body=None,
+        count=None,
+        timeout_ms=2000,
+    ):
+        if not MOCK_ADMIN_URL:
+            pytest.skip(
+                "mq_unavailable: ASTSIGHT_MOCK_ADMIN_URL is not configured; "
+                "message assertion was not executed"
+            )
+        deadline = time.monotonic() + max(0, int(timeout_ms)) / 1000.0
+        while True:
+            response = httpx.get(
+                f"{MOCK_ADMIN_URL}/_admin/mq/messages",
+                headers=_mock_headers(),
+                timeout=TIMEOUT,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"mq_messages_failed: {response.status_code} "
+                    f"{response.text[:500]}"
+                )
+            messages = response.json().get("messages") or []
+            matched = [
+                item for item in messages
+                if _mq_matches(
+                    item,
+                    topic=topic,
+                    dep_id=dep_id,
+                    key=key,
+                    headers=headers,
+                    body=body,
+                )
+            ]
+            if count is None:
+                ok = bool(matched)
+            else:
+                ok = len(matched) == int(count)
+            if ok:
+                return matched
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "mq_publish expected "
+                    f"topic={topic!r} dep_id={dep_id!r} count={count!r}, "
+                    f"got {len(matched)} of {len(messages)} messages"
+                )
+            time.sleep(0.05)
+
+
+def _mq_subset(expected, actual):
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        return all(
+            name in actual and _mq_subset(value, actual[name])
+            for name, value in expected.items()
+        )
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) < len(expected):
+            return False
+        return all(
+            _mq_subset(left, right)
+            for left, right in zip(expected, actual)
+        )
+    return expected == actual
+
+
+def _mq_matches(item, *, topic=None, dep_id=None, key=None, headers=None, body=None):
+    if topic is not None and item.get("topic") != topic:
+        return False
+    if dep_id is not None and item.get("dep_id") != dep_id:
+        return False
+    if key is not None and item.get("key") != key:
+        return False
+    expected_headers = headers or {}
+    actual_headers = item.get("headers") or {}
+    if any(
+        actual_headers.get(name) != value
+        for name, value in expected_headers.items()
+    ):
+        return False
+    if body is not None and not _mq_subset(body, item.get("body")):
+        return False
+    return True
+
+
+@pytest.fixture()
+def mq_tools():
+    return _MqTools()
+
+
 class _SchemaTools:
     def check(self, body, schema):
         try:
@@ -1412,6 +1512,8 @@ def _case_data_refs(case: TestCase) -> list[str]:
         values.extend([assertion.expect, assertion.where])
     for precondition in case.preconditions:
         values.extend([precondition.where, precondition.set])
+    for item in case.mq_assertions:
+        values.extend([item.key, item.body])
     refs: list[str] = []
     for value in values:
         refs.extend(iter_data_refs(value))
@@ -1451,6 +1553,8 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
         fixtures.append("db_tools")
     if any(assertion.kind == "body_schema" for assertion in assertions):
         fixtures.append("schema_tools")
+    if case.mq_assertions:
+        fixtures.append("mq_tools")
     lines: list[str] = []
     if requires_data or has_data_plan:
         # 有前置状态或已生成 plan 的用例必须走 data_state fixture：
@@ -1474,8 +1578,29 @@ def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
         inner = _dubbo_case_lines(case)
     else:
         inner = _single_request_lines(case)
+    inner.extend(_mq_lines(case))
     lines.extend("    " + line for line in inner)
     return "\n".join(lines)
+
+
+def _mq_lines(case: TestCase) -> list[str]:
+    lines: list[str] = []
+    for item in case.mq_assertions:
+        parts = [f"topic={item.topic!r}"]
+        if item.dep_id:
+            parts.append(f"dep_id={item.dep_id!r}")
+        if item.key is not None:
+            parts.append(f"key={item.key!r}")
+        if item.headers:
+            parts.append(f"headers={item.headers!r}")
+        if item.body is not None:
+            parts.append(f"body={item.body!r}")
+        if item.count is not None:
+            parts.append(f"count={int(item.count)}")
+        lines.append(
+            f"        mq_tools.expect({', '.join(parts)})"
+        )
+    return lines
 
 
 def _case_mock_bindings(case: TestCase) -> dict[str, Any]:
