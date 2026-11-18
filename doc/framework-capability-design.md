@@ -2029,7 +2029,9 @@ MockRuntimeAdapter
 - MockSemantic 已使用真实 `transport=dubbo` / `DubboMockReply`，HTTP status 不再校验 Dubbo/gRPC；
 - gRPC Plan 已支持纯 `deps[]` 输入；`descriptor_source` 可为 `.proto` 或 `.protoset`，`.proto` 经 `grpc_tools.protoc` 递归编译，方法必须是 unary，所有分支 body 安装前按响应 message descriptor 严格校验，并记录 `descriptor_sha256`；
 - `GrpcMockRuntimeAdapter` 已实现按 session 清理/安装 stubs、`GET /api/history` 归一化、canonical gRPC status 映射；`GripMockHttpBackend` 使用官方 `/api/stubs`、`/api/history`、readiness API；`GripMockProcess` 管理子进程、端口环境、日志和启动就绪；
-- gRPC Plan 尚未接入 `MockPlanRuntime` 的自动进程启动/target 改写，已通过 descriptor 校验的 gRPC Plan 在 `start_mock_plan` 时仍显式阻断 `mock_grpc_runtime_unimplemented`；semantic 自动采样属后续阶段。
+- `MockHttpServer` session lifecycle 已接入 `RuntimeSessionBridge`：创建 session 时激活全部 runtime，drain 时采集并去重写入统一证据，关闭时清理 stubs；gRPC-only Plan 使用内嵌 HTTP 控制面管理 session/health/evidence；
+- `start_mock_plan(..., grpc_backend=...)` 已允许注入 `GripMockBackend`；未提供 backend 时仍显式阻断 `mock_grpc_runtime_unimplemented`；
+- gripmock 子进程自动启动、端口分配、SUT gRPC target 改写和 semantic 自动采样仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 

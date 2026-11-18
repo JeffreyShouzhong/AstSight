@@ -1,7 +1,9 @@
 """gRPC Mock runtime adapter 与 gripmock REST backend 测试。"""
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -11,6 +13,7 @@ from astsight.mock import (
     GripMockProcess,
     GrpcMockRuntimeAdapter,
     GrpcMockRuntimeError,
+    start_mock_plan,
 )
 from contracts import (
     GrpcMockLocator,
@@ -18,6 +21,7 @@ from contracts import (
     GrpcStatus,
     MockBinding,
     MockPlanDep,
+    MockPlan,
     MockSession,
     MockStub,
     Transport,
@@ -217,3 +221,102 @@ def test_gripmock_process_uses_allocated_ports_and_missing_binary_is_explicit(
     with pytest.raises(GrpcMockRuntimeError) as error:
         process.start()
     assert error.value.code == "mock_binary_missing"
+
+
+def test_grpc_plan_session_lifecycle_installs_collects_and_clears(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "inventory.proto").write_text(
+        """
+        syntax = "proto3";
+        package inventory.v1;
+        message ReserveRequest { string sku = 1; }
+        message ReserveResponse { bool available = 1; }
+        service InventoryService {
+          rpc Reserve(ReserveRequest) returns (ReserveResponse);
+        }
+        """,
+        encoding="utf-8",
+    )
+    plan = MockPlan(
+        sut_id="sut",
+        deps=[
+            MockPlanDep(
+                dep_id="grpc:/inventory.v1.InventoryService/Reserve",
+                transport=Transport.GRPC,
+                locator=GrpcMockLocator(
+                    grpc_path="/inventory.v1.InventoryService/Reserve",
+                    descriptor_source="inventory.proto",
+                ),
+                branches={"success": MockStub(body={"available": True})},
+                replies={"success": GrpcMockReply(body={"available": True})},
+            )
+        ],
+    )
+    plan_path = tmp_path / "grpc-plan.json"
+    plan_path.write_text(
+        json.dumps(plan.model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    backend = FakeBackend()
+    runtime = start_mock_plan(
+        plan_path,
+        history_path=tmp_path / "mock_calls.jsonl",
+        grpc_backend=backend,
+    )
+
+    async def scenario() -> None:
+        transport = httpx.ASGITransport(app=runtime.server.app)
+        headers = {"Authorization": f"Bearer {runtime.token}"}
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            created = await client.post(
+                "/_admin/sessions",
+                headers=headers,
+                json={
+                    "session_id": "S-1",
+                    "namespace": "sut",
+                    "case_id": "TC-1",
+                    "bindings": [
+                        {
+                            "dep_id": "grpc:/inventory.v1.InventoryService/Reserve",
+                            "branch": "success",
+                        }
+                    ],
+                },
+            )
+            assert created.status_code == 200, created.text
+            assert len(backend.installed) == 1
+            backend.records = [
+                {
+                    "service": "inventory.v1.InventoryService",
+                    "method": "Reserve",
+                    "stubId": "stub-1",
+                    "code": 0,
+                    "elapsedMs": 2,
+                    "timestamp": "2026-11-18T00:00:01Z",
+                }
+            ]
+            drained = await client.post(
+                "/_admin/sessions/S-1/drain",
+                headers=headers,
+                json={"timeout_ms": 20},
+            )
+            assert drained.status_code == 200, drained.text
+            deleted = await client.delete(
+                "/_admin/sessions/S-1",
+                headers=headers,
+            )
+            assert deleted.status_code == 200, deleted.text
+
+    try:
+        asyncio.run(scenario())
+        assert [call.transport for call in runtime.server.evidence.records] == [
+            Transport.GRPC
+        ]
+        assert runtime.server.evidence.records[0].branch == "success"
+        assert backend.cleared_stubs >= 2
+    finally:
+        runtime.stop()

@@ -46,6 +46,7 @@ from .runtime import (
     MockRuntimeAdapter,
     MockRuntimeError,
     MockRuntimeManager,
+    RuntimeSessionBridge,
 )
 from .server import DubboRouteEntry, MockHttpServer, MockLimits, MockResponseError
 from .sessions import SessionError, SessionManager
@@ -78,6 +79,7 @@ __all__ = [
     "MockRuntimeAdapter",
     "MockRuntimeError",
     "MockRuntimeManager",
+    "RuntimeSessionBridge",
     "NormalizedTarget",
     "RouteEntry",
     "RouteResolution",

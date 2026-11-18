@@ -40,9 +40,11 @@ from .identity import (
 )
 from .server import MockHttpServer
 from .grpc_descriptor import GrpcDescriptorError, GrpcDescriptorIndex
+from .grpc_runtime import GripMockBackend, GrpcMockRuntimeAdapter
 from .runtime import (
     EmbeddedMockRuntimeAdapter,
     MockRuntimeManager,
+    RuntimeSessionBridge,
 )
 
 MAX_PLAN_BYTES = 4 * 1024 * 1024
@@ -845,12 +847,18 @@ class MockPlanRuntime:
             raise runtime_error
 
 
-def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path | None):
+def _build_runtime(
+    plan: MockPlan,
+    *,
+    plan_path: Path,
+    history_path: str | Path | None,
+    grpc_backend: GripMockBackend | None = None,
+):
     validation = validate_mock_plan(plan)
     grpc_deps = [
         dep.dep_id for dep in plan.deps if dep.transport is Transport.GRPC
     ]
-    if grpc_deps:
+    if grpc_deps and grpc_backend is None:
         raise MockPlanError(
             "mock_grpc_runtime_unimplemented",
             ",".join(grpc_deps[:10]),
@@ -884,6 +892,17 @@ def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path 
                 transport=Transport.DUBBO,
             )
         )
+    if grpc_deps:
+        assert grpc_backend is not None
+        runtimes.register(
+            GrpcMockRuntimeAdapter(
+                grpc_backend,
+                [dep for dep in plan.deps if dep.transport is Transport.GRPC],
+            )
+        )
+    server.set_session_lifecycle(
+        RuntimeSessionBridge(runtimes, server.evidence)
+    )
     try:
         for route in plan.routes:
             assert route.route_key is not None
@@ -941,11 +960,17 @@ def start_mock_plan(
     plan_path: str | Path,
     *,
     history_path: str | Path | None = None,
+    grpc_backend: GripMockBackend | None = None,
 ) -> MockPlanRuntime:
     """加载计划、构建路由表并启动内嵌服务；失败时保证不留下半启动实例。"""
     resolved = Path(plan_path).resolve()
     plan = load_mock_plan(resolved)
-    return _build_runtime(plan, plan_path=resolved, history_path=history_path)
+    return _build_runtime(
+        plan,
+        plan_path=resolved,
+        history_path=history_path,
+        grpc_backend=grpc_backend,
+    )
 
 
 __all__ = [

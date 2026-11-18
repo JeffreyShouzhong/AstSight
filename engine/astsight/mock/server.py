@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qsl
 
 import httpx
@@ -77,6 +77,14 @@ class MockLimits:
     max_concurrency: int = 64
     capture_body_bytes: int = 65_536
     drop_timeout_ms: int = 1_000
+
+
+class SessionLifecycle(Protocol):
+    def on_created(self, session) -> None: ...
+
+    def on_draining(self, session) -> None: ...
+
+    def on_closed(self, session) -> None: ...
 
 
 class MockResponseError(ValueError):
@@ -241,6 +249,10 @@ class MockHttpServer:
         self._inflight = 0
         self._inflight_lock = threading.Lock()
         self._agent: MockAgent | None = None
+        self._session_lifecycle: SessionLifecycle | None = None
+
+    def set_session_lifecycle(self, lifecycle: SessionLifecycle | None) -> None:
+        self._session_lifecycle = lifecycle
 
     # ------------------------------------------------------------- 路由注册
 
@@ -554,6 +566,19 @@ class MockHttpServer:
                 return _error_response(exc.status, exc.code, dep_id=exc.detail or None)
             except (KeyError, TypeError, ValueError) as exc:
                 return _error_response(400, "invalid_session", dep_id=str(exc))
+            if self._session_lifecycle is not None:
+                try:
+                    self._session_lifecycle.on_created(session)
+                except Exception as exc:
+                    try:
+                        self.sessions.delete(session.session_id)
+                    except Exception:
+                        pass
+                    return _error_response(
+                        502,
+                        "mock_runtime_activate_failed",
+                        dep_id=f"{type(exc).__name__}: {exc}"[:500],
+                    )
             return session.model_dump()
 
         @app.post("/_admin/sessions/{session_id}/drain")
@@ -581,6 +606,17 @@ class MockHttpServer:
             while inflight and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
                 inflight = self._inflight_count()
+            if self._session_lifecycle is not None:
+                try:
+                    self._session_lifecycle.on_draining(
+                        self.sessions.current() or current
+                    )
+                except Exception as exc:
+                    return _error_response(
+                        502,
+                        "mock_runtime_collect_failed",
+                        dep_id=f"{type(exc).__name__}: {exc}"[:500],
+                    )
             result = MockDrainResult(
                 session_id=session_id,
                 drained=inflight == 0,
@@ -591,6 +627,20 @@ class MockHttpServer:
 
         @app.delete("/_admin/sessions/{session_id}")
         async def _delete_session(session_id: str):
+            current = self.sessions.current()
+            if (
+                self._session_lifecycle is not None
+                and current is not None
+                and current.session_id == session_id
+            ):
+                try:
+                    self._session_lifecycle.on_closed(current)
+                except Exception as exc:
+                    return _error_response(
+                        502,
+                        "mock_runtime_deactivate_failed",
+                        dep_id=f"{type(exc).__name__}: {exc}"[:500],
+                    )
             try:
                 session = self.sessions.delete(session_id)
             except SessionError as exc:

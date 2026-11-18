@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 from contracts import MockCall, MockSession, Transport
 
+from .evidence import MockEvidenceWriter
 from .server import MockHttpServer
 
 
@@ -180,9 +181,40 @@ class MockRuntimeManager:
             )
 
 
+class RuntimeSessionBridge:
+    """把统一 Session 生命周期接到多协议 runtime 与证据。"""
+
+    def __init__(
+        self,
+        runtimes: MockRuntimeManager,
+        evidence: MockEvidenceWriter,
+    ):
+        self.runtimes = runtimes
+        self.evidence = evidence
+
+    def on_created(self, session: MockSession) -> None:
+        self.runtimes.activate(session)
+
+    def on_draining(self, session: MockSession) -> None:
+        self._flush(session)
+
+    def on_closed(self, session: MockSession) -> None:
+        self._flush(session)
+        self.runtimes.deactivate(session)
+
+    def _flush(self, session: MockSession) -> None:
+        existing = {call.call_id for call in self.evidence.records}
+        for call in self.runtimes.collect(session):
+            if call.call_id in existing:
+                continue
+            existing.add(call.call_id)
+            self.evidence.write(call)
+
+
 __all__ = [
     "EmbeddedMockRuntimeAdapter",
     "MockRuntimeAdapter",
     "MockRuntimeError",
     "MockRuntimeManager",
+    "RuntimeSessionBridge",
 ]
