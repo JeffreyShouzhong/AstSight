@@ -139,6 +139,10 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
   外键并写 `fixture_fk_autofilled`；多个父键且未显式引用时阻断
   `fixture_fk_ambiguous`。INSERT 按 catalog 拓扑序、teardown 按逆拓扑逐行执行，
   多父多子在同一事务内应用和回收。
+- **`state_paths` 可执行展开**：每个线性迁移路径生成一个 `state_path_*`
+  DataState，按 `pending → paid → shipped` 的起点/终点去重后逐状态生成一行；
+  自动分配唯一主键、共享并补齐父表、回填子表外键，`target_state` 指向路径终点。
+  生成的 state 可直接被用例 `preconditions[].state_key` 引用。
 - **C5a 语义候选一律带来源**：注释、DBML Enum note、数据库枚举、规则常量与代码枚举/
   常量组（Java/Python/Go/TS，含 Java `static final`、Go `const`、TS `as const`）
   只能产出 `inferred` 候选；`source` 记录

@@ -687,6 +687,20 @@ def test_multi_step_transition_paths_are_built() -> None:
         ("paid", "shipped"),
     ]
     assert [step.rule_key for step in path.steps] == ["RK-BR-01", "RK-BR-02"]
+    expanded = next(
+        state
+        for state in catalog.states
+        if state.state_key.startswith("state_path_")
+    )
+    rows = expanded.table_values["orders"]
+    assert [row["status"] for row in rows] == [
+        "pending",
+        "paid",
+        "shipped",
+    ]
+    assert [row["id"] for row in rows] == [1, 2, 3]
+    assert expanded.target_state == {"orders": {"status": "shipped"}}
+    assert catalog.sources["rule_states"]["expanded_states"] == 1
 
 
 def test_paired_columns_also_form_multi_step_paths() -> None:
@@ -744,6 +758,21 @@ def test_paired_columns_also_form_multi_step_paths() -> None:
         ("pending", "paid"),
         ("paid", "shipped"),
     ]
+    expanded = next(
+        state
+        for state in catalog.states
+        if state.state_key.startswith("state_path_")
+    )
+    assert [
+        (row["from_status"], row["to_status"])
+        for row in expanded.table_values["events"]
+    ] == [
+        ("pending", "paid"),
+        ("paid", "shipped"),
+    ]
+    assert expanded.target_state == {
+        "events": {"to_status": "shipped"}
+    }
 
 
 def test_data_states_cli_lists_paths(tmp_path: Path, capsys) -> None:

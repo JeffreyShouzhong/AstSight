@@ -32,7 +32,7 @@ from .annotations import (
 from .codeconst import CodeEnum, fold_code_enums
 from .ddl import ParsedColumn, ParsedDDL, ParsedTable
 from .seed import SeedData
-from .states import StateProposal, propose_rule_states
+from .states import StateProposal, expand_state_paths, propose_rule_states
 
 CATALOG_SCHEMA_VERSION = 1
 MAX_TABLES = 500
@@ -277,6 +277,11 @@ def build_catalog(
         propose_rule_states(tables, ruleset) if rule_states else StateProposal()
     )
     warnings.extend(state_proposal.warnings)
+    path_states, path_warnings = expand_state_paths(
+        tables,
+        state_proposal.paths,
+    )
+    warnings.extend(path_warnings)
     if len(tables) > MAX_TABLES:
         raise ValueError(f"表数量超过上限 {MAX_TABLES}")
     table_index = {table.name: table for table in tables}
@@ -328,6 +333,7 @@ def build_catalog(
     for state in [
         *(states or []),
         *state_proposal.states,
+        *path_states,
         *_seed_states(seed),
     ]:
         if state.state_key in seen_states:
@@ -345,6 +351,8 @@ def build_catalog(
                 if gap.get("kind") == "state_placeholder"
             ),
         }
+        if path_states:
+            sources_out["rule_states"]["expanded_states"] = len(path_states)
     if code_enums:
         sources_out["code_enums"] = {
             "files": sorted({enum.path for enum in code_enums}),

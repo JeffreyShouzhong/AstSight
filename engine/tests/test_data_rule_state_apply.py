@@ -135,6 +135,92 @@ def test_cross_table_rule_state_reaches_database(tmp_path: Path) -> None:
         )
 
 
+def test_state_path_expands_to_parent_child_rows_in_database(
+    tmp_path: Path,
+) -> None:
+    ddl = """
+    CREATE TABLE orders (
+      id INTEGER PRIMARY KEY,
+      code TEXT NOT NULL
+    );
+    CREATE TABLE order_items (
+      id INTEGER PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id),
+      status TEXT NOT NULL
+    );
+    """
+    first = _rule(
+        RuleConstraint(
+            field="order_items.status",
+            operator="transition",
+            values=["pending", "paid"],
+            condition="支付",
+        )
+    ).model_copy(update={"rule_key": "RK-path-1", "rule_id": "BR-01"})
+    second = _rule(
+        RuleConstraint(
+            field="order_items.status",
+            operator="transition",
+            values=["paid", "shipped"],
+            condition="发货",
+        )
+    ).model_copy(update={"rule_key": "RK-path-2", "rule_id": "BR-02"})
+    catalog = build_catalog(
+        project="demo",
+        ddl=parse_ddl(ddl),
+        ruleset=RuleSet(
+            ruleset_id="rules-path-e2e",
+            project="demo",
+            rules=[first, second],
+        ),
+        rule_states=True,
+    )
+    state = next(
+        item for item in catalog.states if item.state_key.startswith("state_path_")
+    )
+    assert [
+        row["status"] for row in state.table_values["order_items"]
+    ] == ["pending", "paid", "shipped"]
+    assert len(state.table_values["orders"]) == 1
+    parent_id = state.table_values["orders"][0]["id"]
+    assert {
+        row["order_id"] for row in state.table_values["order_items"]
+    } == {parent_id}
+
+    plan, rejected, _warnings = build_data_plan(
+        case=_case(state.state_key),
+        catalog=catalog,
+    )
+    assert rejected is None, rejected
+    assert plan is not None
+    assert [item["table"] for item in plan.statements] == [
+        "orders",
+        "order_items",
+        "order_items",
+        "order_items",
+    ]
+    assert plan.target_state == {
+        "order_items": {"status": "shipped"}
+    }
+
+    db_path = tmp_path / "path.db"
+    _make_db(db_path, ddl)
+    applied = apply_plan(db_url=_url(db_path), plan=plan, keep=True)
+    assert applied.applied == 4
+    with sqlite3.connect(db_path) as conn:
+        statuses = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT status FROM order_items ORDER BY id"
+            )
+        ]
+        assert statuses == ["pending", "paid", "shipped"]
+        assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+    torn = teardown_plan(db_url=_url(db_path), plan=plan)
+    assert torn.deleted == 4
+
+
 def test_paired_transition_state_reaches_database_with_target(
     tmp_path: Path,
 ) -> None:

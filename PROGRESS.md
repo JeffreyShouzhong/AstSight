@@ -99,6 +99,7 @@
 | Dubbo Triple unary P1 | ✅ 2026-11-18 | 真实 Apache `online_bontique_demo` 试点：`tri` + Java interface（无 proto）通过 Dubbo 3.2.19 sidecar `GenericService` 调用成功，`AdsService#getAds` 返回真实 `AdResponse`；`tri://` 仅在 descriptor + protobuf 同时存在时走 Python gRPC-compatible adapter，否则走 Triple-native sidecar；画像记录 `protocol=tri`、`serialization=hessian2`、`compatibility=native`；完整 `run --mode full` 1/1 pass；源码 jar 忽略过期旁路 manifest，发布 wheel 仍严格校验；既有 Dubbo sidecar/case e2e 7 passed；开启 gripmock、Java、Triple 与真实样例联调的全量为 619 passed / 38 skipped |
 | gRPC 下游 target 配置 P0 | ✅ 2026-11-18 | 补全 target 配置矩阵：Java `@Value` / `@ConfigurationProperties` / `System.getenv` / `System.getProperty`，Python settings/dotenv 属性，Node 生成客户端 + config/env 别名，Go 生成客户端 + `os.Getenv`/`viper.GetString`；Java 同时注入环境变量和 JVM `-D`，plan/manifest 记录 `config_key/config_kind`；硬编码 target 标 `grpc_target_hardcoded`；Java gRPC agent run e2e 验证 `JAVA_TOOL_OPTIONS` 实际生效；全量联调 627 passed / 38 skipped |
 | 多行 fixtures 与父子表 P0 | ✅ 2026-11-18 | C5b fixtures 新增关系解析：子行可用 `{"$ref": "orders[0].id"}` 引用同批父行；单父键候选自动补子表外键并写 `fixture_fk_autofilled`，多父键未显式引用阻断 `fixture_fk_ambiguous`；至少 2 父 3 子计划按拓扑序 INSERT、逆拓扑逐行 DELETE，SQLite 真实 apply/teardown 通过；C5a/C5b 提示词补充多行父子示例；全量联调 631 passed / 38 skipped |
+| `state_paths` 可执行展开 P0 | ✅ 2026-11-18 | 每条线性迁移路径自动生成 `state_path_*` DataState；`pending → paid → shipped` 按起点/终点去重生成 3 行，唯一主键由框架分配，父表/FK/NOT NULL 自动补齐，`target_state` 指向路径终点；路径子行共享同一父行；同时支持普通状态列与 `from_*/to_*` 成对字段；新增父表 + 3 状态子行 SQLite 真实 apply/teardown e2e；全量联调 632 passed / 38 skipped |
 | Dubbo 全链路 e2e | ✅ 2026-11-16 | `java/samples/spring-boot-dubbo`（HTTP `/orders/{id}` → `@DubboReference` 字段 → `OrderApi`）+ `test_java_agent_dubbo_flow_e2e.py`：`run_flow` 完成画像 → `dubbo_routes` → `agent_rewrite` 注入（`JAVA_TOOL_OPTIONS` + `token_env`）→ 执行 → 报告；HTTP 响应体为桩数据，证据 `adapter=dubbo-filter`/`mode=agent_filter`，目标端口零建连零字节，门禁 pass（`filter_not_in_chain` 不阻断，`serialization_verified=false` 告警）；注解字段供画像读取，运行期由 `ReferenceConfig` 填同一字段，dep_id 一致 |
 | Java HTTP agent P1/P1.5 | ✅ 五客户端已通 | `java/astsight-agent-core` + `java/astsight-agent-http`：premain、admin 路由表、心跳；ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、Apache HC4/HC5 `InternalHttpClient#doExecute`（反射 bridge，规避 fat jar 类加载问题）；Mock 新增 `/_admin/agent/routes`、heartbeat、`/_agent/unmatched`；证据补 `adapter/mode/original_host`；HTTPS 目标经 `allow_https` 校验后改写为明文；计划内改写失败抛 `AgentRewriteException` 失败关闭；`injection_env` 支持 `JAVA_TOOL_OPTIONS` + `ASTSIGHT_AGENT_TOKEN`；普通 JVM + OkHttp、HC 4.5.3 + 5.4.1 同 JVM、Spring Boot 3.5.6 fat jar 三客户端联调均通过 |
 | 同响应关系断言 | ✅ 2026-11-17 | `body_field.expect` 新增 `$field` 与受限 `$op`（`len/sum/add/sub/mul/div`）；表达式经白名单 AST 校验，生成器只执行固定运算；同响应关系推导为 L3，两个及以上步骤引用仍为 L4 |
@@ -127,8 +128,8 @@
 
 ### 主线相关
 
-- **多步迁移路径仍是描述性产物**：`state_paths` 不能展开成多行 fixtures，
-  也不能断言“走到第几步”；需要先定义多行插入/状态更新语义。
+- **多步迁移路径已可执行**：`state_paths` 会展开成多行 DataState；仍缺
+  “断言执行到第几步/中间步骤”的显式步骤跟踪语义。
 - **迁移后断言只覆盖最窄的一类**：正例、`operator=transition`、实体表单列、
   单列主键、单行。未做负例“状态保持不变”、异步落库 `wait_ms`、`from_*/to_*`
   成对字段/审计表、多行状态、复合主键、多步路径中间状态。

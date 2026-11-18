@@ -2202,8 +2202,11 @@ SQL 渲染前解析为标量。只有一个父键候选时，框架自动补全�
    transition 边按 `before == 上一步 after` 连成路径，最多 5 步、50 条，生成
    `StatePath`（`path_key/table/column/steps`）。`operator="transition"` 与
    `from_*/to_*` 成对字段都会贡献边；成对字段以去掉前缀的 base 名作为 column。
-   路径只描述规则推导出的流转，不生成 SQL 或多行 fixtures；循环路径靠边去重和
-   步数上限收敛。C5a 提示词把 `state_paths` 标为“理解用、不是可执行状态”。
+   每条路径同时展开成一个 `state_path_*` DataState：所有 `from/to` 值按出现顺序
+   去重，每个状态生成一行并分配唯一主键；父表闭包和 NOT NULL 由框架补齐，
+   子表外键统一指向共享父行，`target_state` 为路径终点。生成状态证据固定为
+   `inferred`，可直接被 `preconditions.state_key` 引用。循环路径靠边去重和
+   步数上限收敛。
 
    **迁移后断言**（`DataPlan.post_assertions`）：仅对正例、`transition_*` 状态、
    单表单列目标、目标列不是 `to_*/new_*/after_*`、单列主键且 fixture 恰好一行的

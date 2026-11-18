@@ -510,6 +510,200 @@ def _build_state(
         proposal.warnings.append(f"{key}:{warning}")
 
 
+def expand_state_paths(
+    tables: Iterable[TableCatalog],
+    paths: Iterable[StatePath],
+) -> tuple[list[DataState], list[str]]:
+    """把线性状态路径展开为可执行多行 DataState。
+
+    每步的起点/终点按出现顺序去重后各生成一行；同一路径的全部子行引用
+    同一组已补齐父行，避免占位父键冲突。
+    """
+    table_list = list(tables)
+    table_index = {table.name: table for table in table_list}
+    by_child: dict[str, list[ForeignKey]] = {}
+    for table in table_list:
+        for fk in table.foreign_keys:
+            by_child.setdefault(fk.child_table, []).append(fk)
+    states: list[DataState] = []
+    warnings: list[str] = []
+    for path in paths:
+        table = table_index.get(path.table)
+        if table is None:
+            warnings.append(f"state_path_expand_table_unknown:{path.path_key}")
+            continue
+        if not table.primary_key or len(table.primary_key) != 1:
+            warnings.append(
+                f"state_path_expand_primary_key_unsupported:{path.path_key}"
+            )
+            continue
+        columns = table.column_index()
+        column = columns.get(path.column)
+        paired_from = columns.get(f"from_{path.column}")
+        paired_to = columns.get(f"to_{path.column}")
+        paired = column is None and paired_from is not None and paired_to is not None
+        if column is None and not paired:
+            warnings.append(
+                f"state_path_expand_column_unknown:{path.path_key}:{path.column}"
+            )
+            continue
+        if table.primary_key[0] == path.column:
+            warnings.append(
+                f"state_path_expand_primary_key_column:{path.path_key}"
+            )
+            continue
+        row_specs: list[dict[str, Any]] = []
+        if paired:
+            for step in path.steps:
+                row = {
+                    paired_from.name: step.from_value,
+                    paired_to.name: step.to_value,
+                }
+                if row not in row_specs:
+                    row_specs.append(row)
+        else:
+            for step in path.steps:
+                for value in (step.from_value, step.to_value):
+                    row = {path.column: value}
+                    if row not in row_specs:
+                        row_specs.append(row)
+        if not row_specs:
+            warnings.append(f"state_path_expand_empty:{path.path_key}")
+            continue
+
+        state_key = "state_path_" + hashlib.sha256(
+            path.path_key.encode("utf-8")
+        ).hexdigest()[:12]
+        base_rows: dict[str, dict[str, Any]] | None = None
+        path_rows: list[dict[str, Any]] = []
+        failed = False
+        for index, spec in enumerate(row_specs):
+            pk = _path_primary_key(
+                table,
+                index=index,
+                path_key=path.path_key,
+            )
+            if pk is None:
+                warnings.append(
+                    f"state_path_expand_primary_key_type:"
+                    f"{path.path_key}:{table.primary_key[0]}"
+                )
+                failed = True
+                break
+            rows = {
+                table.name: {
+                    table.primary_key[0]: pk,
+                    **spec,
+                }
+            }
+            placeholders: list[tuple[str, str, str]] = []
+            row_warnings: list[str] = []
+            try:
+                _ensure_table(
+                    table.name,
+                    rows,
+                    table_index,
+                    by_child,
+                    set(),
+                    f"{state_key}_{index}",
+                    placeholders,
+                    row_warnings,
+                )
+                for table_name, row in rows.items():
+                    _fill_not_null(
+                        f"{state_key}_{index}",
+                        table_index[table_name],
+                        row,
+                        placeholders,
+                        row_warnings,
+                    )
+            except _StateError as exc:
+                warnings.append(
+                    f"state_path_expand_invalid:{path.path_key}:{exc}"
+                )
+                failed = True
+                break
+            if base_rows is None:
+                base_rows = {
+                    name: dict(row)
+                    for name, row in rows.items()
+                    if name != table.name
+                }
+            path_row = dict(rows[table.name])
+            if base_rows is not None:
+                for fk in by_child.get(table.name, []):
+                    parent = base_rows.get(fk.parent_table)
+                    if parent is None:
+                        continue
+                    for child_name, parent_name in zip(
+                        fk.child_columns,
+                        fk.parent_columns,
+                        strict=True,
+                    ):
+                        path_row[child_name] = parent.get(parent_name)
+            path_rows.append(path_row)
+            warnings.extend(
+                f"{path.path_key}:{item}" for item in row_warnings
+            )
+        if failed or base_rows is None or not path_rows:
+            continue
+        table_values = {
+            name: [dict(row)] for name, row in base_rows.items()
+        }
+        table_values[table.name] = path_rows
+        errors = validate_plan_fixtures(
+            _catalog_view(table_list),
+            table_values,
+        )
+        if errors:
+            warnings.extend(
+                f"state_path_expand_invalid:{path.path_key}:{message}"
+                for message in errors[:10]
+            )
+            continue
+        states.append(
+            DataState(
+                state_key=state_key,
+                table_values=table_values,
+                target_state={
+                    path.table: (
+                        {paired_to.name: path.steps[-1].to_value}
+                        if paired
+                        else {path.column: row_specs[-1][path.column]}
+                    ),
+                },
+                evidence=Evidence.INFERRED,
+                rule_keys=list(
+                    dict.fromkeys(
+                        step.rule_key for step in path.steps if step.rule_key
+                    )
+                ),
+            )
+        )
+    return states, list(dict.fromkeys(warnings))
+
+
+def _path_primary_key(
+    table: TableCatalog,
+    *,
+    index: int,
+    path_key: str,
+) -> Any:
+    name = table.primary_key[0]
+    column = table.column_index().get(name)
+    if column is None:
+        return None
+    upper = (column.type or "").upper()
+    if any(token in upper for token in ("INT", "SERIAL")):
+        return index + 1
+    if "UUID" in upper:
+        return f"00000000-0000-0000-0000-{index + 1:012d}"
+    if any(token in upper for token in ("CHAR", "TEXT", "CLOB", "ENUM")):
+        digest = hashlib.sha256(path_key.encode("utf-8")).hexdigest()[:8]
+        return f"P-{digest}-{index + 1}"
+    return None
+
+
 @dataclass(frozen=True)
 class _Edge:
     table: str

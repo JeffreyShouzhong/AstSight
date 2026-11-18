@@ -18,8 +18,9 @@
 - `catalog.seed_states[]`：seed 已提供的初始数据状态；`rule_*` 开头的状态是框架
   从规则跨表约束生成的骨架，`gaps` 里的 `state_placeholder` 值只是占位，不是业务事实，
   可以修正或补全，但不要当成已确认数据；
-- `catalog.state_paths[]`：规则推导出的多步迁移路径（table/column + steps），只用于
-  理解状态流转，不是可直接执行的 fixtures；不要把它当成已确认的业务状态机；
+- `catalog.state_paths[]`：规则推导出的多步迁移路径；框架已把每条路径展开为
+  `state_path_*` 的 DataState，每个迁移状态一行，并补齐父表/FK/NOT NULL。
+  这些仍标 `inferred`，不要当成已确认的业务状态机，也不要重复生成同内容状态；
 - `rules[]`：已导入的业务规则（含 `rule_key` / `rule_id` / `text`）；
 - `documents[]`：需求原文 section；
 - `schema`：输出 JSON Schema。
@@ -43,6 +44,7 @@
    - `target_state`：可选，表示断言/后续步骤期望的状态；
    - `rule_keys`：该状态服务的规则；只引用输入中存在的 key；
    - FK 完整性：子表行引用父表时，父表行必须出现在同一个 state 的 `table_values` 中。
+   - 路径展开状态已经包含逐状态多行；只有在文档能证明额外分支/行时才补充新状态。
 3. 无法确定的内容放 `gaps` / `questions`，每项要有原因。
 
 ---
