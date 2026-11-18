@@ -2,7 +2,8 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：本轮统一 Mock、多行造数与 HTTP 请求匹配提交均已推送（见 `git log`）
+> 最新提交：`a38d9dd`（`完善：补齐 HTTP Agent 异步重试与证书边界矩阵`），
+> 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
