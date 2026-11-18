@@ -17,6 +17,7 @@ from contracts import (
     TestCase,
 )
 
+from ..cases.data_refs import resolve_case_data
 from ..persistence import sha256_json
 from .fixtures import prepare_plan_fixtures
 from .render import RenderError, render_plan
@@ -83,6 +84,37 @@ def _fixtures_from_states(
         elif raw_target:
             errors.append("target_state_not_object")
     return fixtures, target_state, errors
+
+
+def _check_precondition_rows(
+    case: TestCase | CaseEntry,
+    fixtures: dict[str, list[dict[str, Any]]],
+) -> list[str]:
+    """显式 table/where 的前置状态必须能在插入行里找到。
+
+    只检查同时给了表和条件的 precondition；只写 `state_key` 的由 catalog
+    状态展开负责。用例里的 `$data` 已在上游解析成实体值。
+    """
+    errors: list[str] = []
+    for item in getattr(case, "preconditions", []) or []:
+        table = getattr(item, "table", None)
+        where = getattr(item, "where", None) or {}
+        if not table or not where:
+            continue
+        rows = fixtures.get(str(table)) or []
+        if not rows:
+            errors.append(f"precondition_table_missing:{table}")
+            continue
+        if not any(
+            isinstance(row, dict)
+            and all(row.get(key) == value for key, value in where.items())
+            for row in rows
+        ):
+            errors.append(
+                f"precondition_row_missing:{table}:"
+                f"{json.dumps(where, ensure_ascii=False, sort_keys=True)}"
+            )
+    return errors
 
 
 def _validate_target_state(
@@ -222,6 +254,7 @@ def build_data_plan(
     run_scope: str = "",
 ) -> tuple[DataPlan | None, RejectedPlan | None, list[str]]:
     warnings: list[str] = []
+    case = resolve_case_data(case)
     payload = None
     if fixtures is not None or target_state is not None:
         payload = {"fixtures": fixtures or {}, "target_state": target_state or {}}
@@ -275,6 +308,14 @@ def build_data_plan(
             case_key=getattr(case, "case_key", ""),
             reason="target_state_invalid",
             details="; ".join(target_errors[:20]),
+        ), warnings
+    precondition_errors = _check_precondition_rows(case, merged)
+    if precondition_errors:
+        return None, RejectedPlan(
+            case_id=getattr(case, "id", None),
+            case_key=getattr(case, "case_key", ""),
+            reason="precondition_row_missing",
+            details="; ".join(precondition_errors[:20]),
         ), warnings
 
     tables = catalog.table_index()

@@ -2415,6 +2415,13 @@ SQL 渲染前解析为标量。只有一个父键候选时，框架自动补全�
 只插主表、指望关联表数据碰巧存在。C5b 提示词同步要求 fixtures 与用例请求使用
 同一组业务键，并显式提醒“关联表一起构造”。
 
+**实体 → 插入行的确定性闭环（v4.71）**：`preconditions[].where/set` 支持
+`{"$data": "实体.字段"}`，在造数计划构建前解析成实体值。只要 precondition
+同时给出 `table` 和 `where`，C5b 就检查 fixtures 中该表是否存在一行完全匹配；
+找不到即拒绝计划（`precondition_row_missing`），不会退化成“假设库里已有”。
+这样用例请求、precondition 与插入行引用同一份 `data`，ID 对不上会在造数阶段
+暴露，而不是执行时查不到数据。
+
 草案不填 `TC-NNNN`，也不重复写 `method/path`：由 import 从 context 的 `endpoint` 解析并回填，
 避免两套路径写法。
 

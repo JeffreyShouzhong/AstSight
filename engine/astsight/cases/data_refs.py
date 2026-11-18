@@ -134,6 +134,15 @@ def resolve_case_data(case: Any) -> Any:
             ],
             "steps": [_resolve_step(step, data) for step in case.steps],
             "mock_replies": resolve_data_refs(case.mock_replies, data),
+            "preconditions": [
+                item.model_copy(
+                    update={
+                        "where": resolve_data_refs(item.where, data),
+                        "set": resolve_data_refs(item.set, data),
+                    }
+                )
+                for item in case.preconditions
+            ],
         }
     )
 

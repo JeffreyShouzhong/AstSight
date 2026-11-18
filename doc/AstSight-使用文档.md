@@ -1381,6 +1381,10 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 - 不依赖环境里已有的真实记录，测试开始前插入、结束后按主键清理；
 - `precondition.kind=api_state`（调业务接口造前置）会直接报
   `precondition.api_state_unsupported`，不执行。
+- `preconditions[].where/set` 可以用 `{"$data": "实体.字段"}`，造数前会解析成
+  实体值。precondition 同时写了 `table` 和 `where` 时，造数计划会检查插入行里
+  是否有完全匹配的一行；没有就拒绝计划，报 `precondition_row_missing`。
+  这样请求、前置条件和插入行用的是同一个 ID，对不上会在造数阶段就暴露。
 
 下游服务的数据不插库，也不调下游接口：由 `mock_replies` 让下游 Mock 返回
 用例声明的实体。这样一次用例的数据只有两处来源——本服务数据库的插入行，

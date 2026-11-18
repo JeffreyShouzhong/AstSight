@@ -1412,6 +1412,8 @@ def _case_data_refs(draft_case: DraftCase) -> list[str]:
             values.extend([assertion.expect, assertion.where])
     for assertion in draft_case.asserts:
         values.extend([assertion.expect, assertion.where])
+    for precondition in draft_case.preconditions:
+        values.extend([precondition.where, precondition.set])
     refs: list[str] = []
     for value in values:
         refs.extend(iter_data_refs(value))

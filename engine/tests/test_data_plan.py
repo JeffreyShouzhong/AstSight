@@ -246,3 +246,50 @@ def test_bundle_records_plans_and_rejections() -> None:
             cases=[_case()] * 1001,
             catalog=_catalog(),
         )
+
+
+def test_precondition_row_uses_case_entity_value() -> None:
+    case = _case().model_copy(
+        update={
+            "data": {"order": {"id": 10}},
+            "preconditions": [
+                Precondition(
+                    kind=PreconditionKind.DB_STATE,
+                    state_key="order_with_item",
+                    table="orders",
+                    where={"id": {"$data": "order.id"}},
+                    evidence=Evidence.VERIFIED,
+                )
+            ],
+        }
+    )
+    plan, rejected, _ = build_data_plan(
+        case=case, catalog=_catalog(), run_scope="r1"
+    )
+    assert rejected is None, rejected
+    assert plan is not None
+    assert plan.preconditions[0]["where"] == {"id": 10}
+
+
+def test_precondition_row_must_exist_in_fixtures() -> None:
+    case = _case().model_copy(
+        update={
+            "data": {"order": {"id": 11}},
+            "preconditions": [
+                Precondition(
+                    kind=PreconditionKind.DB_STATE,
+                    state_key="order_with_item",
+                    table="orders",
+                    where={"id": {"$data": "order.id"}},
+                    evidence=Evidence.VERIFIED,
+                )
+            ],
+        }
+    )
+    plan, rejected, _ = build_data_plan(
+        case=case, catalog=_catalog(), run_scope="r1"
+    )
+    assert plan is None
+    assert rejected is not None
+    assert rejected.reason == "precondition_row_missing"
+    assert "orders" in rejected.details
