@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`c392bfb`（`完善：A4 自动生成业务实体与下游 Mock`），
+> 最新提交：`554f6ae`（`完善：明确测试数据两来源，禁用调接口造数`），
 > 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
@@ -15,7 +15,9 @@
 > 注册中心不参与选 provider；三服务试点 6 条用例 5 条通过。
 > 用例可声明业务实体 `data`，请求与下游 Mock 通过 `$data` 引用同一份数据；
 > `mock_replies` 把实体写进 HTTP/Dubbo Mock 响应，按业务语义造数，
-> 不再依赖环境里碰巧存在的真实 ID。gRPC target 配置已覆盖 Java
+> 不再依赖环境里碰巧存在的真实 ID。测试数据只有两个来源：本服务数据库由
+> C5b 插表构造（主表/关联表一起插，用例直接使用），下游服务由 Mock 构造；
+> 不支持调业务接口造前置数据。gRPC target 配置已覆盖 Java
 > `@Value/@ConfigurationProperties/System.getenv/System.getProperty`、Python settings、
 > Node config/env 和 Go env/viper。
 > HTTP Mock 已支持请求级 query/header/body 子集匹配与同 dep 调用序列；
