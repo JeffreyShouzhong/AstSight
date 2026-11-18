@@ -1385,6 +1385,9 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
   实体值。precondition 同时写了 `table` 和 `where` 时，造数计划会检查插入行里
   是否有完全匹配的一行；没有就拒绝计划，报 `precondition_row_missing`。
   这样请求、前置条件和插入行用的是同一个 ID，对不上会在造数阶段就暴露。
+- **不要求请求里的每个字段都出现在 fixtures**。业务输入、负例非法值、SUT 自己
+  生成的字段、下游 Mock 的实体 ID、认证/租户头，都可以不出现在数据库里；
+  只有你显式写进 `preconditions` 的 `table + where` 会被硬校验。
 
 下游服务的数据不插库，也不调下游接口：由 `mock_replies` 让下游 Mock 返回
 用例声明的实体。这样一次用例的数据只有两处来源——本服务数据库的插入行，

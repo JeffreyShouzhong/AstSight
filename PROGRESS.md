@@ -37,6 +37,7 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
+| 请求字段全量对照（不做） | ⛔ 2026-11-18 | 明确非目标：fixtures 是数据库基线而非请求镜像；业务输入、负例值、SUT 自生成字段、下游 Mock 实体 ID、认证头都不要求入库；硬校验只保留显式 `preconditions.table + where`，不做默认字段映射 |
 | 实体与插入行闭环 | ✅ 2026-11-18 | `preconditions.where/set` 支持 `$data`，造数前解析为实体值；显式 `table+where` 必须能在 fixtures 中找到匹配行，否则拒绝 `precondition_row_missing`；请求/Mock/前置条件共用同一实体；新增 2 条测试，全量 656 passed / 60 skipped |
 | 测试数据两来源原则 | ✅ 2026-11-18 | 前置数据只走 C5b 插表（主表/关联表一起插，用例直接用这组值），下游数据只走 Mock；拒绝 `api_state` 调接口造数；C5b 提示词与输入改为使用已解析 `$data` 的请求值，要求 fixtures 业务键与请求一致；新增 2 条测试，全量 654 passed / 60 skipped |
 | A4 自动生成实体与 Mock | ✅ 2026-11-18 | A4 提示词要求按业务实体建模：规则依赖实体属性时生成 `data`，请求/断言/`mock_replies` 引用同一实体；`mock_semantics` 分支实际响应体进入提示词；漏写 binding 自动补 `success` 并告警；补充未知字段给 `mock.reply_field_unknown` 告警；新增 3 条测试，全量 652 passed / 60 skipped |
