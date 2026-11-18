@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`a38d9dd`（`完善：补齐 HTTP Agent 异步重试与证书边界矩阵`），
+> 最新提交：`b3cdbe6`（`完善：Dubbo 直连目标解析与多服务试点`），
 > 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
@@ -10,7 +10,9 @@
 > Linux amd64/arm64 gripmock wheel 构建与包内解析。Dubbo 在 Hessian2 sidecar 之外，
 > 已支持 Triple unary：Protobuf descriptor 走 gRPC-compatible adapter，Java interface
 > 无 proto 时走 Dubbo 3.2.19 sidecar 泛化调用；真实 Apache Online Boutique 的
-> `tri` 服务 `run --mode full` 1/1 通过。gRPC target 配置已覆盖 Java
+> `tri` 服务 `run --mode full` 1/1 通过。多服务场景新增直连目标解析：
+> 来源校验、代码地址、单 endpoint 去重、服务级映射与 IP 字面量约束，
+> 注册中心不参与选 provider；三服务试点 6 条用例 5 条通过。gRPC target 配置已覆盖 Java
 > `@Value/@ConfigurationProperties/System.getenv/System.getProperty`、Python settings、
 > Node config/env 和 Go env/viper。
 > HTTP Mock 已支持请求级 query/header/body 子集匹配与同 dep 调用序列；
