@@ -664,6 +664,10 @@ PYTHONPATH=. python -m astsight cases prepare \
   表、列和 `where` 列是否存在；缺目录只产生 `assertion.db_catalog_missing` warning。
 - `db_row.wait_ms` 可设为 0–60000，0 表示只查询一次；异步落库场景可设置等待时间，
   框架会轮询到断言通过或超时。只有需求/设计明确最终一致时才应使用非零值。
+- **异步优先断言消息**：如果异步边界是 MQ/消息，应断言消息是否发出及
+  topic/key/payload/headers/次数/顺序，不要改成轮询数据库；只有 SUT 内部异步
+  （线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用
+  `wait_ms` 等数据库最终状态。MQ 消息捕获尚未实现。
 - 生成用例运行时若未设置 `ASTSIGHT_DB_URL`，`db_row` 断言会 skip 为
   `data_unavailable`，不会伪装成通过。
 - 失败场景可加 `db_row` 断言验证“没有副作用”，例如创建失败后

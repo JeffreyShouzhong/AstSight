@@ -594,6 +594,11 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 precision/recall/expression_accuracy，比较目标字段、关系运算、运算集合、
 `response/request/step` 来源与字段路径；不比较操作数顺序。脚本不随测试自动
 调用模型。
+**异步断言优先级（v4.74）**：有消息边界时先断言消息——是否发出、topic/key、
+payload/headers、次数与顺序；不启动消费者，也不轮询数据库。只有 SUT 内部异步
+（线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用
+`db_row.wait_ms` 等数据库最终状态。`wait_ms` 不能替代消息断言，否则会把
+“消息没发/发错”掩盖成“等一会儿数据库总算对了”。
 `db_row.wait_ms` 支持 0–60000ms 的显式轮询，默认 0 只查询一次；轮询会结束当前只读
 事务，确保 MySQL `REPEATABLE READ` 的下一轮能看到新提交。`db_row/unchanged`
 （v4.73）在请求前对 `where` 命中的行拍快照，请求后逐列比较，可用
