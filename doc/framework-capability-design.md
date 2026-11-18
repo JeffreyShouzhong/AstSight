@@ -1948,6 +1948,79 @@ agent 侧的改写异常、adapter 缺失等未到达 Mock 服务的事件，不
 
 ---
 
+#### C3.5.6 跨协议 Mock 统一控制面（2026-11-18）
+
+HTTP、Dubbo、gRPC 下游 Mock 统一采用：
+
+> **统一控制面，协议专属数据面。**
+
+统一的是 session、binding、分支语义、模板渲染、调用证据和门禁；HTTP response、Dubbo Result、gRPC status + protobuf message 仍由各自协议适配器生成。
+
+**统一模型**：
+
+- `MockDep.transport` 明确标识 `http | dubbo | grpc`，协议不得再由 `dep_id` 前缀隐式推断；
+- `MockBranch` 增加协议中立 `outcome`：`success / invalid_request / not_found / unavailable / timeout / business_error / internal_error`；
+- `MockBranch.reply` 使用 discriminated union：
+  - `HttpMockReply`：HTTP status、headers、body、delay、drop；
+  - `DubboMockReply`：body、delay、drop/RPC error；
+  - `GrpcMockReply`：canonical `grpc_status`、message、protobuf body、metadata、trailers、delay；
+- 旧 `MockStub` 在迁移期保留，由兼容层转换为协议响应；新数据优先填写 `reply`；
+- gRPC 错误分支必须显式给 `grpc_status`，不得从 HTTP status 推导。
+
+**运行接口**：
+
+```text
+MockRuntimeAdapter
+  start()
+  activate(session)
+  collect(session) -> MockCall[]
+  deactivate(session)
+  stop()
+```
+
+- `HttpMockRuntime`：包装内嵌 HTTP Mock；
+- `DubboMockRuntime`：包装 Agent Filter + 引擎取桩控制面；
+- `GrpcMockRuntime`：管理 gripmock 子进程、stubs 与 history；
+- `MockRuntimeManager` 按注册顺序 activate，逆序 deactivate，并按 `call_id` 去重汇总证据；任一 adapter 激活失败时必须回滚已激活 adapter。
+
+**用例轨迹**：
+
+```text
+创建统一 MockSession
+  → RuntimeManager.activate(session)
+  → SUT 执行业务
+      ├─ HTTP 请求由内嵌 Mock 按 route_key 返回
+      ├─ Dubbo 调用由 Filter 请求引擎并按 dep_id 返回
+      └─ gRPC 调用由 gripmock 按 grpc_path 返回
+  → RuntimeManager.collect(session)
+  → 归一化 MockCall
+  → RuntimeManager.deactivate(session)
+  → 关闭 session
+```
+
+协议 adapter 的激活动作允许不同：HTTP/Dubbo 当前会话已经通过统一 SessionManager 生效时可为空操作；gRPC 必须安装/清理 stubs。`activate` 的实现差异不得泄漏到用例层。
+
+**统一证据**：
+
+`MockCall` 增加显式 `transport` 和可选 `grpc_status`；HTTP 继续使用 `response_status`，Dubbo 保留 `RpcException`/错误码，gRPC 使用 canonical status。所有证据仍写同一 `mock_calls.jsonl`，报告按 `transport + adapter + protocol status` 展示。
+
+**门禁**：
+
+- 只绑定当前 run 中已识别的 dep；
+- 任一 adapter 启动、激活或采集失败均阻断，不允许按通过处理；
+- `mock_not_used`、未绑定调用、late call、branch missing 等门禁跨协议共用；
+- 跨协议调用顺序只做尽力观测；严格因果顺序需要 trace/context 传播，不在本版本承诺。
+
+**迁移顺序**：
+
+1. 增加协议专属 Reply、MockOutcome 与 runtime adapter 接口，保留旧 `MockStub`；
+2. 将 HTTP、Dubbo 接入 runtime manager，行为保持不变；
+3. 扩展 `MockCall` 协议字段与报告；
+4. 收敛 `MockPlan` 的协议路由为统一 dep 集合；
+5. 最后接入 gRPC/gripmock。
+
+**当前实现（P0）**：`HttpMockReply`、`DubboMockReply`、`GrpcMockReply`、`MockOutcome`、`MockRuntimeAdapter`、`EmbeddedMockRuntimeAdapter`、`MockRuntimeManager` 已加入契约层；HTTP/Dubbo runtime 已通过包装 adapter 接入统一 manager，现有行为保持兼容。gRPC runtime 与本轮尚未实现的统一 Plan 收敛仍属后续阶段。
+
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 
 C5 拆成两个阶段，消除 "A4 需要 data_plan、data_plan 又需要已批准用例" 的循环依赖：

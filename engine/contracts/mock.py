@@ -5,16 +5,18 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .enums import (
+    GrpcStatus,
     MockCallResult,
     MockMode,
     MockRouteMatch,
     MockStrategy,
     MockTransport,
+    Transport,
 )
 
 
@@ -33,6 +35,50 @@ class MockStub(BaseModel):
     body: Any = Field(default=None)
     delay_ms: int = Field(default=0, ge=0, le=60_000)
     drop_connection: bool = Field(default=False)
+
+
+class HttpMockReply(BaseModel):
+    """HTTP 协议专属响应。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["http"] = "http"
+    status: int = Field(default=200, ge=200, le=599)
+    headers: dict[str, str] = Field(default_factory=dict)
+    body: Any = Field(default=None)
+    delay_ms: int = Field(default=0, ge=0, le=60_000)
+    drop_connection: bool = Field(default=False)
+
+
+class DubboMockReply(BaseModel):
+    """Dubbo 协议专属响应；结果最终由 Agent 构造为 RPC Result。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["dubbo"] = "dubbo"
+    body: Any = Field(default=None)
+    delay_ms: int = Field(default=0, ge=0, le=60_000)
+    drop_connection: bool = Field(default=False)
+
+
+class GrpcMockReply(BaseModel):
+    """gRPC unary 响应；body 必须符合 protobuf descriptor。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["grpc"] = "grpc"
+    grpc_status: GrpcStatus = GrpcStatus.OK
+    message: str = ""
+    body: Any = Field(default=None)
+    metadata: dict[str, str] = Field(default_factory=dict)
+    trailers: dict[str, str] = Field(default_factory=dict)
+    delay_ms: int = Field(default=0, ge=0, le=60_000)
+
+
+MockReply = Annotated[
+    Union[HttpMockReply, DubboMockReply, GrpcMockReply],
+    Field(discriminator="transport"),
+]
 
 
 class MockBinding(BaseModel):
@@ -90,6 +136,7 @@ class MockCall(BaseModel):
     case_id: str | None = None
     route_key: str | None = None
     dep_id: str | None = None
+    transport: Transport | None = None
     route_match: MockRouteMatch | None = None
     method: str
     original_path: str
@@ -102,6 +149,7 @@ class MockCall(BaseModel):
     )
     branch: str | None = None
     response_status: int | None = None
+    grpc_status: GrpcStatus | None = None
     delay_ms: int = 0
     drop_mode: str | None = Field(default=None, description="reset / timeout")
     result: MockCallResult = MockCallResult.OK

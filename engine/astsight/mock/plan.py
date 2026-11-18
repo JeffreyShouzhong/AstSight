@@ -13,13 +13,16 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from contracts import (
+    MockCall,
     MockInjection,
     MockPlan,
     MockPlanDubboRoute,
     MockPlanInjection,
     MockPlanRoute,
     MockRoute,
+    MockSession,
     MockStrategy,
+    Transport,
 )
 
 from .identity import (
@@ -32,6 +35,10 @@ from .identity import (
     parse_dubbo_dep_id,
 )
 from .server import MockHttpServer
+from .runtime import (
+    EmbeddedMockRuntimeAdapter,
+    MockRuntimeManager,
+)
 
 MAX_PLAN_BYTES = 4 * 1024 * 1024
 MAX_PLAN_ROUTES = 1_000
@@ -482,6 +489,7 @@ class MockPlanRuntime:
     route_keys: dict[str, str]
     injections: list[MockInjection] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    runtimes: MockRuntimeManager = field(default_factory=MockRuntimeManager)
 
     @property
     def evidence_path(self) -> Path | None:
@@ -572,8 +580,25 @@ class MockPlanRuntime:
             "warnings": list(self.warnings),
         }
 
+    def activate_session(self, session: MockSession) -> None:
+        self.runtimes.activate(session)
+
+    def collect_session_calls(self, session: MockSession) -> list[MockCall]:
+        return self.runtimes.collect(session)
+
+    def deactivate_session(self, session: MockSession) -> None:
+        self.runtimes.deactivate(session)
+
     def stop(self) -> None:
-        self.server.stop()
+        runtime_error: Exception | None = None
+        try:
+            self.runtimes.stop()
+        except Exception as exc:
+            runtime_error = exc
+        finally:
+            self.server.stop()
+        if runtime_error is not None:
+            raise runtime_error
 
 
 def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path | None):
@@ -590,6 +615,23 @@ def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path 
         route.dep_id: route
         for route in [*plan.routes, *plan.dubbo_routes]
     }
+    runtimes = MockRuntimeManager()
+    if plan.routes:
+        runtimes.register(
+            EmbeddedMockRuntimeAdapter(
+                server,
+                name="http_mock",
+                transport=Transport.HTTP,
+            )
+        )
+    if plan.dubbo_routes:
+        runtimes.register(
+            EmbeddedMockRuntimeAdapter(
+                server,
+                name="dubbo_filter",
+                transport=Transport.DUBBO,
+            )
+        )
     try:
         for route in plan.routes:
             assert route.route_key is not None
@@ -619,9 +661,15 @@ def _build_runtime(plan: MockPlan, *, plan_path: Path, history_path: str | Path 
             plan_path=plan_path,
             route_keys=dict(validation.route_keys),
             warnings=list(validation.warnings),
+            runtimes=runtimes,
         )
         server.start()
+        runtimes.start()
     except Exception:
+        try:
+            runtimes.stop()
+        except Exception:
+            pass
         server.stop()
         raise
     # 只有 start() 之后端口才确定，因此注入 URL 必须在启动后计算。

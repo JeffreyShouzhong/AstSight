@@ -127,6 +127,40 @@ class MockCallResult(str, Enum):
     LATE = "late"
 
 
+class MockOutcome(str, Enum):
+    """协议中立的 Mock 业务结果，由协议适配器映射为具体状态。"""
+
+    SUCCESS = "success"
+    INVALID_REQUEST = "invalid_request"
+    NOT_FOUND = "not_found"
+    UNAVAILABLE = "unavailable"
+    TIMEOUT = "timeout"
+    BUSINESS_ERROR = "business_error"
+    INTERNAL_ERROR = "internal_error"
+
+
+class GrpcStatus(str, Enum):
+    """gRPC canonical status code。"""
+
+    OK = "OK"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
+    INVALID_ARGUMENT = "INVALID_ARGUMENT"
+    DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"
+    NOT_FOUND = "NOT_FOUND"
+    ALREADY_EXISTS = "ALREADY_EXISTS"
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
+    FAILED_PRECONDITION = "FAILED_PRECONDITION"
+    ABORTED = "ABORTED"
+    OUT_OF_RANGE = "OUT_OF_RANGE"
+    UNIMPLEMENTED = "UNIMPLEMENTED"
+    INTERNAL = "INTERNAL"
+    UNAVAILABLE = "UNAVAILABLE"
+    DATA_LOSS = "DATA_LOSS"
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+
+
 class SymbolKind(str, Enum):
     """代码符号种类。"""
 

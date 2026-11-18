@@ -38,6 +38,7 @@ from contracts import (
     MockServerHealth,
     MockStub,
     MockTransport,
+    Transport,
 )
 
 from .evidence import MockEvidenceWriter
@@ -1054,6 +1055,7 @@ class MockHttpServer:
             case_id=session.case_id if session else None,
             route_key=entry.route_key if entry else None,
             dep_id=dep_id or None,
+            transport=Transport.DUBBO,
             route_match=None,
             method=method or "unknown",
             original_path=path,
@@ -1144,6 +1146,7 @@ class MockHttpServer:
             case_id=session.case_id if session else None,
             route_key=entry.route.route_key if entry else None,
             dep_id=entry.route.dep_id if entry else None,
+            transport=Transport.HTTP,
             route_match=resolution.route_match if resolution else None,
             method=request.method.upper(),
             original_path=original_path or request.url.path,

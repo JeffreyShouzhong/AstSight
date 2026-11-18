@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .enums import Evidence, MockStrategy, MockTransport, Transport
-from .mock import MockStub
+from .enums import Evidence, MockOutcome, MockStrategy, MockTransport, Transport
+from .mock import MockReply, MockStub
 
 
 class MockBranchSource(BaseModel):
@@ -23,6 +23,8 @@ class MockBranch(BaseModel):
 
     branch: str = Field(min_length=1, max_length=128)
     semantics: str = Field(min_length=1, max_length=2_000)
+    outcome: MockOutcome = MockOutcome.SUCCESS
+    reply: MockReply | None = None
     stub: MockStub = Field(default_factory=MockStub)
     evidence: Evidence = Field(default=Evidence.INFERRED)
     source: MockBranchSource = Field(default_factory=MockBranchSource)

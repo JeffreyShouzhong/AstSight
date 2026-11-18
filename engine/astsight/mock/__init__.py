@@ -31,6 +31,13 @@ from .plan import (
     validate_mock_plan,
 )
 from .routes import RouteEntry, RouteResolution, RouteTable
+from .replies import MockReplyError, reply_from_legacy_stub, resolve_branch_reply
+from .runtime import (
+    EmbeddedMockRuntimeAdapter,
+    MockRuntimeAdapter,
+    MockRuntimeError,
+    MockRuntimeManager,
+)
 from .server import DubboRouteEntry, MockHttpServer, MockLimits, MockResponseError
 from .sessions import SessionError, SessionManager
 
@@ -42,6 +49,7 @@ __all__ = [
     "DepIdPlan",
     "DubboDepId",
     "DubboRouteEntry",
+    "EmbeddedMockRuntimeAdapter",
     "MockEvidenceWriter",
     "MockHttpServer",
     "MockLimits",
@@ -49,6 +57,10 @@ __all__ = [
     "MockPlanRuntime",
     "MockPlanValidation",
     "MockResponseError",
+    "MockReplyError",
+    "MockRuntimeAdapter",
+    "MockRuntimeError",
+    "MockRuntimeManager",
     "NormalizedTarget",
     "RouteEntry",
     "RouteResolution",
@@ -68,7 +80,9 @@ __all__ = [
     "normalize_target_url",
     "parse_dubbo_dep_id",
     "read_evidence",
+    "reply_from_legacy_stub",
     "resolve_plan_path",
+    "resolve_branch_reply",
     "route_key_for",
     "start_mock_plan",
     "summarize_evidence",
