@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`c48a5a1`（`文档：明确不做请求字段全量对照 fixtures`），
+> 最新提交：`08a3349`（`完善：补实体造数 Mock 真实链路 e2e，README 首屏差异化`），
 > 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
