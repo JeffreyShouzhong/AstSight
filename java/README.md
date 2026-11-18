@@ -52,6 +52,7 @@ Dubbo/Netty 日志全部转到 stderr。Python 客户端在
 | `astsight-agent-dubbo` | Dubbo 消费端 Filter、`DubboBridge`、Filter 注入器（`defineClass` 进应用类加载器） |
 | `astsight-agent` | 最终 shaded jar，入口 `io.astsight.agent.core.AstSightAgent` |
 | `astsight-sidecar-dubbo` | 独立进程，泛化调用被测 Dubbo 服务；不属于 agent，不注入被测 JVM |
+| `samples/dubbo-provider` | 常驻 Spring Boot Dubbo provider 样例，供 sidecar 本地试点 |
 
 字节码目标为 JDK 8；构建使用 JDK 8+。HTTP adapter 的运行矩阵已在
 JDK 8/11/17/21/26 上实测；Dubbo Filter 在 Dubbo 2.7.22 与 3.2.19 ×

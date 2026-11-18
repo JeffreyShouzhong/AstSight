@@ -7,8 +7,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.Reader;
+import java.util.Properties;
 
 /**
  * stdin/stdout JSONL 协议。一行一个请求，一行一个响应；stdout 只写协议，
@@ -136,6 +138,22 @@ final class SidecarServer {
     }
 
     private static String dubboVersion() {
+        // shaded jar 会覆盖 Dubbo 自己的 MANIFEST Implementation-Version，
+        // Version.getVersion() 会误读成 sidecar 版本；优先读构建期过滤的
+        // 资源文件。
+        try (InputStream stream = SidecarServer.class.getResourceAsStream(
+                "/dubbo-version.properties")) {
+            if (stream != null) {
+                Properties properties = new Properties();
+                properties.load(stream);
+                String version = properties.getProperty("version", "").trim();
+                if (!version.isEmpty() && !version.contains("${")) {
+                    return version;
+                }
+            }
+        } catch (Throwable ignored) {
+            // 回退到 Dubbo 自己的版本读取。
+        }
         try {
             return org.apache.dubbo.common.Version.getVersion();
         } catch (Throwable ignored) {

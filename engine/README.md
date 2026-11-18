@@ -770,6 +770,10 @@ PYTHONPATH=. python -m pytest tests/test_dubbo_sidecar_client.py \
   tests/test_sidecar_jar.py tests/test_dubbo_provider_profile.py \
   tests/test_dubbo_case_validate.py tests/test_codegen_dubbo.py \
   tests/test_dubbo_diagnose.py tests/test_profile_dubbo.py -q
+
+# 常驻 Spring Boot provider 样例（先构建 java/samples/dubbo-provider）
+ASTSIGHT_DUBBO_PROVIDER_SAMPLE_E2E=1 PYTHONPATH=. \
+  python -m pytest tests/integration/test_dubbo_provider_sample_e2e.py -q
 ```
 
 ### 下游调用点识别与计划草案（P1）

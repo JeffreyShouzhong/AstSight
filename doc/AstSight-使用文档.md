@@ -1573,6 +1573,22 @@ PYTHONPATH=. python -m astsight agent run \
 | `engine/examples/demo_delta.py` | 一条命令演示 delta 闭环 |
 | `engine/examples/demo_case_review.py` | 演示需求 → 审核用例 → 执行 |
 | `engine/examples/demo_agent_flow.py` | 演示规则 → Mock → 造数 → 用例 → 执行 |
+| `java/samples/dubbo-provider/` | 常驻 Spring Boot Dubbo provider，含 DTO/约束/枚举，演示 sidecar 与 Dubbo 入口用例 |
+
+Dubbo provider 样例：
+
+```bash
+cd java/samples/dubbo-provider
+mvn -q -DskipTests package
+java -jar target/dubbo-provider-sample-0.1.0-SNAPSHOT.jar
+# READY 20880
+
+cd ../../../engine
+PYTHONPATH=. python -m astsight run \
+  --project ../java/samples/dubbo-provider \
+  --mode full --codegraph off \
+  --dubbo-url dubbo://127.0.0.1:20880
+```
 
 合伙人示例的完整步骤见
 [engine/examples/partner_onboarding/README.md](../engine/examples/partner_onboarding/README.md)。

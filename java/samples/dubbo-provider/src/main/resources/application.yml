@@ -1,0 +1,6 @@
+dubbo:
+  application:
+    name: astsight-dubbo-provider
+  protocol:
+    name: dubbo
+    port: 20880
