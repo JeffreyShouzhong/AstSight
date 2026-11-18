@@ -2037,6 +2037,8 @@ MockRuntimeAdapter
 - SUT 启动器已能通过环境变量应用可覆盖 target；真实 gripmock v3.23.8 Windows amd64 binary 已跑通 success / `UNAVAILABLE` / history / cleanup e2e，验证空 matcher 必须写 `input.equals={}`；
 - `run --mock-plan` 与 `agent run` 均支持 `--gripmock-path`，正式 CLI 入口可自动启动 gRPC Mock plan；
 - 真实 Python SUT → gRPC 下游 e2e 已跑通：SUT 从 `INVENTORY_GRPC_ADDR` 读取注入 target，success 返回 protobuf 字段，`UNAVAILABLE` 映射为 SUT 上游错误，两段 session 的 history 均进入统一证据；
+- gRPC downstream 自动画像已支持仓库 `.proto` unary service/method 索引，以及常见 Python `*Stub(channel)` 和 Java `*BlockingStub/FutureStub` 调用；识别 `os.environ`/`os.getenv`/`@Value` target 配置键并生成 `grpc:/service/method` dep；
+- `build_profiles` 将 gRPC deps 附到 profile，`build_plan_from_profiles` 产出统一 `deps[]` + `grpc_server` injection；
 - 更多 gRPC 客户端配置形态、Linux binary 分发和 semantic 自动采样仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）

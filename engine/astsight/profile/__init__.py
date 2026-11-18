@@ -8,6 +8,12 @@ from .downstream import (
     build_plan_from_profiles,
     scan_downstream,
 )
+from .grpc_downstream import (
+    GrpcCallSite,
+    GrpcDownstreamDep,
+    GrpcDownstreamScan,
+    GrpcDownstreamScanner,
+)
 from .openapi import EndpointSpec, ParamSpec, load_spec, parse_operations, sample_value
 
 __all__ = [
@@ -15,6 +21,10 @@ __all__ = [
     "DownstreamScanner",
     "EndpointSpec",
     "HttpCallSite",
+    "GrpcCallSite",
+    "GrpcDownstreamDep",
+    "GrpcDownstreamScan",
+    "GrpcDownstreamScanner",
     "ParamSpec",
     "build_plan_from_profiles",
     "build_profiles",

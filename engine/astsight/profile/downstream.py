@@ -32,6 +32,7 @@ from ..mock.identity import (
 )
 from .callsite import HttpCallSite
 from .dubbo import DubboScanResult, scan_dubbo_sources
+from .grpc_downstream import GrpcDownstreamScan, GrpcDownstreamScanner
 from .javatypes import ContractIndex, FeignInterface, scan_feign_interfaces
 from .langscan import (
     _line_of,
@@ -891,6 +892,7 @@ class DownstreamScanner:
         self._contract_index: ContractIndex | None = None
         self._feign_interfaces: list[FeignInterface] | None = None
         self._dubbo_scan: DubboScanResult | None = None
+        self._grpc_downstream_scan: GrpcDownstreamScan | None = None
 
     def _contract_index_or_none(self) -> ContractIndex | None:
         try:
@@ -1027,6 +1029,17 @@ class DownstreamScanner:
                 if warning not in self.warnings:
                     self.warnings.append(warning)
         return self._dubbo_scan
+
+    def scan_grpc(self) -> GrpcDownstreamScan:
+        """项目级 gRPC downstream 扫描，一次构建内复用。"""
+        if self._grpc_downstream_scan is None:
+            self._grpc_downstream_scan = GrpcDownstreamScanner(
+                self.root
+            ).scan()
+            for warning in self._grpc_downstream_scan.warnings:
+                if warning not in self.warnings:
+                    self.warnings.append(warning)
+        return self._grpc_downstream_scan
 
     def _language_text(self, path: Path) -> str:
         cached = self._lang_texts.get(path)
@@ -1788,6 +1801,11 @@ def build_plan_from_profiles(
                     "parameter_types": list(dep.get("parameter_types") or []),
                     "group": dep.get("group"),
                     "version": dep.get("version"),
+                    "grpc_path": dep.get("grpc_path"),
+                    "request_type": dep.get("request_type"),
+                    "response_type": dep.get("response_type"),
+                    "descriptor_source": dep.get("descriptor_source"),
+                    "property": dep.get("property"),
                 }
                 merged[dep_id] = current
             for item in dep.get("call_sites") or []:
@@ -1803,6 +1821,7 @@ def build_plan_from_profiles(
 
     routes: list[dict[str, Any]] = []
     dubbo_routes: list[dict[str, Any]] = []
+    grpc_deps: list[dict[str, Any]] = []
     injections: list[dict[str, Any]] = []
     for dep_id in sorted(merged):
         dep = merged[dep_id]
@@ -1826,6 +1845,35 @@ def build_plan_from_profiles(
                     "kind": "base_url",
                     "path_mode": "append",
                     "reason": "dubbo_filter_requires_java_agent",
+                }
+            )
+            continue
+        if dep["dep_type"] == "grpc" or dep_id.startswith("grpc:"):
+            grpc_deps.append(
+                {
+                    "dep_id": dep_id,
+                    "transport": "grpc",
+                    "strategy": "grpc_server",
+                    "source": "c3",
+                    "locator": {
+                        "transport": "grpc",
+                        "grpc_path": dep["grpc_path"],
+                        "target": dep["target"],
+                        "property": dep["property"],
+                        "descriptor_source": dep["descriptor_source"],
+                    },
+                    "branches": {},
+                    "replies": {},
+                }
+            )
+            injections.append(
+                {
+                    "dep_id": dep_id,
+                    "strategy": "grpc_server",
+                    "kind": "base_url",
+                    "property": dep["property"],
+                    "path_mode": "replace",
+                    "reason": "grpc_target_rewrite_required",
                 }
             )
             continue
@@ -1879,6 +1927,7 @@ def build_plan_from_profiles(
         "capture_bodies": False,
         "routes": routes,
         "dubbo_routes": dubbo_routes,
+        "deps": grpc_deps,
         "injections": injections,
     }
 

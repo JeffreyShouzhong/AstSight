@@ -102,6 +102,7 @@ class GrpcDescriptorIndex:
             ) from exc
         if not descriptor_set.file:
             raise GrpcDescriptorError("proto_descriptor_invalid", "no proto files")
+        self._files = list(descriptor_set.file)
 
         self.pool = descriptor_pool.DescriptorPool()
         pending = list(descriptor_set.file)
@@ -158,6 +159,28 @@ class GrpcDescriptorIndex:
             request_type=method.input_type.full_name,
             response_type=method.output_type.full_name,
         )
+
+    def unary_methods(self) -> list[GrpcMethod]:
+        methods: list[GrpcMethod] = []
+        for file_proto in self._files:
+            package = file_proto.package.strip(".")
+            for service in file_proto.service:
+                full_service = (
+                    f"{package}.{service.name}" if package else service.name
+                )
+                for method in service.method:
+                    if method.client_streaming or method.server_streaming:
+                        continue
+                    methods.append(
+                        GrpcMethod(
+                            grpc_path=f"/{full_service}/{method.name}",
+                            service=full_service,
+                            method=method.name,
+                            request_type=method.input_type.lstrip("."),
+                            response_type=method.output_type.lstrip("."),
+                        )
+                    )
+        return sorted(methods, key=lambda item: item.grpc_path)
 
     def validate_response(self, grpc_path: str, body: Any) -> None:
         method = self.method(grpc_path)

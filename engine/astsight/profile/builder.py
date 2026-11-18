@@ -100,6 +100,7 @@ def build_profiles(
             max_symbols=max_callees,
         )
     dubbo_scan = scanner.scan_dubbo() if scanner is not None else None
+    grpc_scan = scanner.scan_grpc() if scanner is not None else None
 
     for route in routes:
         method = str(route.get("method") or "").upper()
@@ -242,6 +243,21 @@ def build_profiles(
             profile["downstream_warnings"] = [
                 *(profile.get("downstream_warnings") or []),
                 *dubbo_scan.warnings,
+            ]
+
+        if grpc_scan is not None and grpc_scan.deps:
+            profile["downstream_deps"] = [
+                *(profile.get("downstream_deps") or []),
+                *grpc_scan.deps,
+            ]
+            profile["downstream_unmapped"] = False
+            profile["grpc_deps_checked"] = grpc_scan.checked
+        if grpc_scan is not None and grpc_scan.unsupported:
+            profile["grpc_unsupported"] = list(grpc_scan.unsupported)
+        if grpc_scan is not None and grpc_scan.warnings:
+            profile["downstream_warnings"] = [
+                *(profile.get("downstream_warnings") or []),
+                *grpc_scan.warnings,
             ]
 
         profiles.append(profile)
