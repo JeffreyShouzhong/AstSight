@@ -229,3 +229,53 @@ def test_triple_case_generates_descriptor_and_grpc_compatible_dispatch(
     assert "from astsight.sidecar.triple import invoke_triple" in conftest
     compile(text, str(tmp_path / "test_triple.py"), "exec")
     compile(conftest, str(tmp_path / "conftest.py"), "exec")
+
+
+def test_case_data_refs_become_literals_and_mock_reply(tmp_path: Path) -> None:
+    base = _case()
+    dep_id = "dubbo:com.acme.ProductService#get(java.lang.String)"
+    case = base.model_copy(
+        update={
+            "data": {"product": {"id": "P-1001", "category": "phone"}},
+            "dubbo": base.dubbo.model_copy(
+                update={"arguments": [{"$data": "product.id"}]}
+            ),
+            "mock_bindings": {dep_id: "success"},
+            "mock_replies": {
+                dep_id: {
+                    "id": {"$data": "product.id"},
+                    "category": {"$data": "product.category"},
+                }
+            },
+        }
+    )
+    result = generate_pytest([case], tmp_path)
+
+    assert result.errors == []
+    text = next(
+        path for path in result.files if path.name.startswith("test_dubbo_")
+    ).read_text(encoding="utf-8")
+    assert "arguments=['P-1001']" in text
+    assert "'reply': {'id': 'P-1001', 'category': 'phone'}" in text
+    assert "$data" not in text
+    compile(text, str(tmp_path / "test_data.py"), "exec")
+
+
+def test_unresolved_case_data_ref_fails_codegen(tmp_path: Path) -> None:
+    base = _case()
+    case = base.model_copy(
+        update={
+            "data": {"product": {"id": "P-1001"}},
+            "dubbo": base.dubbo.model_copy(
+                update={"arguments": [{"$data": "product.sku"}]}
+            ),
+        }
+    )
+    result = generate_pytest([case], tmp_path)
+    assert any(
+        "data_ref_unresolved" in item.get("error", "")
+        for item in result.errors
+    )
+    assert not any(
+        path.name.startswith("test_dubbo_") for path in result.files
+    )

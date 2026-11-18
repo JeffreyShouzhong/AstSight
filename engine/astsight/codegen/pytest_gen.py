@@ -19,6 +19,7 @@ from urllib.parse import quote
 from contracts import DataPlanBundle, TestCase, Transport
 
 from ..artifacts import slugify, utc_now
+from ..cases.data_refs import iter_data_refs, lookup_data, resolve_data_refs
 from ..cases.expressions import field_paths, has_dynamic, has_relation_expression
 
 GENERATOR = "AstSight M1 pytest-gen"
@@ -1272,7 +1273,93 @@ def _case_assertions(case: TestCase) -> list[Any]:
     ]
 
 
+def _case_data_refs(case: TestCase) -> list[str]:
+    values: list[Any] = [
+        case.path_params,
+        case.query,
+        case.body,
+        case.mock_replies,
+    ]
+    if case.dubbo is not None:
+        values.extend([case.dubbo.arguments, case.dubbo.attachments])
+    for step in case.steps:
+        values.extend([step.path_params, step.query, step.body])
+        if step.dubbo is not None:
+            values.extend([step.dubbo.arguments, step.dubbo.attachments])
+        for assertion in step.asserts:
+            values.extend([assertion.expect, assertion.where])
+    for assertion in case.asserts:
+        values.extend([assertion.expect, assertion.where])
+    refs: list[str] = []
+    for value in values:
+        refs.extend(iter_data_refs(value))
+    return refs
+
+
+def _unresolved_data_refs(case: TestCase) -> list[str]:
+    return [
+        ref for ref in _case_data_refs(case)
+        if not lookup_data(case.data, ref)[0]
+    ]
+
+
+def _resolve_assertion(assertion, data):
+    return assertion.model_copy(
+        update={
+            "expect": resolve_data_refs(assertion.expect, data),
+            "where": resolve_data_refs(assertion.where, data),
+        }
+    )
+
+
+def _resolve_step(step, data):
+    return step.model_copy(
+        update={
+            "path_params": resolve_data_refs(step.path_params, data),
+            "query": resolve_data_refs(step.query, data),
+            "body": resolve_data_refs(step.body, data),
+            "dubbo": _resolve_call(step.dubbo, data),
+            "asserts": [
+                _resolve_assertion(assertion, data)
+                for assertion in step.asserts
+            ],
+        }
+    )
+
+
+def _resolve_call(call, data):
+    if call is None:
+        return None
+    return call.model_copy(
+        update={
+            "arguments": resolve_data_refs(call.arguments, data),
+            "attachments": resolve_data_refs(call.attachments, data),
+        }
+    )
+
+
+def _resolve_case_data(case: TestCase) -> TestCase:
+    """把 `$data` 引用换成实体值，生成物里只留确定性字面量。"""
+    if not case.data:
+        return case
+    data = case.data
+    return case.model_copy(
+        update={
+            "path_params": resolve_data_refs(case.path_params, data),
+            "query": resolve_data_refs(case.query, data),
+            "body": resolve_data_refs(case.body, data),
+            "dubbo": _resolve_call(case.dubbo, data),
+            "asserts": [
+                _resolve_assertion(assertion, data) for assertion in case.asserts
+            ],
+            "steps": [_resolve_step(step, data) for step in case.steps],
+            "mock_replies": resolve_data_refs(case.mock_replies, data),
+        }
+    )
+
+
 def _case_function(case: TestCase, *, has_data_plan: bool = False) -> str:
+    case = _resolve_case_data(case)
     name = f"test_{case.id.replace('-', '_').lower()}_{case.category}"
     bindings = _case_mock_bindings(case)
     requires_data = bool(case.preconditions)
@@ -1330,6 +1417,9 @@ def _case_mock_bindings(case: TestCase) -> dict[str, Any]:
         for dep_id, branch in sorted(case.mock_bindings.items())
     }
     for dep_id in bindings:
+        reply = case.mock_replies.get(dep_id)
+        if reply is not None:
+            bindings[dep_id]["reply"] = reply
         rules = [
             rule.model_dump(mode="json")
             for rule in case.mock_rules
@@ -1402,6 +1492,20 @@ def generate_pytest(
     plan_index = _plan_index(data_bundle)
     if project_root is not None:
         cases = _resolve_case_descriptors(cases, Path(project_root))
+    valid_cases: list[TestCase] = []
+    for case in cases:
+        unresolved = _unresolved_data_refs(case)
+        if unresolved:
+            result.errors.append(
+                {
+                    "endpoint": case.endpoint,
+                    "case_id": case.id,
+                    "error": "data_ref_unresolved: " + ", ".join(unresolved[:5]),
+                }
+            )
+            continue
+        valid_cases.append(case)
+    cases = valid_cases
 
     conftest = out / "conftest.py"
     existing = conftest.read_text(encoding="utf-8") if conftest.exists() else ""

@@ -343,6 +343,11 @@ class GrpcMockRuntimeAdapter(MockRuntimeAdapter):
                     "mock_plan_dep_invalid",
                     binding.dep_id,
                 )
+            if binding.reply is not None:
+                raise GrpcMockRuntimeError(
+                    "mock_reply_transport_unsupported",
+                    binding.dep_id,
+                )
             reply = dep.replies.get(binding.branch)
             if not isinstance(reply, GrpcMockReply):
                 raise GrpcMockRuntimeError(

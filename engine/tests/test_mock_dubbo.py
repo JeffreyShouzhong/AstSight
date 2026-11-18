@@ -193,3 +193,46 @@ def test_dubbo_overloads_are_distinct_routes(tmp_path: Path) -> None:
     server.add_dubbo_dep(second, branches={"success": MockStub(body={"n": 2})})
     routes = _run(_call(server, "GET", "/_admin/agent/routes")).json()
     assert routes["dubbo_deps"] == sorted([first, second])
+
+
+def test_dubbo_binding_reply_merges_case_entity(tmp_path: Path) -> None:
+    server = _server(tmp_path)
+    _session(
+        server,
+        bindings=[
+            {
+                "dep_id": DEP_ID,
+                "branch": "success",
+                "reply": {"orderId": "O-PHONE-1", "product": {"category": "phone"}},
+            }
+        ],
+    )
+
+    response = _invoke(server)
+    assert response.status_code == 200
+    assert response.json()["body"] == {
+        "orderId": "O-PHONE-1",
+        "amount": 10,
+        "product": {"category": "phone"},
+    }
+
+
+def test_dubbo_binding_reply_must_be_object(tmp_path: Path) -> None:
+    server = _server(tmp_path)
+    response = _run(
+        _call(
+            server,
+            "POST",
+            "/_admin/sessions",
+            json={
+                "session_id": "session-1",
+                "namespace": "sut-dubbo",
+                "case_id": "case-1",
+                "bindings": [
+                    {"dep_id": DEP_ID, "branch": "success", "reply": [1]}
+                ],
+            },
+        )
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "mock_reply_invalid"

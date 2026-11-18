@@ -438,7 +438,7 @@ A4 不得自行合并或改写冲突规则，引用冲突规则的用例带 `rul
 | 实体 | 关键字段 | 说明 |
 | --- | --- | --- |
 | `CaseSet` | schema_version, fingerprint_version, id, project, store_version, sequence, ruleset{version, hash, id}, openapi, cases[], history[], review_log[], doc_versions, requirements[], uncovered_reasons | 已批准用例库；唯一可移植、可版本化的审计源 |
-| `CaseEntry` | id, case_key, level(business/code), transport, endpoint, coverage_role, category, priority, request(path_params/query/headers/body), preconditions[], mock_bindings{dep_id: branch}, asserts[{kind,target,op,expect,where}], assert_strength, rule_refs[], requirement_refs[], change_refs[], status, version, fingerprint, review, created_at, updated_at | 单条可执行用例；`id` 为 `TC-NNNN`，只在批准时分配 |
+| `CaseEntry` | id, case_key, level(business/code), transport, endpoint, coverage_role, category, priority, request(path_params/query/headers/body), preconditions[], data{实体}, mock_bindings{dep_id: branch}, mock_replies{dep_id: 部分响应体}, asserts[{kind,target,op,expect,where}], assert_strength, rule_refs[], requirement_refs[], change_refs[], status, version, fingerprint, review, created_at, updated_at | 单条可执行用例；`id` 为 `TC-NNNN`，只在批准时分配 |
 | `RuleRef` | rule_key, rule_id, authority, source_kind | 用例引用的规则；`rule_key` 稳定，`rule_id/authority` 为批准时快照 |
 | `ChangeRef` | base, target, symbols[], changed_api | 代码级用例的变更来源；不进入 fingerprint |
 | `CaseReview` | decision, by, at, note, fingerprint | 最近一次审核决定；`fingerprint` 必须与条目一致 |
@@ -2359,6 +2359,41 @@ SQL 渲染前解析为标量。只有一个父键候选时，框架自动补全�
 `mock_bindings` 是 `dict[dep_id, branch]`，有下游依赖时应显式声明；缺失时按默认 `success` 处理并在审核文件标注
 （不静默）。`dep_id` 必须与 C3 画像一致（`http:{downstream_key} {METHOD} {path}`，见 C3.5.5），
 不得在草案里另取 URL、类名或方法名，也不得按调用点自行拆分。
+
+**用例级业务实体（v4.68）**：用例可以声明 `data`，把“这个用例里的手机商品”
+写成一份确定性数据，而不是去环境里找一条真实记录：
+
+```json
+{
+  "data": {
+    "product": {"id": "P-1001", "category": "phone", "name": "Mock 手机"}
+  },
+  "query": {"product_id": {"$data": "product.id"}},
+  "mock_bindings": {"http:svc:catalog GET /products/{}": "success"},
+  "mock_replies": {
+    "http:svc:catalog GET /products/{}": {
+      "id": {"$data": "product.id"},
+      "category": {"$data": "product.category"}
+    }
+  }
+}
+```
+
+- `$data` 引用只支持对象形式 `{"$data": "实体.字段"}`，可用于 `path_params`、
+  `query`、`body`、Dubbo `arguments/attachments`、断言 `expect/where` 与
+  `mock_replies`；`headers` 仍要求字符串，首版不支持。
+- `mock_replies[dep_id]` 是 JSON 对象，在该 dep 所选分支的响应体上递归合并；
+  数组和标量整体替换。必须同时有该 dep 的 default `mock_binding`。
+- 首版只支持 HTTP 与 Dubbo 下游；gRPC 下游显式报
+  `mock_reply_transport_unsupported`，不静默忽略。
+- 校验会拒绝未知引用（`data.ref_unknown`）、`data` 内再引用
+  （`data.nested_ref`）、无绑定补充（`mock.reply_dep_missing_binding`）；
+  声明了但没被引用的实体给 `data.unused` 告警。
+- codegen 在生成时把引用换成字面量，生成物里不出现 `$data`；执行会话把
+  `mock_replies` 随 binding 下发。用例 `data` 与 `mock_replies` 进入指纹，
+  修改实体必须重新审核。
+- A4 自动生成实体与 Mock 补充留到下一步；本版先打通契约、校验、codegen、
+  HTTP/Dubbo 会话合并。
 
 草案不填 `TC-NNNN`，也不重复写 `method/path`：由 import 从 context 的 `endpoint` 解析并回填，
 避免两套路径写法。

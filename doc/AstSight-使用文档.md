@@ -1327,6 +1327,50 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 
 ---
 
+## 11B. 用例业务实体与下游 Mock 联动
+
+需要“一个手机商品”时，不要从环境里找真实商品 ID。正确做法是：用例自己声明
+实体，请求和下游 Mock 都引用同一份数据。
+
+```json
+{
+  "data": {
+    "product": {"id": "P-1001", "category": "phone", "name": "Mock 手机"}
+  },
+  "query": {"product_id": {"$data": "product.id"}},
+  "mock_bindings": {"http:svc:catalog GET /products/{}": "success"},
+  "mock_replies": {
+    "http:svc:catalog GET /products/{}": {
+      "id": {"$data": "product.id"},
+      "category": {"$data": "product.category"}
+    }
+  }
+}
+```
+
+执行时：
+
+1. 请求带 `P-1001`；
+2. SUT 查询商品的下游调用命中 Mock；
+3. Mock 在 `success` 分支原响应体上合并 `id/category`，让 `P-1001` 在本次会话里
+   是一台手机；
+4. 断言 SUT 的业务结果（比如推荐结果只含手机），而不是“查得到这条数据”。
+
+规则：
+
+- `$data` 只支持 `{"$data": "实体.字段"}` 对象形式；可用在 `path_params`、
+  `query`、`body`、Dubbo `arguments/attachments`、断言 `expect/where` 和
+  `mock_replies`；`headers` 首版仍是普通字符串。
+- `mock_replies` 必须与该 dep 的 default `mock_bindings` 同时出现；只支持
+  HTTP / Dubbo 下游，gRPC 下游会报 `mock_reply_transport_unsupported`。
+- 引用不存在的字段报 `data.ref_unknown`；实体里再写 `$data` 报
+  `data.nested_ref`；声明了实体但没人引用只给 `data.unused` 告警。
+- 生成的 pytest 里 `$data` 已换成字面量，便于阅读和排错。
+- `data` 和 `mock_replies` 进入用例指纹，改实体等于改用例，需要重新审核。
+- A4 自动生成实体与 Mock 补充还没接，当前由草案/人工填写。
+
+---
+
 ## 12. 运行模式
 
 同一个引擎，差异只在范围。`run` 默认 `--mode delta`。

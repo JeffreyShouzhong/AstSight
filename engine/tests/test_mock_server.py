@@ -817,3 +817,39 @@ def test_real_uvicorn_lifecycle(tmp_path: Path) -> None:
     finally:
         server.stop()
     assert server.started is False
+
+
+def test_binding_reply_merges_case_entity_into_branch_body(tmp_path: Path) -> None:
+    server, dep_id, _ = _server(tmp_path)
+    session = _session_body(dep_id)
+    session["bindings"][0]["reply"] = {
+        "trans_no": "T-P1001",
+        "product": {"id": "P-1001", "category": "phone"},
+    }
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create = await _call(
+                client, "POST", "/_admin/sessions", headers=ADMIN, json=session
+            )
+            assert create.status_code == 200
+            response = await _call(
+                client,
+                "POST",
+                "/gateway/pay",
+                headers={"Host": "pay-service", "Content-Type": "application/json"},
+                content=b'{"amount": 10}',
+            )
+            return response
+
+    response = _run(scenario())
+    assert response.status_code == 200
+    # 分支原有字段保留，用例实体字段覆盖/补充。
+    assert response.json() == {
+        "code": 0,
+        "trans_no": "T-P1001",
+        "product": {"id": "P-1001", "category": "phone"},
+    }
+    calls = server.evidence.records
+    assert calls[0].branch == "success"

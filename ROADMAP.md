@@ -24,6 +24,8 @@
 - 多请求用例（`steps[]` 顺序请求与跨步骤引用）
 - 断言：状态码、响应字段、header、OpenAPI 响应 schema、只读数据库行；强度 L1–L4 按内容推导
 - 下游明文 HTTP Mock + C5a 数据目录 + C5b 逐用例 SQLite/PostgreSQL/MySQL 造数
+- 用例级业务实体：请求与下游 Mock 引用同一份 `data`，用 `mock_replies` 把实体
+  写进响应，按业务语义造数而不是从环境里捞真实 ID
 - A5/A6 合并诊断修复：默认最多 3 轮，可改用例请求/断言/绑定与实际使用的 Mock 分支，
   断言不得删除或降强，Mock 修复热更新到运行中的服务
 - 三种运行范围：`full` / `delta` / `cases`

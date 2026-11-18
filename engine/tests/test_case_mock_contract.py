@@ -239,3 +239,95 @@ def test_multiple_contract_types_are_not_checked(tmp_path: Path) -> None:
         _draft(context), context, project=tmp_path, mock_semantic=semantic
     )
     assert _drift_warnings(result) == []
+
+
+def _with_case_data(draft: CaseDraft, **updates) -> CaseDraft:
+    case = draft.cases[0].model_copy(update=updates)
+    return draft.model_copy(update={"cases": [case]})
+
+
+def test_case_data_and_mock_reply_share_one_entity(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context, semantic = _with_contract(
+        context, types=[ITEM_TYPE], body={"id": 1, "name": "box"}
+    )
+    draft = _with_case_data(
+        _draft(context),
+        data={"product": {"id": "P-1001", "category": "phone"}},
+        body={"customer_id": {"$data": "product.id"}},
+        mock_replies={
+            DEP_ID: {
+                "id": {"$data": "product.id"},
+                "category": {"$data": "product.category"},
+            }
+        },
+    )
+    result = validate_draft(
+        draft, context, project=tmp_path, mock_semantic=semantic
+    )
+    assert result.errors == []
+    assert [item for item in result.warnings if item.code == "data.unused"] == []
+    resolved = result.resolved[0].case
+    assert resolved.data["product"]["id"] == "P-1001"
+    assert resolved.mock_replies[DEP_ID]["category"] == {
+        "$data": "product.category"
+    }
+
+
+def test_unknown_data_ref_is_rejected(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        data={"product": {"id": "P-1001"}},
+        body={"customer_id": {"$data": "product.sku"}},
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    codes = {item.code for item in result.errors}
+    assert "data.ref_unknown" in codes
+
+
+def test_unused_data_entity_warns(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        data={"product": {"id": "P-1001"}},
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    assert result.errors == []
+    warnings = [item for item in result.warnings if item.code == "data.unused"]
+    assert len(warnings) == 1
+    assert "product" in warnings[0].message
+
+
+def test_mock_reply_requires_binding(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        mock_replies={"http:svc:ghost GET /ghost": {"id": 1}},
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    codes = {item.code for item in result.errors}
+    assert "mock.reply_dep_missing_binding" in codes
+
+
+def test_mock_reply_rejects_grpc_downstream(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context, semantic = _with_contract(
+        context, types=[ITEM_TYPE], body={"id": 1, "name": "box"}
+    )
+    grpc_semantic = semantic.model_copy(
+        update={
+            "deps": [
+                semantic.deps[0].model_copy(update={"transport": Transport.GRPC})
+            ]
+        }
+    )
+    draft = _with_case_data(
+        _draft(context),
+        mock_replies={DEP_ID: {"id": 1}},
+    )
+    result = validate_draft(
+        draft, context, project=tmp_path, mock_semantic=grpc_semantic
+    )
+    codes = {item.code for item in result.errors}
+    assert "mock.reply_transport_unsupported" in codes

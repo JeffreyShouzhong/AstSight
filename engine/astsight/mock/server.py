@@ -178,7 +178,32 @@ def _session_payload(session) -> dict[str, Any]:
             binding.pop("rules", None)
         if not binding.get("sequence"):
             binding.pop("sequence", None)
+        if binding.get("reply") is None:
+            binding.pop("reply", None)
     return payload
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _apply_binding_reply(stub: MockStub, reply: Any) -> MockStub:
+    """把用例级响应补充合并到分支桩；对象做递归合并，非对象整体替换。"""
+    if reply is None:
+        return stub
+    body = stub.body
+    merged = (
+        _deep_merge(body, reply)
+        if isinstance(body, dict) and isinstance(reply, dict)
+        else reply
+    )
+    return stub.model_copy(update={"body": merged})
 
 
 def _build_stub_response(
@@ -752,6 +777,9 @@ class MockHttpServer:
                 )
 
             stub = entry.branch(branch)
+            binding = self.sessions.binding(session, dep_id)
+            if stub is not None and binding is not None:
+                stub = _apply_binding_reply(stub, binding.reply)
             if stub is None:
                 self._record_dubbo(
                     dep_id=dep_id,
@@ -1073,6 +1101,8 @@ class MockHttpServer:
             branch_source = "default"
 
         stub = entry.branch(branch)
+        if stub is not None:
+            stub = _apply_binding_reply(stub, binding.reply)
         if stub is None:
             self._record(
                 request,

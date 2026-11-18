@@ -82,12 +82,20 @@ MockReply = Annotated[
 
 
 class MockBinding(BaseModel):
-    """会话内的下游分支绑定。"""
+    """会话内的下游分支绑定。
+
+    `reply` 是用例级响应体补充：在该分支原有 body 上做递归合并，
+    用于把用例声明的业务实体（如商品 ID/类别）写进下游 Mock 响应。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     dep_id: str
     branch: str
+    reply: Any | None = Field(
+        default=None,
+        description="用例级响应体补充；与分支 body 递归合并",
+    )
     rules: list["MockBindingRule"] = Field(
         default_factory=list,
         max_length=50,

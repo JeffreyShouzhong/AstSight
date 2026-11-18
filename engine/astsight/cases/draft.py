@@ -140,6 +140,18 @@ class DraftCase(BaseModel):
     rationale: str | None = None
     assumptions: list[str] = Field(default_factory=list)
     note: str | None = None
+    data: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "用例级业务实体；请求与下游 Mock 统一引用同一份数据，"
+            "如 {\"product\": {\"id\": \"P-1001\", \"category\": \"phone\"}}"
+        ),
+    )
+    mock_replies: dict[str, Any] = Field(
+        default_factory=dict,
+        max_length=50,
+        description="dep_id → 用例级响应体补充；与所选分支 body 递归合并",
+    )
     mock_bindings: dict[str, str] = Field(
         default_factory=dict,
         description="可选：dep_id → branch；执行时写入用例级 Mock 会话",
@@ -362,6 +374,12 @@ def to_test_case(
             all_asserts, steps=len(effective_steps)
         ),
         note=draft_case.note,
+        data={
+            str(key): value for key, value in draft_case.data.items()
+        },
+        mock_replies={
+            str(key): value for key, value in draft_case.mock_replies.items()
+        },
         mock_bindings=dict(draft_case.mock_bindings),
         mock_rules=[
             rule.model_copy(deep=True) for rule in draft_case.mock_rules
@@ -483,6 +501,8 @@ def case_fingerprint(case: TestCase, case_key: str) -> str:
             }
             for item in case.preconditions
         ],
+        **({"data": case.data} if case.data else {}),
+        **({"mock_replies": case.mock_replies} if case.mock_replies else {}),
         "mock_bindings": dict(sorted(case.mock_bindings.items())),
         **(
             {

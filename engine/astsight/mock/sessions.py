@@ -73,6 +73,10 @@ class SessionManager:
         for binding in bindings:
             if not binding.branch:
                 raise SessionError("mock_branch_required", 400, binding.dep_id)
+            if binding.reply is not None and not isinstance(binding.reply, dict):
+                raise SessionError(
+                    "mock_reply_invalid", 400, binding.dep_id
+                )
             seen_matches: set[str] = set()
             for rule in binding.rules:
                 matcher = rule.match

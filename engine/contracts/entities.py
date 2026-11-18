@@ -332,6 +332,16 @@ class TestCase(BaseModel):
     source: str = Field(description="溯源：openapi / route / requirement:<doc>#<section>")
     assert_strength: AssertStrength = Field(default=AssertStrength.L1)
     note: str | None = Field(default=None, description="生成说明/降级原因")
+    data: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "用例级业务实体；请求与下游 Mock 可用 {\"$data\": \"实体.字段\"} 引用"
+        ),
+    )
+    mock_replies: dict[str, Any] = Field(
+        default_factory=dict,
+        description="dep_id → 用例级响应体补充；与所选分支 body 递归合并",
+    )
     mock_bindings: dict[str, str] = Field(
         default_factory=dict,
         description="用例级 Mock 分支绑定：dep_id → branch（C3.5.5 会话）",

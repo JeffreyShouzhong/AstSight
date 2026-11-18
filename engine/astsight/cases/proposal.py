@@ -290,7 +290,9 @@ def _request_summary(candidate: dict[str, Any]) -> dict[str, Any]:
         "query": candidate.get("query") or {},
         "headers": candidate.get("headers") or {},
         "body": candidate.get("body"),
+        "data": candidate.get("data") or {},
         "mock_bindings": candidate.get("mock_bindings") or {},
+        "mock_replies": candidate.get("mock_replies") or {},
     }
     if candidate.get("steps"):
         summary["steps"] = candidate["steps"]
