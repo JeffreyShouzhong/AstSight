@@ -2041,7 +2041,8 @@ MockRuntimeAdapter
 - `build_profiles` 将 gRPC deps 附到 profile，`build_plan_from_profiles` 产出统一 `deps[]` + `grpc_server` injection；
 - gRPC MockSemantic 默认 success body 从 proto response message descriptor 采样；规则分支按 HTTP 语义错误码映射为 canonical gRPC code（400/404/502/503/504 等），错误分支 body 固定为可解析空消息；
 - gRPC dep 的 service/grpc_path/method/property 参与规则 token 匹配，不再只按 HTTP path 匹配；
-- 更多 gRPC 客户端配置形态、Linux binary 分发和 gRPC plan 的 `agent run` 接线仍属后续阶段。
+- `agent run` 的 `build_mock_plan` 已把 gRPC binding 转成统一 `MockPlanDep` + `GrpcMockReply` + `grpc_server` injection；A5 Mock 热更新会刷新 plan 中的 gRPC replies，下一轮 session 重新安装 stubs；
+- 更多 gRPC 客户端配置形态、Linux binary 分发和完整 gRPC `agent run` 样例仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 

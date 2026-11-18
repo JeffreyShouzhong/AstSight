@@ -8,12 +8,16 @@ from __future__ import annotations
 from typing import Any
 
 from contracts import (
+    GrpcMockLocator,
+    GrpcMockReply,
     MockPlan,
+    MockPlanDep,
     MockPlanDubboRoute,
     MockPlanInjection,
     MockPlanRoute,
     MockSemantic,
     MockStrategy,
+    Transport,
 )
 
 from ..mock import MockPlanError, validate_mock_plan
@@ -173,7 +177,7 @@ def _injection_for(dep: dict[str, Any]) -> MockPlanInjection:
             dep_id=dep_id,
             strategy=MockStrategy.GRPC_SERVER,
             kind="base_url",
-            property=None,
+            property=dep.get("property") or None,
             original=None,
             path_mode="replace",
             reason="grpc_target_rewrite_required",
@@ -255,6 +259,23 @@ def sync_mock_semantic(
                 continue
             entry.branches[branch.branch] = branch.stub.model_copy(deep=True)
             changed.append(f"{entry.dep_id}/{branch.branch}")
+    for dep in runtime.plan.deps:
+        if dep.transport is not Transport.GRPC:
+            continue
+        semantic_dep = dep_index.get(dep.dep_id)
+        if semantic_dep is None:
+            continue
+        replies: dict[str, GrpcMockReply] = {}
+        branches = {}
+        for branch in semantic_dep.branches:
+            if not isinstance(branch.reply, GrpcMockReply):
+                continue
+            replies[branch.branch] = branch.reply.model_copy(deep=True)
+            branches[branch.branch] = branch.stub.model_copy(deep=True)
+        if replies != dep.replies:
+            dep.branches = branches
+            dep.replies = replies
+            changed.extend(f"{dep.dep_id}/{name}" for name in sorted(replies))
     for route in [*runtime.plan.routes, *runtime.plan.dubbo_routes]:
         dep = dep_index.get(route.dep_id)
         if dep is None:
@@ -289,6 +310,7 @@ def build_mock_plan(
     warnings: list[str] = []
     routes: list[MockPlanRoute] = []
     dubbo_routes: list[MockPlanDubboRoute] = []
+    grpc_deps: list[MockPlanDep] = []
     injections: list[MockPlanInjection] = []
 
     for dep_id in sorted(bindings):
@@ -307,9 +329,31 @@ def build_mock_plan(
         if dep_id.startswith("dubbo:") or dep.get("dep_type") == "dubbo":
             dubbo_routes.append(_dubbo_route(dep, dep_id, route_branches))
         elif dep_id.startswith("grpc:") or dep.get("dep_type") == "grpc":
-            raise AgentError(
-                "mock_grpc_runtime_unimplemented",
-                f"{dep_id}: gRPC 下游 Mock runtime 尚未实现",
+            grpc_replies: dict[str, GrpcMockReply] = {}
+            for branch_name in sorted(bindings[dep_id]):
+                spec = branches[(dep_id, branch_name)]
+                reply = spec.reply
+                if not isinstance(reply, GrpcMockReply):
+                    raise AgentError(
+                        "mock_reply_required",
+                        f"{dep_id}/{branch_name}: gRPC branch 缺少 GrpcMockReply",
+                    )
+                grpc_replies[branch_name] = reply.model_copy(deep=True)
+            grpc_deps.append(
+                MockPlanDep(
+                    dep_id=dep_id,
+                    transport=Transport.GRPC,
+                    strategy=MockStrategy.GRPC_SERVER,
+                    source="agent",
+                    locator=GrpcMockLocator(
+                        grpc_path=str(dep.get("grpc_path") or ""),
+                        target=dep.get("target") or None,
+                        property=dep.get("property") or None,
+                        descriptor_source=dep.get("descriptor_source") or None,
+                    ),
+                    branches=route_branches,
+                    replies=grpc_replies,
+                )
             )
         else:
             method = str(dep.get("method") or "").upper()
@@ -349,6 +393,8 @@ def build_mock_plan(
                 f"mock_injection_discovery:{dep_id}:"
                 "requires_spring_cloud_static_instances"
             )
+        elif injection.strategy is MockStrategy.GRPC_SERVER:
+            warnings.append(f"mock_injection_grpc_server:{dep_id}")
 
     plan = MockPlan(
         schema_version=1,
@@ -358,6 +404,7 @@ def build_mock_plan(
         port=port,
         routes=routes,
         dubbo_routes=dubbo_routes,
+        deps=grpc_deps,
         injections=injections,
     )
     try:

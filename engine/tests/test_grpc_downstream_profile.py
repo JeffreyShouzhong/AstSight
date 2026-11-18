@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from astsight.mock import validate_mock_plan
+from astsight.agent.mockplan import build_mock_plan
+from astsight.mock.semantic import build_mock_semantic
 from astsight.profile import (
     GrpcDownstreamScanner,
     build_plan_from_profiles,
@@ -105,3 +108,51 @@ public class OrderClient {
     assert dep["dep_id"] == DEP_ID
     assert dep["property"] == "INVENTORY_GRPC_ADDR"
     assert dep["languages"] == ["java"]
+
+
+def test_agent_mock_plan_contains_grpc_reply_and_injection(tmp_path: Path) -> None:
+    _proto(tmp_path)
+    (tmp_path / "app.py").write_text(
+        """
+import os
+import grpc
+from inventory_pb2_grpc import InventoryServiceStub
+
+channel = grpc.insecure_channel(os.environ["INVENTORY_GRPC_ADDR"])
+stub = InventoryServiceStub(channel)
+
+def handler():
+    return stub.Reserve({})
+""",
+        encoding="utf-8",
+    )
+    profiles, _unmapped = build_profiles(
+        _route(),
+        [],
+        project_root=tmp_path,
+    )
+    context = {"profiles": profiles}
+    semantic = build_mock_semantic(context)
+    draft = SimpleNamespace(
+        cases=[
+            SimpleNamespace(
+                mock_bindings={DEP_ID: "success"},
+            )
+        ]
+    )
+
+    plan, warnings = build_mock_plan(
+        context,
+        semantic,
+        draft,
+        sut_id="sut",
+    )
+
+    assert plan is not None
+    assert plan.deps[0].dep_id == DEP_ID
+    assert plan.deps[0].replies["success"].body == {
+        "available": False,
+    }
+    assert plan.injections[0].strategy.value == "grpc_server"
+    assert plan.injections[0].property == "INVENTORY_GRPC_ADDR"
+    assert f"mock_injection_grpc_server:{DEP_ID}" in warnings
