@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from contracts import (
@@ -40,7 +41,7 @@ from .identity import (
 )
 from .server import MockHttpServer
 from .grpc_descriptor import GrpcDescriptorError, GrpcDescriptorIndex
-from .grpc_runtime import GripMockBackend, GrpcMockRuntimeAdapter
+from .grpc_runtime import GripMockBackend, GripMockProcess, GrpcMockRuntimeAdapter
 from .runtime import (
     EmbeddedMockRuntimeAdapter,
     MockRuntimeManager,
@@ -59,6 +60,13 @@ _VALID_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 _INJECTION_KINDS = {"base_url", "endpoint_url", "proxy"}
 _PATH_MODES = {"append", "replace"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _allocate_port(host: str) -> int:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
 
 
 class MockPlanError(ValueError):
@@ -685,10 +693,11 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
 
 
 def _injection_model(
-    route: MockPlanRoute | MockPlanDubboRoute,
+    route: MockPlanRoute | MockPlanDubboRoute | MockPlanDep,
     injection: MockPlanInjection,
     *,
     endpoint: str,
+    grpc_endpoint: str | None,
     route_key: str,
 ) -> MockInjection:
     if injection.strategy is MockStrategy.URL_OVERRIDE:
@@ -703,6 +712,8 @@ def _injection_model(
         MockStrategy.AGENT_REWRITE,
     ):
         injected = endpoint
+    elif injection.strategy is MockStrategy.GRPC_SERVER:
+        injected = grpc_endpoint or ""
     else:
         injected = ""
     return MockInjection(
@@ -729,6 +740,10 @@ class MockPlanRuntime:
     injections: list[MockInjection] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     runtimes: MockRuntimeManager = field(default_factory=MockRuntimeManager)
+    grpc_endpoint: str | None = None
+    grpc_admin_endpoint: str | None = None
+    grpc_gateway_endpoint: str | None = None
+    grpc_process: GripMockProcess | None = None
 
     @property
     def evidence_path(self) -> Path | None:
@@ -754,6 +769,9 @@ class MockPlanRuntime:
             "port": self._port(),
             "endpoint": self.server.endpoint,
             "admin_endpoint": self.server.admin_endpoint,
+            "grpc_endpoint": self.grpc_endpoint,
+            "grpc_admin_endpoint": self.grpc_admin_endpoint,
+            "grpc_gateway_endpoint": self.grpc_gateway_endpoint,
             "token_fingerprint": model.token_fingerprint,
             "history_path": str(self.evidence_path) if self.evidence_path else None,
             "route_count": model.route_count,
@@ -784,6 +802,9 @@ class MockPlanRuntime:
             "sut_id": self.plan.sut_id,
             "namespace": self.plan.namespace,
             "endpoint": self.server.endpoint,
+            "grpc_endpoint": self.grpc_endpoint,
+            "grpc_admin_endpoint": self.grpc_admin_endpoint,
+            "grpc_gateway_endpoint": self.grpc_gateway_endpoint,
             # 服务发现型注入需要 route.host（即服务名）才能写静态实例表。
             "routes": [
                 {
@@ -814,6 +835,8 @@ class MockPlanRuntime:
             "sut_id": self.plan.sut_id,
             "namespace": self.plan.namespace,
             "endpoint": self.server.endpoint,
+            "grpc_endpoint": self.grpc_endpoint,
+            "grpc_admin_endpoint": self.grpc_admin_endpoint,
             "route_count": len(self.plan.routes),
             "dubbo_route_count": len(self.plan.dubbo_routes),
             "dep_count": len(self.plan.deps),
@@ -843,6 +866,12 @@ class MockPlanRuntime:
             runtime_error = exc
         finally:
             self.server.stop()
+            if self.grpc_process is not None:
+                try:
+                    self.grpc_process.stop()
+                except Exception as exc:
+                    if runtime_error is None:
+                        runtime_error = exc
         if runtime_error is not None:
             raise runtime_error
 
@@ -853,15 +882,25 @@ def _build_runtime(
     plan_path: Path,
     history_path: str | Path | None,
     grpc_backend: GripMockBackend | None = None,
+    gripmock_path: str | Path | None = None,
+    grpc_process_factory: Callable[..., GripMockProcess] = GripMockProcess,
+    grpc_host: str = "127.0.0.1",
+    grpc_ports: tuple[int, int, int] = (0, 0, 0),
+    grpc_start_timeout_s: float = 15.0,
 ):
     validation = validate_mock_plan(plan)
     grpc_deps = [
         dep.dep_id for dep in plan.deps if dep.transport is Transport.GRPC
     ]
-    if grpc_deps and grpc_backend is None:
+    if grpc_deps and grpc_backend is None and gripmock_path is None:
         raise MockPlanError(
             "mock_grpc_runtime_unimplemented",
             ",".join(grpc_deps[:10]),
+        )
+    if grpc_deps and grpc_backend is not None and gripmock_path is not None:
+        raise MockPlanError(
+            "mock_grpc_backend_conflict",
+            "grpc_backend 与 gripmock_path 只能设置一个",
         )
     server = MockHttpServer(
         sut_id=plan.sut_id,
@@ -871,10 +910,65 @@ def _build_runtime(
         history_path=history_path,
         capture_bodies=plan.capture_bodies,
     )
+    grpc_process: GripMockProcess | None = None
+    grpc_endpoint: str | None = None
+    grpc_admin_endpoint: str | None = None
+    grpc_gateway_endpoint: str | None = None
+    effective_grpc_backend = grpc_backend
+    if grpc_deps and effective_grpc_backend is None:
+        assert gripmock_path is not None
+        grpc_objects = [
+            dep for dep in plan.deps if dep.transport is Transport.GRPC
+        ]
+        sources: set[Path] = set()
+        for dep in grpc_objects:
+            assert isinstance(dep.locator, GrpcMockLocator)
+            source = Path(str(dep.locator.descriptor_source or "")).expanduser()
+            if not source.is_absolute():
+                source = (plan_path.parent / source).resolve()
+            sources.add(source)
+        if len(sources) != 1:
+            raise MockPlanError(
+                "mock_descriptor_ambiguous",
+                f"gripmock 首版要求单一 descriptor source: {sorted(map(str, sources))}",
+            )
+        grpc_port, admin_port, gateway_port = grpc_ports
+        allocated: set[int] = set()
+        values: list[int] = []
+        for requested in (grpc_port, admin_port, gateway_port):
+            port = requested or _allocate_port(grpc_host)
+            while port in allocated:
+                port = _allocate_port(grpc_host)
+            allocated.add(port)
+            values.append(port)
+        grpc_port, admin_port, gateway_port = values
+        grpc_process = grpc_process_factory(
+            executable=gripmock_path,
+            descriptor_source=next(iter(sources)),
+            grpc_port=grpc_port,
+            http_port=admin_port,
+            gateway_port=gateway_port,
+            grpc_host=grpc_host,
+            http_host=grpc_host,
+            gateway_host=grpc_host,
+            work_dir=plan_path.parent,
+            start_timeout_s=grpc_start_timeout_s,
+        )
+        effective_grpc_backend = grpc_process.backend
+        grpc_endpoint = f"{grpc_host}:{grpc_port}"
+        grpc_admin_endpoint = f"http://{grpc_host}:{admin_port}"
+        grpc_gateway_endpoint = f"{grpc_host}:{gateway_port}"
     route_by_dep = {
         route.dep_id: route
         for route in [*plan.routes, *plan.dubbo_routes]
     }
+    route_by_dep.update(
+        {
+            dep.dep_id: dep
+            for dep in plan.deps
+            if dep.transport is Transport.GRPC
+        }
+    )
     runtimes = MockRuntimeManager()
     if plan.routes:
         runtimes.register(
@@ -893,10 +987,10 @@ def _build_runtime(
             )
         )
     if grpc_deps:
-        assert grpc_backend is not None
+        assert effective_grpc_backend is not None
         runtimes.register(
             GrpcMockRuntimeAdapter(
-                grpc_backend,
+                effective_grpc_backend,
                 [dep for dep in plan.deps if dep.transport is Transport.GRPC],
             )
         )
@@ -904,6 +998,8 @@ def _build_runtime(
         RuntimeSessionBridge(runtimes, server.evidence)
     )
     try:
+        if grpc_process is not None:
+            grpc_process.start()
         for route in plan.routes:
             assert route.route_key is not None
             server.add_route(
@@ -933,6 +1029,10 @@ def _build_runtime(
             route_keys=dict(validation.route_keys),
             warnings=list(validation.warnings),
             runtimes=runtimes,
+            grpc_endpoint=grpc_endpoint,
+            grpc_admin_endpoint=grpc_admin_endpoint,
+            grpc_gateway_endpoint=grpc_gateway_endpoint,
+            grpc_process=grpc_process,
         )
         server.start()
         runtimes.start()
@@ -942,6 +1042,11 @@ def _build_runtime(
         except Exception:
             pass
         server.stop()
+        if grpc_process is not None:
+            try:
+                grpc_process.stop()
+            except Exception:
+                pass
         raise
     # 只有 start() 之后端口才确定，因此注入 URL 必须在启动后计算。
     runtime.injections = [
@@ -949,10 +1054,30 @@ def _build_runtime(
             route_by_dep[injection.dep_id],
             injection,
             endpoint=server.endpoint,
+            grpc_endpoint=grpc_endpoint,
             route_key=validation.route_keys[injection.dep_id],
         )
         for injection in plan.injections
     ]
+    injected_deps = {injection.dep_id for injection in runtime.injections}
+    for dep in plan.deps:
+        if dep.transport is not Transport.GRPC or dep.dep_id in injected_deps:
+            continue
+        runtime.injections.append(
+            MockInjection(
+                dep_id=dep.dep_id,
+                strategy=MockStrategy.GRPC_SERVER,
+                kind="base_url",
+                original="",
+                injected=grpc_endpoint or "",
+                path_mode="replace",
+                reason=(
+                    "grpc_target_rewrite_required"
+                    if grpc_endpoint
+                    else "grpc_backend_injected"
+                ),
+            )
+        )
     return runtime
 
 
@@ -961,6 +1086,11 @@ def start_mock_plan(
     *,
     history_path: str | Path | None = None,
     grpc_backend: GripMockBackend | None = None,
+    gripmock_path: str | Path | None = None,
+    grpc_process_factory: Callable[..., GripMockProcess] = GripMockProcess,
+    grpc_host: str = "127.0.0.1",
+    grpc_ports: tuple[int, int, int] = (0, 0, 0),
+    grpc_start_timeout_s: float = 15.0,
 ) -> MockPlanRuntime:
     """加载计划、构建路由表并启动内嵌服务；失败时保证不留下半启动实例。"""
     resolved = Path(plan_path).resolve()
@@ -970,6 +1100,11 @@ def start_mock_plan(
         plan_path=resolved,
         history_path=history_path,
         grpc_backend=grpc_backend,
+        gripmock_path=gripmock_path,
+        grpc_process_factory=grpc_process_factory,
+        grpc_host=grpc_host,
+        grpc_ports=grpc_ports,
+        grpc_start_timeout_s=grpc_start_timeout_s,
     )
 
 

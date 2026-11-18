@@ -320,3 +320,84 @@ def test_grpc_plan_session_lifecycle_installs_collects_and_clears(
         assert backend.cleared_stubs >= 2
     finally:
         runtime.stop()
+
+
+def test_grpc_plan_starts_process_factory_and_exposes_endpoints(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "inventory.proto").write_text(
+        """
+        syntax = "proto3";
+        package inventory.v1;
+        message ReserveRequest { string sku = 1; }
+        message ReserveResponse { bool available = 1; }
+        service InventoryService {
+          rpc Reserve(ReserveRequest) returns (ReserveResponse);
+        }
+        """,
+        encoding="utf-8",
+    )
+    plan = MockPlan(
+        sut_id="sut",
+        deps=[
+            MockPlanDep(
+                dep_id="grpc:/inventory.v1.InventoryService/Reserve",
+                transport=Transport.GRPC,
+                locator=GrpcMockLocator(
+                    grpc_path="/inventory.v1.InventoryService/Reserve",
+                    descriptor_source="inventory.proto",
+                ),
+                branches={"success": MockStub(body={"available": True})},
+                replies={"success": GrpcMockReply(body={"available": True})},
+            )
+        ],
+    )
+    plan_path = tmp_path / "grpc-process-plan.json"
+    plan_path.write_text(
+        json.dumps(plan.model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    created: dict = {}
+
+    class FakeProcess:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+            self.backend = FakeBackend()
+            self.started = 0
+            self.stopped = 0
+            created.update(kwargs)
+
+        def start(self) -> None:
+            self.started += 1
+
+        def stop(self) -> None:
+            self.stopped += 1
+
+    process = None
+
+    def factory(**kwargs):
+        nonlocal process
+        process = FakeProcess(**kwargs)
+        return process
+
+    runtime = start_mock_plan(
+        plan_path,
+        gripmock_path=tmp_path / "gripmock",
+        grpc_process_factory=factory,
+        grpc_ports=(41001, 41002, 41003),
+    )
+    try:
+        assert process is not None
+        assert process.started == 1
+        assert created["grpc_port"] == 41001
+        assert runtime.grpc_endpoint == "127.0.0.1:41001"
+        assert runtime.grpc_admin_endpoint == "http://127.0.0.1:41002"
+        assert runtime.grpc_gateway_endpoint == "127.0.0.1:41003"
+        manifest = runtime.manifest(run_id="run-1")
+        assert manifest["grpc_endpoint"] == "127.0.0.1:41001"
+        injection = runtime.injection_document()["injections"][0]
+        assert injection["strategy"] == "grpc_server"
+        assert injection["injected"] == "127.0.0.1:41001"
+    finally:
+        runtime.stop()
+    assert process.stopped == 1

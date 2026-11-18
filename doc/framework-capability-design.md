@@ -2031,7 +2031,9 @@ MockRuntimeAdapter
 - `GrpcMockRuntimeAdapter` 已实现按 session 清理/安装 stubs、`GET /api/history` 归一化、canonical gRPC status 映射；`GripMockHttpBackend` 使用官方 `/api/stubs`、`/api/history`、readiness API；`GripMockProcess` 管理子进程、端口环境、日志和启动就绪；
 - `MockHttpServer` session lifecycle 已接入 `RuntimeSessionBridge`：创建 session 时激活全部 runtime，drain 时采集并去重写入统一证据，关闭时清理 stubs；gRPC-only Plan 使用内嵌 HTTP 控制面管理 session/health/evidence；
 - `start_mock_plan(..., grpc_backend=...)` 已允许注入 `GripMockBackend`；未提供 backend 时仍显式阻断 `mock_grpc_runtime_unimplemented`；
-- gripmock 子进程自动启动、端口分配、SUT gRPC target 改写和 semantic 自动采样仍属后续阶段。
+- `start_mock_plan(..., gripmock_path=...)` 已支持自动分配 gRPC/admin/gateway 端口、启动 `GripMockProcess`，并将三个 endpoint 写入 manifest/injection document；每个 gRPC dep 自动生成 `grpc_server` target 注入项；
+- 首版自动进程模式要求本次 run 使用单一 descriptor source，多个不同 source 报 `mock_descriptor_ambiguous`；
+- SUT 启动器消费 injection document 完成实际 target 改写，以及真实 gripmock binary e2e 和 semantic 自动采样仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 
