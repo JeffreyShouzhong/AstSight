@@ -134,6 +134,11 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
   同一套 fixture 校验，SQL 占位符/引用在计划生成时固化；计划方言与 `--db-url`
   不一致时标 `data_dialect_mismatch`，不静默改写 SQL。建库、迁移、连接池与跨库事务
   不在范围内。示例服务仍用 `/_reset` 保证可重复，不把示例重置当成通用造数。
+- **多行与父子 fixtures**：同一表支持多行；C5b fixtures 可用
+  `{"$ref": "orders[0].id"}` 引用同批父行。只有一个父键候选时自动补子表
+  外键并写 `fixture_fk_autofilled`；多个父键且未显式引用时阻断
+  `fixture_fk_ambiguous`。INSERT 按 catalog 拓扑序、teardown 按逆拓扑逐行执行，
+  多父多子在同一事务内应用和回收。
 - **C5a 语义候选一律带来源**：注释、DBML Enum note、数据库枚举、规则常量与代码枚举/
   常量组（Java/Python/Go/TS，含 Java `static final`、Go `const`、TS `as const`）
   只能产出 `inferred` 候选；`source` 记录

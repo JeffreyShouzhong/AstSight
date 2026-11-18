@@ -18,6 +18,7 @@ from contracts import (
 )
 
 from ..persistence import sha256_json
+from .fixtures import prepare_plan_fixtures
 from .render import RenderError, render_plan
 from .validate import validate_plan_fixtures
 
@@ -244,6 +245,18 @@ def build_data_plan(
             case_key=getattr(case, "case_key", ""),
             reason="fixtures_missing",
             details="前置状态/模型输出没有产生任何 fixture 行",
+        ), warnings
+    merged, relation_errors, relation_warnings = prepare_plan_fixtures(
+        catalog,
+        merged,
+    )
+    warnings.extend(relation_warnings)
+    if relation_errors:
+        return None, RejectedPlan(
+            case_id=getattr(case, "id", None),
+            case_key=getattr(case, "case_key", ""),
+            reason="fixture_relation_invalid",
+            details="; ".join(relation_errors[:20]),
         ), warnings
     merged_target.update(target_state or {})
 

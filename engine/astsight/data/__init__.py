@@ -7,6 +7,7 @@ from .apply import (
     parse_sqlite_url,
     teardown_plan,
 )
+from .fixtures import prepare_plan_fixtures
 from .annotations import (
     comment_value_pairs,
     fold_rule_constants,
@@ -104,6 +105,7 @@ __all__ = [
     "parse_ddl",
     "parse_enum_values",
     "parse_sqlite_url",
+    "prepare_plan_fixtures",
     "propose_rule_states",
     "reflect_database",
     "scan_code_enums",

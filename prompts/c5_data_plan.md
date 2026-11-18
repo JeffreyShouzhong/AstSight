@@ -25,7 +25,15 @@
   "plans": {
     "order_stock_insufficient": {
       "fixtures": {
-        "products": [{"sku_id": "S001", "stock": 0, "status": "active"}]
+        "orders": [
+          {"id": 10, "status": "pending"},
+          {"id": 20, "status": "paid"}
+        ],
+        "order_items": [
+          {"id": 100, "order_id": {"$ref": "orders[0].id"}, "sku": "S001"},
+          {"id": 101, "order_id": {"$ref": "orders[0].id"}, "sku": "S002"},
+          {"id": 102, "order_id": {"$ref": "orders[1].id"}, "sku": "S003"}
+        ]
       },
       "target_state": {
         "orders": {"status": "cancelled"}
@@ -44,10 +52,14 @@
 3. 用例已有 `preconditions[].state_key` 时，框架会展开 catalog 中该状态；
    你只需补充该状态没有覆盖、但触发规则必需的字段/行，不要重复整行。
 4. FK 闭包：子表行引用的父表行必须在同一用例的 fixtures 中出现。
-5. `target_state` 只描述断言关心的期望数据；没有就省略或写 `{}`。
-6. 不输出 SQL、`teardown`、`tables_order` 或 `fk_links`；这些由框架确定性生成。
-7. 无法造出的状态不要硬编，写进 `gaps`，框架会把该用例标为 rejected/blocked。
-8. 不引用 catalog 之外的表/列；不编造枚举值。
+   多父多子时推荐用 `{"$ref": "orders[0].id"}` 引用同批行；只有一个候选
+   父键时框架可自动补子表外键，多个候选且未显式引用会被拒绝。
+5. 同一张表可以输出多行；每行仍必须是完整、可类型校验的对象。父子多行
+   必须保持插入拓扑和可回收主键，不要只返回一行样例。
+6. `target_state` 只描述断言关心的期望数据；没有就省略或写 `{}`。
+7. 不输出 SQL、`teardown`、`tables_order` 或 `fk_links`；这些由框架确定性生成。
+8. 无法造出的状态不要硬编，写进 `gaps`，框架会把该用例标为 rejected/blocked。
+9. 不引用 catalog 之外的表/列；不编造枚举值。
 
 ---
 

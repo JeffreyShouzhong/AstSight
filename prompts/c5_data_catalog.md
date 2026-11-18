@@ -38,6 +38,8 @@
      否则写 `inferred`；无法判断则不要输出该列（框架保持 `unmapped`）。
 2. 设计 `states[]`：A4 可引用的业务状态，每项必须有 `state_key` 和可执行数据：
    - `table_values`：`{table: [row, ...]}`，只含 catalog 中存在的表/列；
+   - 同一张表允许多行；父子业务态必须输出父表和全部子表行，不要只保留一行；
+   - `states[].table_values` 中的子表外键直接写父表主键值，不使用 `$ref`；
    - `target_state`：可选，表示断言/后续步骤期望的状态；
    - `rule_keys`：该状态服务的规则；只引用输入中存在的 key；
    - FK 完整性：子表行引用父表时，父表行必须出现在同一个 state 的 `table_values` 中。
@@ -67,6 +69,14 @@
     {
       "state_key": "state_stock_empty",
       "table_values": {
+        "orders": [
+          {"id": 10, "status": "pending"},
+          {"id": 20, "status": "paid"}
+        ],
+        "order_items": [
+          {"id": 100, "order_id": 10, "sku": "S001"},
+          {"id": 101, "order_id": 20, "sku": "S003"}
+        ],
         "products": [{"sku_id": "S001", "stock": 0, "status": "active"}]
       },
       "target_state": {"products": {"stock": 0}},
