@@ -2,8 +2,8 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`d3455f9`（`文档：更新当前进度存档`），
-> 已推送至 `origin/unified-mock-runtime`
+> 最新代码提交：`cad1480`（`新增：MQ 生产者拦截与 Kafka 消息断言`）；
+> 当前存档已同步远端。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
