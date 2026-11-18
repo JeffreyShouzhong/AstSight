@@ -14,6 +14,7 @@ from astsight.cases.context import build_context
 from astsight.cases.draft import CaseDraft
 from astsight.cases.validate import validate_draft
 from contracts import (
+    Assertion,
     CaseMockRule,
     Evidence,
     MockBranch,
@@ -499,3 +500,34 @@ def test_data_plan_payload_uses_resolved_case_values(tmp_path: Path) -> None:
     assert payload["data"]["product"]["id"] == "P-1001"
     assert payload["mock_replies"][DEP_ID]["name"] == "Mock 手机"
     assert "$data" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_db_unchanged_requires_where_and_rejects_expect(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        asserts=[
+            Assertion(kind="db_row", target="orders", op="unchanged"),
+            Assertion(
+                kind="db_row",
+                target="orders",
+                op="unchanged",
+                where={"id": 1},
+                expect={"id": 1},
+                wait_ms=100,
+            ),
+            Assertion(
+                kind="db_row",
+                target="orders.id",
+                op="eq",
+                expect=1,
+                ignore_columns=["updated_at"],
+            ),
+        ],
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    codes = {item.code for item in result.errors}
+    assert "assertion.db_unchanged_where_missing" in codes
+    assert "assertion.db_expect_unexpected" in codes
+    assert "assertion.db_unchanged_wait_unsupported" in codes
+    assert "assertion.db_ignore_unexpected" in codes

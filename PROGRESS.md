@@ -38,6 +38,7 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
+| 多行终态与状态不变断言 | ✅ 2026-11-18 | C5b 迁移后断言支持多表/多列/多行/复合主键，`state_path_*` 按终态行定位；新增 `db_row/unchanged`，请求前快照、请求后逐列比较，支持 `ignore_columns`；单请求与多步骤均覆盖；新增 6 条测试，全量 663 passed / 60 skipped |
 | 实体 + 造数 + Mock 真实链路 e2e | ✅ 2026-11-18 | 新增 `test_case_entity_mock_e2e.py`：真实 HTTP SUT 从 SQLite 读订单/明细，调用下游；用例 `data` 同时用于插表、请求和 `mock_replies`；断言验证请求、Mock 与插入行同源；顺带修复生成 fixture 的 teardown 顺序错误（`plan.teardown` 已是逆拓扑，代码又反转一次导致外键删除失败） |
 | README 首页差异化 | ✅ 2026-11-18 | 首页第一屏增加“pytest + LLM vs AstSight”对比表，明确门禁、规则事实源、插表造数 + 下游 Mock、失败定位四点；能力表同步用例实体造数口径 |
 | 请求字段全量对照（不做） | ⛔ 2026-11-18 | 明确非目标：fixtures 是数据库基线而非请求镜像；业务输入、负例值、SUT 自生成字段、下游 Mock 实体 ID、认证头都不要求入库；硬校验只保留显式 `preconditions.table + where`，不做默认字段映射 |

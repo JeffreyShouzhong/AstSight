@@ -239,3 +239,156 @@ def test_preconditions_without_plan_are_blocked(
     record = execution.records[0]
     assert record.outcome == "blocked"
     assert "no data plan" in record.message
+
+
+def _unchanged_case() -> CaseModel:
+    return CaseModel(
+        id="TC-0002",
+        endpoint="GET /probe",
+        category="positive",
+        method="GET",
+        path="/probe",
+        source="test",
+        asserts=[
+            Assertion(kind="status_code", op="eq", expect=200),
+            Assertion(
+                kind="db_row",
+                target="items",
+                op="unchanged",
+                where={"id": 1},
+            ),
+        ],
+        preconditions=[
+            Precondition(
+                kind=PreconditionKind.DB_STATE,
+                state_key="items_ready",
+                evidence=Evidence.VERIFIED,
+            )
+        ],
+    )
+
+
+class _MutateHandler(BaseHTTPRequestHandler):
+    db_path: Path
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server 约定
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE items SET name = 'changed' WHERE id = 1")
+        payload = b'{"ok": true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args) -> None:
+        return
+
+
+def _serve_mutate(db_path: Path):
+    handler = type("Handler", (_MutateHandler,), {"db_path": db_path})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def test_db_unchanged_snapshots_before_request_and_passes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("ASTSIGHT_DB_URL", raising=False)
+    case = _unchanged_case()
+    bundle = _bundle(case)
+    db_path = tmp_path / "app.db"
+    _make_db(db_path)
+    generated = tmp_path / "generated"
+
+    result = generate_pytest([case], generated, data_bundle=bundle)
+    assert not result.errors
+    source = next(generated.glob("test_*.py")).read_text(encoding="utf-8")
+    snapshot_at = source.index("db_snapshot_case_1 = db_tools.snapshot(")
+    request_at = source.index("client.request(")
+    assert snapshot_at < request_at
+    assert "db_tools.assert_unchanged(db_snapshot_case_1)" in source
+
+    server, base_url = _serve(db_path)
+    try:
+        execution = run_pytest(
+            generated, base_url=base_url,
+            data_plan_path=str(generated / "data_plan.json"),
+            database_url=f"sqlite:///{db_path.as_posix()}",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert execution.records[0].outcome == "passed", (
+        execution.stdout + execution.stderr
+    )
+
+
+def test_db_unchanged_fails_when_row_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("ASTSIGHT_DB_URL", raising=False)
+    case = _unchanged_case()
+    bundle = _bundle(case)
+    db_path = tmp_path / "app.db"
+    _make_db(db_path)
+    generated = tmp_path / "generated"
+    generate_pytest([case], generated, data_bundle=bundle)
+
+    server, base_url = _serve_mutate(db_path)
+    try:
+        execution = run_pytest(
+            generated, base_url=base_url,
+            data_plan_path=str(generated / "data_plan.json"),
+            database_url=f"sqlite:///{db_path.as_posix()}",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    record = execution.records[0]
+    assert record.outcome == "failed"
+    assert "rows changed" in record.message
+
+
+def test_db_unchanged_ignores_allowlisted_columns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("ASTSIGHT_DB_URL", raising=False)
+    case = _unchanged_case().model_copy(
+        update={
+            "asserts": [
+                Assertion(kind="status_code", op="eq", expect=200),
+                Assertion(
+                    kind="db_row",
+                    target="items",
+                    op="unchanged",
+                    where={"id": 1},
+                    ignore_columns=["name"],
+                ),
+            ]
+        }
+    )
+    bundle = _bundle(case)
+    db_path = tmp_path / "app.db"
+    _make_db(db_path)
+    generated = tmp_path / "generated"
+    generate_pytest([case], generated, data_bundle=bundle)
+
+    server, base_url = _serve_mutate(db_path)
+    try:
+        execution = run_pytest(
+            generated, base_url=base_url,
+            data_plan_path=str(generated / "data_plan.json"),
+            database_url=f"sqlite:///{db_path.as_posix()}",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert execution.records[0].outcome == "passed", (
+        execution.stdout + execution.stderr
+    )

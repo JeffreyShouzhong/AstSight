@@ -624,7 +624,7 @@ PYTHONPATH=. python -m astsight cases prepare \
 | `body_field` | `exists` / `eq` / `ne` / `in` / `gte` / `lte` / `contains` | target 为响应顶层字段；`exists` 不需要 expect |
 | `header` | `exists` / `eq` / `contains` | target 为 header 名（如 `content-type`） |
 | `body_schema` | `matches` | target 为响应状态码（如 `"201"`）；expect 可省略，由 OpenAPI 响应 schema 自动回填 |
-| `db_row` | `exists` / `absent` / `count_eq` / `eq` / `ne` / `gte` / `lte` | target 为表名；`eq/ne/gte/lte` 用 `table.column`；`where` 为等值条件 |
+| `db_row` | `exists` / `absent` / `count_eq` / `eq` / `ne` / `gte` / `lte` / `unchanged` | target 为表名；`eq/ne/gte/lte` 用 `table.column`；`where` 为等值条件；`unchanged` 比较请求前后整行，可配 `ignore_columns` |
 
 约束与执行语义：
 
@@ -668,6 +668,16 @@ PYTHONPATH=. python -m astsight cases prepare \
   `data_unavailable`，不会伪装成通过。
 - 失败场景可加 `db_row` 断言验证“没有副作用”，例如创建失败后
   `{"kind": "db_row", "target": "partners", "op": "absent", "where": {"mobile": "..."}}`。
+- 已有行不应被改动时用 `unchanged`：
+
+  ```json
+  {"kind": "db_row", "target": "orders", "op": "unchanged",
+   "where": {"id": "O-1001"}, "ignore_columns": ["updated_at"]}
+  ```
+
+  生成物会在请求前给 `where` 命中的行拍快照，请求后逐列比较；`updated_at`、
+  版本号这类允许变化的列放进 `ignore_columns`。`unchanged` 必须给 `where`，
+  不接受 `expect` 和 `wait_ms`，只对点名的行生效，不做全表断言。
 
 `assert_strength` 由断言内容自动推导，声明值仅作为设计意图：
 
@@ -953,13 +963,16 @@ PYTHONPATH=. python -m astsight data plan \
 
 迁移后断言（受限）：
 
-- 只对**正例**、且 `preconditions.state_key` 指向 `transition_*` 状态的情况生成；
-- 目标必须是**单表、单列**，且目标列不是 `to_*/new_*/after_*` 这类成对字段；
-- 目标表必须有单列主键，fixture 恰好一行，能定位到迁移后的行；
+- 只对**正例**、且 `preconditions.state_key` 指向 `transition_*` / `state_path_*`
+  状态的情况生成；
+- 支持多表、多列、多行和复合主键：按主键逐行生成 `where`；
+- 行选择规则：已有行等于目标值时只断言这些行（`state_path_*` 的终态行）；
+  没有行等于目标值且表里只有一行时断言这一行（`transition_*` 单行迁移）；
+  多行且无法确定目标行时跳过并告警；
+- 目标列不能是 `to_*/new_*/after_*` 这类成对字段；
 - 生成的是只读 `db_row` 断言（`table.column == 目标值`，按主键定位），写入
   `data_plan.json` 的 `post_assertions`；生成物在用例正常结束后、teardown 之前执行；
-- 负例、成对字段（审计/事件表）、多行状态、复合主键不自动断言，只保留
-  `target_state` 作为线索；
+- 负例、成对字段、无法定位的多行目标不自动断言，只保留 `target_state` 作为线索；
 - 断言失败会先让用例失败，然后照常 teardown，不吞掉失败。
 
 ### 10.3 手工 apply / teardown
@@ -1820,13 +1833,14 @@ Git Bash 会把以 `/` 开头的参数改写成 Windows 路径。建议传完整
 
 ## 19. 边界与未实现
 
-- `db_row` 只做只读校验，不负责写入或等待异步落库；需要轮询的场景尚未支持。
+- `db_row` 单条断言支持 `wait_ms` 轮询；多行/多表共享截止时间的异步一致性尚未支持。
 - 不生成跨用例捕获或鉴权链路；多请求仅限单条用例内的 `steps`。
 - C5 造数支持 SQLite/PostgreSQL/MySQL，但只覆盖用例级 fixture apply/teardown；
   不负责建库、迁移、连接池与跨库事务。
 - `replay` 模式未实现。
-- gRPC Mock 未落地；HTTP Mock 只支持明文 HTTP。
-- 多 SUT 隔离、Dubbo 下游 Mock 的 Java agent 尚未实现。
+- HTTP / Dubbo / gRPC 下游 Mock 已统一到同一控制面；三者的 streaming/reflection、
+  Triple streaming 等仍未支持。
+- 多 SUT 并发隔离尚未实现。
 - 审核必须人工完成；`deprecate` 永远不能自动批准。
 - 非 Python 符号映射依赖 CodeGraph；关闭后不会用正则兜底。
 - 被删除的接口不会自动出现在 `changed_apis`，需要额外比对 base 分支或 OpenAPI。

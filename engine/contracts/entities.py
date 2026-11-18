@@ -196,6 +196,7 @@ class Assertion(BaseModel):
     exception_type / error_message。
     - `body_schema`：按 OpenAPI 响应 JSON Schema 校验 body，target=状态码；
     - `db_row`：查询数据库验证落库状态，target=`table` 或 `table.column`；
+      `op=unchanged` 表示请求前后目标行保持不变，需配合 `where`；
     - `result_field`：按点号路径取 Dubbo 返回值里的字段；
     - `where` 仅用于 db_row，值可以是 `$ref`，执行时解析。
     """
@@ -208,7 +209,12 @@ class Assertion(BaseModel):
     target: str | None = Field(default=None, description="字段名、header 名、状态码或表名")
     op: str = Field(
         default="eq",
-        description="eq/ne/in/contains/exists/absent/gte/lte/count_eq/matches",
+        description="eq/ne/in/contains/exists/absent/gte/lte/count_eq/matches/unchanged",
+    )
+    ignore_columns: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="db_row unchanged 时忽略的列，如 updated_at/version",
     )
     expect: Any = Field(default=None, description="期望值；body_schema 为 JSON Schema")
     where: dict[str, Any] = Field(

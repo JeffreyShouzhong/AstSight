@@ -115,7 +115,7 @@
 | `change_refs` | code 用例至少 1 条；`changed_api` 取自 `changed_apis[].handler` |
 | `preconditions` | `state_key` 必须存在于 `data_catalog.states`；没有 catalog 时不要编造 |
 | `category` | 小写标识，如 `positive` / `negative` / `boundary` / `change_regression` |
-| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op。HTTP：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`，`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte`。Dubbo：`rpc_status` 用 `eq/ne/in`，`result_present` 用 `exists/absent`，`result_field` 用 `exists/eq/ne/in/gte/lte/contains`，`error_code` 用 `eq/ne/in/contains`，`exception_type` 用 `eq/ne/contains`，`error_message` 用 `eq/contains`。HTTP 与 Dubbo 断言不能混用；Dubbo 用例至少 1 条 `rpc_status`。值必须来自规则原文或契约。关系式只允许 `context.assert_expression_ops` 中的受限运算 |
+| `asserts` | 至少 1 条；只能用 `context.allowed_assert_kinds` 允许的 kind/op。HTTP：`status_code` 用 `eq/in/between`，`body_field` 用 `exists/eq/ne/in/gte/lte/contains`，`header` 用 `exists/eq/contains`，`body_schema` 用 `matches`，`db_row` 用 `exists/absent/count_eq/eq/ne/gte/lte/unchanged`。Dubbo：`rpc_status` 用 `eq/ne/in`，`result_present` 用 `exists/absent`，`result_field` 用 `exists/eq/ne/in/gte/lte/contains`，`error_code` 用 `eq/ne/in/contains`，`exception_type` 用 `eq/ne/contains`，`error_message` 用 `eq/contains`。HTTP 与 Dubbo 断言不能混用；Dubbo 用例至少 1 条 `rpc_status`。值必须来自规则原文或契约。关系式只允许 `context.assert_expression_ops` 中的受限运算 |
 | `steps` | HTTP/Dubbo 多请求用例至少 2 步。每步 `{name, endpoint, asserts, ...}`；Dubbo 步骤用 `dubbo.arguments`，可用 `{"$ref": "<step>.<field>"}` 引用更早步骤的返回值字段。使用 `steps` 时顶层 `body/path_params/query/headers/asserts` 必须为空，顶层 `endpoint` 必须出现在 `steps[].endpoint` 中；每个 Dubbo 步骤至少一条 `rpc_status` |
 | `assert_strength` | 按断言内容填写：`L1` 状态码/字段存在/结构；`L2` 确定值；`L3` 关系式（含跨步骤引用比较）；`L4` 跨两个及以上步骤的不变量。框架会按内容重新推导，不一致时产生 `assert_strength.mismatch` warning 并以推导值为准 |
 | `data` | 用例级业务实体，`{实体名: {字段: 值}}`，实体名匹配 `[a-z][a-z0-9_]{0,63}`。请求、断言和 `mock_replies` 用 `{"$data": "实体.字段"}` 引用；不要从环境里“找一条真实数据”，ID 自己造 |
@@ -169,8 +169,18 @@ Dubbo 多步骤用 `steps`，后续步骤参数可用 `{"$ref": "first.orderId"}
 
 失败场景可用 `db_row` 验证“没有副作用”：写入失败后断言目标表不存在对应行，
 例如 `{"kind": "db_row", "target": "partners", "op": "absent", "where": {"mobile": "13800138000"}}`。
-表名、列名和 `where` 键必须来自 context 的 data catalog；没有 catalog 时不要编造，
-否则导入会产生 `assertion.db_catalog_missing` warning 或表/列不存在错误。
+已有行不应被改动时用 `unchanged`，必须给 `where`，可把 `updated_at` 等允许变化的列
+放进 `ignore_columns`：
+
+```json
+{"kind": "db_row", "target": "orders", "op": "unchanged",
+ "where": {"id": "O-1001"}, "ignore_columns": ["updated_at"]}
+```
+
+`unchanged` 只对点名的行生效，不要拿它做全表断言；`wait_ms` 不适用于
+`unchanged`。表名、列名和 `where` 键必须来自 context 的 data catalog；没有
+catalog 时不要编造，否则导入会产生 `assertion.db_catalog_missing` warning 或
+表/列不存在错误。
 需求明确说明写入是异步/最终一致时，可给 `db_row` 增加 `wait_ms`（0–60000）轮询落库，
 例如 `"wait_ms": 2000`；没有异步依据时保持 0，避免把真实缺失去等成超时。
 

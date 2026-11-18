@@ -293,3 +293,74 @@ def test_precondition_row_must_exist_in_fixtures() -> None:
     assert rejected is not None
     assert rejected.reason == "precondition_row_missing"
     assert "orders" in rejected.details
+
+
+def _state_path_catalog(target: dict) -> DataCatalog:
+    catalog = _catalog()
+    return catalog.model_copy(
+        update={
+            "states": [
+                *catalog.states,
+                DataState(
+                    state_key="state_path_orders",
+                    table_values={
+                        "orders": [
+                            {"id": 1, "status": "pending"},
+                            {"id": 2, "status": "paid"},
+                            {"id": 3, "status": "paid"},
+                        ]
+                    },
+                    target_state=target,
+                    evidence=Evidence.INFERRED,
+                ),
+            ]
+        }
+    )
+
+
+def test_post_assertions_target_all_rows_matching_final_state() -> None:
+    case = _case().model_copy(
+        update={
+            "preconditions": [
+                Precondition(
+                    kind=PreconditionKind.DB_STATE,
+                    state_key="state_path_orders",
+                    evidence=Evidence.INFERRED,
+                )
+            ]
+        }
+    )
+    plan, rejected, _ = build_data_plan(
+        case=case,
+        catalog=_state_path_catalog({"orders": {"status": "paid"}}),
+        run_scope="r1",
+    )
+    assert rejected is None, rejected
+    assert plan is not None
+    wheres = {
+        item["where"]["id"]: item["expect"]
+        for item in plan.post_assertions
+    }
+    assert wheres == {2: "paid", 3: "paid"}
+
+
+def test_post_assertions_skip_ambiguous_multi_row_target() -> None:
+    case = _case().model_copy(
+        update={
+            "preconditions": [
+                Precondition(
+                    kind=PreconditionKind.DB_STATE,
+                    state_key="state_path_orders",
+                    evidence=Evidence.INFERRED,
+                )
+            ]
+        }
+    )
+    plan, rejected, warnings = build_data_plan(
+        case=case,
+        catalog=_state_path_catalog({"orders": {"status": "shipped"}}),
+        run_scope="r1",
+    )
+    assert plan is not None
+    assert plan.post_assertions == []
+    assert any("row_ambiguous" in item for item in warnings)

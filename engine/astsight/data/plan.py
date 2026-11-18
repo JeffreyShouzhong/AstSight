@@ -153,94 +153,119 @@ def _derive_post_assertions(
     target_state: dict[str, Any],
     warnings: list[str],
 ) -> list[dict[str, Any]]:
-    """只对实体表单列迁移生成迁移后只读断言。
+    """从迁移/状态路径的 target_state 生成迁移后只读断言。
 
-    限制：正例、`transition_*` 状态、单表单列目标、目标列不是 to_/new_/after_
-    成对字段、单列主键且 fixture 恰好一行。其它情况只保留 target_state 作为线索。
+    支持多行、多列和多表：按主键逐行定位，复合主键生成完整 `where`。
+    行选择规则：
+    - 已有行等于目标值时，只断言这些行（`state_path_*` 的终态行）；
+    - 否则只有唯一一行时才断言它（`transition_*` 的单行迁移）；
+    - 多行且没有行等于目标值时无法确定目标行，跳过并告警。
     """
     if str(getattr(case, "category", "")) != "positive":
         return []
     states = catalog.state_index()
     tables = catalog.table_index()
     out: list[dict[str, Any]] = []
-    seen: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
+    seen: set[tuple[str, tuple[tuple[str, Any], ...], Any]] = set()
+    warned: set[str] = set()
+
+    def warn(code: str) -> None:
+        message = f"target_assertion_skipped:{state_key}:{code}"
+        if message not in warned:
+            warned.add(message)
+            warnings.append(message)
+
     for state_key in state_keys:
         state = states.get(state_key)
-        if state is None or not state.state_key.startswith("transition_"):
+        if state is None or not state.state_key.startswith(
+            ("transition_", "state_path_")
+        ):
             continue
-        if len(state.target_state) != 1:
-            continue
-        table_name, columns = next(iter(state.target_state.items()))
-        if not isinstance(columns, dict) or len(columns) != 1:
-            continue
-        column_name, value = next(iter(columns.items()))
-        if str(column_name).lower().startswith(("to_", "new_", "after_")):
-            continue
-        table = tables.get(table_name)
-        if table is None:
-            warnings.append(
-                f"target_assertion_skipped:{state_key}:table_unknown"
-            )
-            continue
-        column = table.column_index().get(column_name)
-        if column is None:
-            warnings.append(
-                f"target_assertion_skipped:{state_key}:column_unknown"
-            )
-            continue
-        if len(table.primary_key) != 1:
-            warnings.append(
-                f"target_assertion_skipped:{state_key}:composite_primary_key"
-            )
-            continue
-        pk_name = table.primary_key[0]
-        rows = fixtures.get(table_name) or []
-        if len(rows) != 1:
-            warnings.append(
-                f"target_assertion_skipped:{state_key}:row_not_unique"
-            )
-            continue
-        pk_value = rows[0].get(pk_name)
-        if pk_value is None:
-            warnings.append(
-                f"target_assertion_skipped:{state_key}:primary_key_missing"
-            )
-            continue
-        if value is None and not column.nullable:
-            warnings.append(
-                f"target_assertion_skipped:{state_key}:not_null_target"
-            )
-            continue
-        target = f"{table_name}.{column_name}"
-        where = {pk_name: pk_value}
-        existing = [
-            assertion
-            for assertion in getattr(case, "asserts", []) or []
-            if str(getattr(assertion, "kind", "")) == "db_row"
-            and str(getattr(assertion, "target", "")) == target
-            and (getattr(assertion, "where", None) or {}) == where
-        ]
-        if existing:
-            continue
-        marker = (target, tuple(sorted(where.items())))
-        if marker in seen:
-            continue
-        seen.add(marker)
-        out.append(
-            {
-                "kind": "db_row",
-                "table": table_name,
-                "column": column_name,
-                "target": target,
-                "op": "eq",
-                "expect": target_state.get(table_name, {}).get(
-                    column_name, value
-                ),
-                "where": where,
-                "wait_ms": 0,
-                "source": "transition_target",
-            }
-        )
+        for table_name, columns in state.target_state.items():
+            if not isinstance(columns, dict):
+                warn(f"target_rows_not_supported:{table_name}")
+                continue
+            table = tables.get(str(table_name))
+            if table is None:
+                warn(f"table_unknown:{table_name}")
+                continue
+            if not table.primary_key:
+                warn(f"primary_key_missing:{table_name}")
+                continue
+            rows = [
+                row for row in fixtures.get(str(table_name)) or []
+                if isinstance(row, dict)
+            ]
+            if not rows:
+                warn(f"fixtures_missing:{table_name}")
+                continue
+            table_columns = table.column_index()
+            for column_name, value in columns.items():
+                if str(column_name).lower().startswith(
+                    ("to_", "new_", "after_")
+                ):
+                    continue
+                column = table_columns.get(column_name)
+                if column is None:
+                    warn(f"column_unknown:{table_name}.{column_name}")
+                    continue
+                if value is None and not column.nullable:
+                    warn(f"not_null_target:{table_name}.{column_name}")
+                    continue
+                matching = [
+                    row for row in rows
+                    if row.get(column_name) == value
+                ]
+                if matching:
+                    targets = matching
+                elif len(rows) == 1:
+                    targets = rows
+                else:
+                    warn(
+                        f"row_ambiguous:{table_name}.{column_name}:"
+                        f"rows={len(rows)}"
+                    )
+                    continue
+                expected = value
+                table_target = target_state.get(str(table_name))
+                if isinstance(table_target, dict):
+                    expected = table_target.get(column_name, value)
+                for row in targets:
+                    where = {
+                        name: row.get(name) for name in table.primary_key
+                    }
+                    if any(item is None for item in where.values()):
+                        warn(f"primary_key_missing:{table_name}")
+                        continue
+                    target = f"{table_name}.{column_name}"
+                    if any(
+                        str(getattr(assertion, "kind", "")) == "db_row"
+                        and str(getattr(assertion, "target", "")) == target
+                        and (getattr(assertion, "where", None) or {}) == where
+                        for assertion in getattr(case, "asserts", []) or []
+                    ):
+                        continue
+                    marker = (
+                        target,
+                        tuple(sorted(where.items())),
+                        expected,
+                    )
+                    if marker in seen:
+                        continue
+                    seen.add(marker)
+                    out.append(
+                        {
+                            "kind": "db_row",
+                            "table": table_name,
+                            "column": column_name,
+                            "target": target,
+                            "op": "eq",
+                            "expect": expected,
+                            "where": where,
+                            "wait_ms": 0,
+                            "source": "transition_target",
+                        }
+                    )
     return out
 
 

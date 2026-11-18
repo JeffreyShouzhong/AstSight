@@ -600,7 +600,10 @@ def _check_assert(
         "body_field": {"exists", "eq", "ne", "in", "gte", "lte", "contains"},
         "header": {"exists", "eq", "contains"},
         "body_schema": {"matches"},
-        "db_row": {"exists", "absent", "eq", "ne", "gte", "lte", "count_eq"},
+        "db_row": {
+            "exists", "absent", "eq", "ne", "gte", "lte", "count_eq",
+            "unchanged",
+        },
         "rpc_status": {"eq", "ne", "in"},
         "result_present": {"exists", "absent"},
         "result_field": {"exists", "eq", "ne", "in", "gte", "lte", "contains"},
@@ -1047,7 +1050,7 @@ def _check_db_assert(
                 path=path,
             )
         )
-    if op in {"exists", "absent", "count_eq"} and column:
+    if op in {"exists", "absent", "count_eq", "unchanged"} and column:
         result.errors.append(
             _issue(
                 "error",
@@ -1058,7 +1061,52 @@ def _check_db_assert(
                 path=path,
             )
         )
-    if op == "count_eq":
+    if assertion.ignore_columns and op != "unchanged":
+        result.errors.append(
+            _issue(
+                "error",
+                "assertion.db_ignore_unexpected",
+                "ignore_columns 只用于 db_row/unchanged",
+                case_key=case_key,
+                endpoint=endpoint,
+                path=path,
+            )
+        )
+    if op == "unchanged":
+        if not assertion.where:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_unchanged_where_missing",
+                    "db_row/unchanged 必须用 where 指定要比较的行",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if assertion.expect is not None:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_expect_unexpected",
+                    "db_row/unchanged 不需要 expect",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+        if assertion.wait_ms:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_unchanged_wait_unsupported",
+                    "db_row/unchanged 暂不支持 wait_ms；异步一致性请用 eq/count_eq 轮询",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    elif op == "count_eq":
         if not isinstance(assertion.expect, int) or isinstance(assertion.expect, bool):
             result.errors.append(
                 _issue(
@@ -1104,6 +1152,18 @@ def _check_db_assert(
                 path=path,
             )
         )
+    for name in assertion.ignore_columns or []:
+        if not _IDENTIFIER_RE.match(str(name)):
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_ignore_invalid",
+                    f"db_row ignore_columns 列名非法: {name!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
     for name, value in (assertion.where or {}).items():
         if not _IDENTIFIER_RE.match(str(name)):
             result.errors.append(
@@ -1172,6 +1232,19 @@ def _check_db_assert(
                     "error",
                     "assertion.db_column_unknown",
                     f"db_row where 列不在 data_catalog 中: {table}.{name}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
+    for name in assertion.ignore_columns or []:
+        if name not in columns:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "assertion.db_column_unknown",
+                    f"db_row ignore_columns 列不在 data_catalog 中: "
+                    f"{table}.{name}",
                     case_key=case_key,
                     endpoint=endpoint,
                     path=path,

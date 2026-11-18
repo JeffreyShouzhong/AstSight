@@ -595,7 +595,11 @@ precision/recall/expression_accuracy，比较目标字段、关系运算、运�
 `response/request/step` 来源与字段路径；不比较操作数顺序。脚本不随测试自动
 调用模型。
 `db_row.wait_ms` 支持 0–60000ms 的显式轮询，默认 0 只查询一次；轮询会结束当前只读
-事务，确保 MySQL `REPEATABLE READ` 的下一轮能看到新提交。
+事务，确保 MySQL `REPEATABLE READ` 的下一轮能看到新提交。`db_row/unchanged`
+（v4.73）在请求前对 `where` 命中的行拍快照，请求后逐列比较，可用
+`ignore_columns` 排除 `updated_at`、版本号等允许变化的列；它只对点名的行生效，
+必须给 `where`，不接受 `expect`/`wait_ms`。多行、多列、多表的迁移后断言由
+C5b `post_assertions` 按主键逐行生成（见 C5b）。
 同响应关系式与步骤引用均推导为 L3，引用两个及以上不同步骤为 L4。`assert_strength`
 按断言内容自动推导，不信任草案声明值；不一致时产生 `assert_strength.mismatch` warning。
 
@@ -2249,11 +2253,14 @@ SQL 渲染前解析为标量。只有一个父键候选时，框架自动补全�
    `inferred`，可直接被 `preconditions.state_key` 引用。循环路径靠边去重和
    步数上限收敛。
 
-   **迁移后断言**（`DataPlan.post_assertions`）：仅对正例、`transition_*` 状态、
-   单表单列目标、目标列不是 `to_*/new_*/after_*`、单列主键且 fixture 恰好一行的
-   情况，生成只读 `db_row` eq 断言（按主键定位）。生成物在用例正常结束后、
-   teardown 之前执行；失败先让用例失败，再照常清理。负例、成对字段、多行状态与
-   复合主键不自动断言，只保留 `target_state` 供审核和 A4 参考。
+   **迁移后断言**（`DataPlan.post_assertions`）：对正例、`transition_*` /
+   `state_path_*` 状态、目标列不是 `to_*/new_*/after_*` 的情况生成只读
+   `db_row` eq 断言。支持多表、多列、多行和复合主键，按主键逐行生成完整
+   `where`。行选择：已有行等于目标值时只断言这些行（`state_path_*` 的终态行）；
+   没有行等于目标值且表中只有一行时断言该行（`transition_*` 单行迁移）；
+   多行且无法确定目标行时跳过并告警。生成物在用例正常结束后、teardown 之前
+   执行；失败先让用例失败，再照常清理。负例、成对字段和无法定位的多行目标
+   不自动断言，只保留 `target_state` 供审核和 A4 参考。
 6. **确定性校验（LLM 之后）**：表/列白名单、类型/枚举/NOT NULL、FK 闭包、拓扑顺序、`preconditions` 全覆盖、行数/列数上限；未知表/列直接拒绝，失败用例写入 `rejected`，不生成计划
 7. **SQL 渲染**：模型**不输出 SQL**；`data/render.py` 只从通过校验的 fixtures 生成参数化 `INSERT`/`DELETE`，标识符按白名单校验，值只走 `params`
 8. **隔离与回收**：每个用例一个 `data_state` fixture，请求前在事务内 apply，用例结束（含失败/异常）按主键 teardown；`run_scope` 记录到计划里用于多 run 审计。`keep-data` 调试模式保留数据

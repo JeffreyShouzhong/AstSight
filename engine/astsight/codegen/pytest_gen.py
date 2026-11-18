@@ -624,6 +624,51 @@ class _DbTools:
                     pass
                 time.sleep(min(DB_POLL_MS / 1000.0, max(0, deadline - time.monotonic())))
 
+    def _rows(self, table, where):
+        conn, dialect = self._connection()
+        marker = "?" if dialect == "sqlite" else "%s"
+        conditions = []
+        params = []
+        for name, value in (where or {}).items():
+            conditions.append(f"{_db_quote(name, dialect)} = {marker}")
+            params.append(value)
+        where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT * FROM {_db_quote(table, dialect)}{where_sql}", params
+            )
+            names = [item[0] for item in cursor.description or []]
+            return [dict(zip(names, row)) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+    def snapshot(self, table, where, ignore_columns=()):
+        """请求前给目标行拍快照；用于 unchanged 断言。"""
+        ignore = set(ignore_columns or ())
+        rows = [
+            {key: value for key, value in row.items() if key not in ignore}
+            for row in self._rows(table, where)
+        ]
+        rows.sort(
+            key=lambda row: json.dumps(row, sort_keys=True, default=str)
+        )
+        return {
+            "table": table,
+            "where": dict(where or {}),
+            "ignore": sorted(ignore),
+            "rows": rows,
+        }
+
+    def assert_unchanged(self, snapshot):
+        current = self.snapshot(
+            snapshot["table"], snapshot["where"], snapshot["ignore"]
+        )
+        assert current["rows"] == snapshot["rows"], (
+            f"db_row unchanged failed: {snapshot['table']} rows changed; "
+            f"before={snapshot['rows']!r} after={current['rows']!r}"
+        )
+
     def _check_once(self, table, column, op, expect, where):
         conn, dialect = self._connection()
         marker = "?" if dialect == "sqlite" else "%s"
@@ -1045,6 +1090,11 @@ def _dubbo_assert_line(
             f"f\"unexpected {kind}: {{{expr}!r}}\""
         )
     if kind == "db_row":
+        if op == "unchanged":
+            return (
+                "        # db_row/unchanged 需要请求前快照，"
+                "由 _snapshot_lines 生成"
+            )
         table, _, column = (assertion.target or "").partition(".")
         wait_ms = int(getattr(assertion, "wait_ms", 0) or 0)
         expect_expr = _expect_expr(
@@ -1114,6 +1164,42 @@ def _responses_expr(case: TestCase, index: int, needed: set[str]) -> str:
     return "{" + ", ".join(items) + "}"
 
 
+def _is_unchanged(assertion: Any) -> bool:
+    return assertion.kind == "db_row" and assertion.op == "unchanged"
+
+
+def _snapshot_lines(
+    assertions: list[Any],
+    *,
+    scope: str,
+    responses_expr: str,
+    request_expr: str | None,
+) -> list[str]:
+    lines: list[str] = []
+    for index, assertion in enumerate(assertions):
+        if not _is_unchanged(assertion):
+            continue
+        table = (assertion.target or "").partition(".")[0]
+        where_expr = _expect_expr(
+            assertion.where or {},
+            responses_expr,
+            body_var=None,
+            request_expr=request_expr,
+        )
+        ignore = list(getattr(assertion, "ignore_columns", []) or [])
+        lines.append(
+            f"        db_snapshot_{scope}_{index} = db_tools.snapshot("
+            f"{table!r}, {where_expr}, {ignore!r})"
+        )
+    return lines
+
+
+def _unchanged_check_line(scope: str, index: int) -> str:
+    return (
+        f"        db_tools.assert_unchanged(db_snapshot_{scope}_{index})"
+    )
+
+
 def _needs_response_body(assertion: Any) -> bool:
     if assertion.kind in {"body_field", "body_schema"}:
         return True
@@ -1168,12 +1254,21 @@ def _single_request_lines(case: TestCase) -> list[str]:
         body=case.body,
         responses_expr="{}",
     )
+    # unchanged 断言必须在请求前拍快照；其余断言在请求后执行。
+    inner = _snapshot_lines(
+        case.asserts,
+        scope="case",
+        responses_expr="{}",
+        request_expr=request_expr,
+    )
     # 先判状态码再解析 body：服务返回 500/非 JSON 时，失败信息应指向真正的
     # 问题（状态码），而不是被 JSONDecodeError 掩盖成一条无上下文的异常。
-    inner = [f"        resp = client.request({', '.join(request_args)})"]
+    inner.append(f"        resp = client.request({', '.join(request_args)})")
     body_asserts = [a for a in case.asserts if _needs_response_body(a)]
-    for assertion in case.asserts:
-        if not _needs_response_body(assertion):
+    for index, assertion in enumerate(case.asserts):
+        if _is_unchanged(assertion):
+            inner.append(_unchanged_check_line("case", index))
+        elif not _needs_response_body(assertion):
             inner.append(_assert_line(assertion, request_expr=request_expr))
     if body_asserts:
         inner.append("        body = resp.json()")
@@ -1204,6 +1299,14 @@ def _steps_lines(case: TestCase) -> list[str]:
             resp_var = f"result_{step.name}"
             body_var = f"body_{step.name}"
             inner.extend(
+                _snapshot_lines(
+                    step.asserts,
+                    scope=step.name,
+                    responses_expr=responses_expr,
+                    request_expr=None,
+                )
+            )
+            inner.extend(
                 _dubbo_invoke_lines(
                     step.dubbo,
                     result_var=resp_var,
@@ -1211,7 +1314,12 @@ def _steps_lines(case: TestCase) -> list[str]:
                 )
             )
             inner.append(f"        {body_var} = {resp_var}.value")
-            for assertion in step.asserts:
+            for index, assertion in enumerate(step.asserts):
+                if _is_unchanged(assertion):
+                    inner.append(
+                        _unchanged_check_line(step.name, index)
+                    )
+                    continue
                 inner.append(
                     _dubbo_assert_line(
                         assertion,
@@ -1236,6 +1344,14 @@ def _steps_lines(case: TestCase) -> list[str]:
             body=step.body,
             responses_expr=responses_expr,
         )
+        inner.extend(
+            _snapshot_lines(
+                step.asserts,
+                scope=step.name,
+                responses_expr=responses_expr,
+                request_expr=request_expr,
+            )
+        )
         inner.append(
             f"        {resp_var} = client.request({', '.join(request_args)})"
         )
@@ -1243,8 +1359,10 @@ def _steps_lines(case: TestCase) -> list[str]:
             assertion for assertion in step.asserts
             if _needs_response_body(assertion)
         ]
-        for assertion in step.asserts:
-            if not _needs_response_body(assertion):
+        for index, assertion in enumerate(step.asserts):
+            if _is_unchanged(assertion):
+                inner.append(_unchanged_check_line(step.name, index))
+            elif not _needs_response_body(assertion):
                 inner.append(
                     _assert_line(
                         assertion,
