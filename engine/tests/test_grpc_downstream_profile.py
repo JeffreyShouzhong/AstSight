@@ -146,10 +146,14 @@ def handler():
         semantic,
         draft,
         sut_id="sut",
+        project_root=tmp_path,
     )
 
     assert plan is not None
     assert plan.deps[0].dep_id == DEP_ID
+    assert plan.deps[0].locator.descriptor_source == str(
+        (tmp_path / "inventory.proto").resolve()
+    )
     assert plan.deps[0].replies["success"].body == {
         "available": False,
     }

@@ -545,7 +545,11 @@ export GRIPMOCK_BIN=/path/to/gripmock
 cd engine
 python -m pytest tests/integration/test_grpc_gripmock_e2e.py -q
 python -m pytest tests/integration/test_grpc_downstream_sut_e2e.py -q
+python -m pytest tests/integration/test_grpc_agent_run_e2e.py -q
 ```
+
+最后一条覆盖完整 `agent run`：自动 gRPC 下游画像、语义/Plan、gripmock 启动、
+SUT target 注入、用例执行、history/evidence 与报告门禁。
 
 当前限制：只接 unary、明文 gRPC、可 env 覆盖的 target；streaming、reflection、
 TLS/mTLS、配置文件/编程式 target 改写仍不支持。平台矩阵外未安装 wheel 时显式报

@@ -2043,7 +2043,9 @@ MockRuntimeAdapter
 - gRPC MockSemantic 默认 success body 从 proto response message descriptor 采样；规则分支按 HTTP 语义错误码映射为 canonical gRPC code（400/404/502/503/504 等），错误分支 body 固定为可解析空消息；
 - gRPC dep 的 service/grpc_path/method/property 参与规则 token 匹配，不再只按 HTTP path 匹配；
 - `agent run` 的 `build_mock_plan` 已把 gRPC binding 转成统一 `MockPlanDep` + `GrpcMockReply` + `grpc_server` injection；A5 Mock 热更新会刷新 plan 中的 gRPC replies，下一轮 session 重新安装 stubs；
-- 更多 gRPC 客户端配置形态、Linux CI 和完整 gRPC `agent run` 样例仍属后续阶段。
+- `agent run` 自动构建 Plan 时把相对于项目根的 `.proto`/`.protoset` 固化为绝对路径，避免 Plan 移入运行目录后 descriptor 失效；手工 Plan 仍按 Plan 所在目录解析；
+- 完整 gRPC `agent run` e2e 已跑通：自动画像与 semantic/Plan、真实 gripmock、SUT target 注入、A4 用例执行、history/evidence 和报告门禁形成闭环；
+- 更多 gRPC 客户端配置形态、Linux CI 与更多 target scanner 仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 

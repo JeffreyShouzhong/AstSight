@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from contracts import (
@@ -296,6 +297,7 @@ def build_mock_plan(
     namespace: str | None = None,
     host: str = "127.0.0.1",
     port: int = 0,
+    project_root: str | Path | None = None,
 ) -> tuple[MockPlan | None, list[str]]:
     """仅使用用例实际绑定的 dep_id/branch；未绑定即不生成路由。"""
     bindings: dict[str, set[str]] = {}
@@ -339,6 +341,13 @@ def build_mock_plan(
                         f"{dep_id}/{branch_name}: gRPC branch 缺少 GrpcMockReply",
                     )
                 grpc_replies[branch_name] = reply.model_copy(deep=True)
+            descriptor_source = dep.get("descriptor_source") or None
+            if descriptor_source and project_root is not None:
+                descriptor_path = Path(str(descriptor_source)).expanduser()
+                if not descriptor_path.is_absolute():
+                    descriptor_source = str(
+                        (Path(project_root).expanduser() / descriptor_path).resolve()
+                    )
             grpc_deps.append(
                 MockPlanDep(
                     dep_id=dep_id,
@@ -349,7 +358,7 @@ def build_mock_plan(
                         grpc_path=str(dep.get("grpc_path") or ""),
                         target=dep.get("target") or None,
                         property=dep.get("property") or None,
-                        descriptor_source=dep.get("descriptor_source") or None,
+                        descriptor_source=descriptor_source,
                     ),
                     branches=route_branches,
                     replies=grpc_replies,

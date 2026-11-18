@@ -946,6 +946,7 @@ def run_flow(
             sut_id=_sut_id(project),
             host=config.mock_host,
             port=config.mock_port,
+            project_root=project,
         )
         result.warnings.extend(mock_warnings)
         injection_document: dict[str, Any] = {"injections": []}
