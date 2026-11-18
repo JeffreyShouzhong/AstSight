@@ -534,6 +534,7 @@ SESSION 生命周期已统一：create 安装 stubs，drain 拉取 history 并�
 export GRIPMOCK_BIN=/path/to/gripmock
 cd engine
 python -m pytest tests/integration/test_grpc_gripmock_e2e.py -q
+python -m pytest tests/integration/test_grpc_downstream_sut_e2e.py -q
 ```
 
 当前限制：只接 unary、明文 gRPC、可 env 覆盖的 target；streaming、reflection、
