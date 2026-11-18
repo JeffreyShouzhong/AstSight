@@ -247,6 +247,7 @@ def test_grpc_plan_session_lifecycle_installs_collects_and_clears(
                 locator=GrpcMockLocator(
                     grpc_path="/inventory.v1.InventoryService/Reserve",
                     descriptor_source="inventory.proto",
+                    property="INVENTORY_GRPC_ADDR",
                 ),
                 branches={"success": MockStub(body={"available": True})},
                 replies={"success": GrpcMockReply(body={"available": True})},
@@ -346,6 +347,7 @@ def test_grpc_plan_starts_process_factory_and_exposes_endpoints(
                 locator=GrpcMockLocator(
                     grpc_path="/inventory.v1.InventoryService/Reserve",
                     descriptor_source="inventory.proto",
+                    property="INVENTORY_GRPC_ADDR",
                 ),
                 branches={"success": MockStub(body={"available": True})},
                 replies={"success": GrpcMockReply(body={"available": True})},
@@ -398,6 +400,7 @@ def test_grpc_plan_starts_process_factory_and_exposes_endpoints(
         injection = runtime.injection_document()["injections"][0]
         assert injection["strategy"] == "grpc_server"
         assert injection["injected"] == "127.0.0.1:41001"
+        assert injection["property"] == "INVENTORY_GRPC_ADDR"
     finally:
         runtime.stop()
     assert process.stopped == 1

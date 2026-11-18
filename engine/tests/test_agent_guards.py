@@ -182,6 +182,40 @@ def test_injection_env_url_override_and_unsupported() -> None:
     assert any(item.startswith("injection_unsupported:dep-2") for item in warnings)
 
 
+def test_injection_env_grpc_target_requires_env_property() -> None:
+    document = {
+        "injections": [
+            {
+                "dep_id": "grpc:/inventory.v1.InventoryService/Reserve",
+                "strategy": "grpc_server",
+                "property": "INVENTORY_GRPC_ADDR",
+                "injected": "127.0.0.1:41001",
+            },
+            {
+                "dep_id": "grpc:/payment.v1.PaymentService/Pay",
+                "strategy": "grpc_server",
+                "injected": "127.0.0.1:41001",
+            },
+        ]
+    }
+
+    env, keys, warnings = injection_env(
+        document,
+        base_url="http://127.0.0.1:8080",
+    )
+
+    assert env["INVENTORY_GRPC_ADDR"] == "127.0.0.1:41001"
+    assert "INVENTORY_GRPC_ADDR" in keys
+    assert (
+        "injection_grpc_target_applied:"
+        "grpc:/inventory.v1.InventoryService/Reserve"
+    ) in warnings
+    assert (
+        "grpc_target_not_overridable:"
+        "grpc:/payment.v1.PaymentService/Pay"
+    ) in warnings
+
+
 def test_injection_for_prefers_config_override_over_discovery() -> None:
     injection = _injection_for(
         {

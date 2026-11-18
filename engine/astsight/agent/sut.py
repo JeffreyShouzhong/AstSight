@@ -126,6 +126,20 @@ def injection_env(
             if not agent_endpoint:
                 agent_endpoint = injected
             agent_rewrite.append(dep_id)
+        elif strategy == "grpc_server":
+            dep_id = str(injection.get("dep_id") or "")
+            if not injected:
+                warnings.append(f"injection_missing_url:{dep_id}")
+                continue
+            if not prop:
+                warnings.append(f"grpc_target_not_overridable:{dep_id}")
+                continue
+            if not _ENV_KEY_RE.match(prop):
+                warnings.append(f"injection_property_not_env:{prop}")
+                continue
+            env[prop] = injected
+            keys.append(prop)
+            warnings.append(f"injection_grpc_target_applied:{dep_id}")
         elif strategy == "unsupported":
             warnings.append(
                 f"injection_unsupported:{injection.get('dep_id')}:"

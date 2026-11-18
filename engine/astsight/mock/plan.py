@@ -1068,6 +1068,11 @@ def _build_runtime(
                 dep_id=dep.dep_id,
                 strategy=MockStrategy.GRPC_SERVER,
                 kind="base_url",
+                property=(
+                    dep.locator.property
+                    if isinstance(dep.locator, GrpcMockLocator)
+                    else None
+                ),
                 original="",
                 injected=grpc_endpoint or "",
                 path_mode="replace",

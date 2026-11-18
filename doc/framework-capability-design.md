@@ -2032,8 +2032,9 @@ MockRuntimeAdapter
 - `MockHttpServer` session lifecycle 已接入 `RuntimeSessionBridge`：创建 session 时激活全部 runtime，drain 时采集并去重写入统一证据，关闭时清理 stubs；gRPC-only Plan 使用内嵌 HTTP 控制面管理 session/health/evidence；
 - `start_mock_plan(..., grpc_backend=...)` 已允许注入 `GripMockBackend`；未提供 backend 时仍显式阻断 `mock_grpc_runtime_unimplemented`；
 - `start_mock_plan(..., gripmock_path=...)` 已支持自动分配 gRPC/admin/gateway 端口、启动 `GripMockProcess`，并将三个 endpoint 写入 manifest/injection document；每个 gRPC dep 自动生成 `grpc_server` target 注入项；
+- `GrpcMockLocator.property` 可声明 SUT 的 gRPC target 环境变量键；`injection_env` 将 `grpc_server.injected` 写入该变量。未声明 property 时只保留 endpoint 文档并告警 `grpc_target_not_overridable`；
 - 首版自动进程模式要求本次 run 使用单一 descriptor source，多个不同 source 报 `mock_descriptor_ambiguous`；
-- SUT 启动器消费 injection document 完成实际 target 改写，以及真实 gripmock binary e2e 和 semantic 自动采样仍属后续阶段。
+- SUT 启动器已能通过环境变量应用可覆盖 target；真实 gripmock binary e2e、更多 gRPC 客户端配置形态和 semantic 自动采样仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 

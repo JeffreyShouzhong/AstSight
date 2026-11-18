@@ -110,6 +110,7 @@ class GrpcMockLocator(BaseModel):
     transport: Literal["grpc"] = "grpc"
     grpc_path: str
     target: str | None = None
+    property: str | None = None
     descriptor_source: str | None = None
     descriptor_sha256: str | None = None
 
