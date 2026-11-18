@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新提交：`f9d1b49`（`完善：用例业务实体与下游 Mock 联动`），
+> 最新提交：`c392bfb`（`完善：A4 自动生成业务实体与下游 Mock`），
 > 已推送至 `origin/unified-mock-runtime`
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
