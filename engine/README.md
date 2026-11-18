@@ -1241,10 +1241,13 @@ python -m pytest -q
 
 ## 下一步
 
+- 协议接入本轮已完成：gRPC unary + Python/Java SUT、Dubbo Hessian2/Triple、多语言
+  gRPC target 配置和 Linux 平台 wheel 构建均已落地。当前受“无 Linux 环境”和
+  “多 gRPC descriptor 暂不考虑”约束，不继续扩协议矩阵。
 - A1/A4/A5+A6 已接：`prompts/a1_requirement_analysis.md`、`prompts/a4_case_design.md`、
   `prompts/a5_diagnose_repair.md`；下一步是真实需求文档上的规则抽取质量与覆盖评估。
-- C5 已打通 SQLite/PostgreSQL/MySQL：下一步补 DB 反射/DBML、跨库 schema 限定名与更复杂的
-  跨表业务态；方言只覆盖用例级 fixture，不承担建库/迁移。
+- C5 已打通 DB 反射/DBML、多行父子 fixtures 和 `state_paths` 执行展开；下一步补
+  多行结果断言、路径中间步骤、负例状态不变、异步落库与审计/成对字段断言。
 - 关系断言：已支持规则结构化关系自动物化、`$ref`、跨步骤 `$step` 绑定、同响应
   `$field`、受限算术与 `db_row` 异步轮询；下一步扩展受控聚合与复杂公式抽取。
 - 文档接入扩展：PDF/Word、跨文档冲突识别。

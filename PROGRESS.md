@@ -1,38 +1,32 @@
 # AstSight 项目进度
 
-> 最后更新：2026-11-17
-> 分支：`feat/postgres-mysql-data`（本轮改动已提交并推送，见最近十五个提交）
-> 当前阶段：Java 下游契约提取、Feign/服务发现注入与 DTO 继承合并完成；真实
-> `spring-cloud-samples/feign-eureka` 工程端到端验证通过；Java HTTP Mock 的
-> `agent_rewrite` 已打通 OkHttp / Feign / RestTemplate / Apache HC4 / HC5 +
-> HTTPS + 心跳 + 证据，SUT 启动可用 `JAVA_TOOL_OPTIONS` 自动注入 agent；普通
-> JVM、HC4+HC5、Spring Boot 3.5.6 fat jar 均联调通过；版本矩阵
-> JDK 8/11/17/21/26 × 16 个客户端版本共 80 组合全部通过；Mock 路由在同 host
-> 字面量/模板路径并存时字面量优先；Dubbo 消费端 Filter 首版已打通（会话取桩、
-> 失败关闭、零真实调用）；Dubbo 画像识别、`dubbo_routes` 计划、自动注入与心跳
-> 门禁已打通，`dep_id` 带参数签名支持重载；实测 Dubbo 2.7.22 与 3.2.19 ×
-> JDK 8/11/17/21/26 共 10 个组合全部通过；真实 `ReferenceConfig` 消费端代理在
-> 普通 classpath 与 Spring Boot fat jar 下都验证了桩返回与零建连；`agent run`
-> 的 Dubbo 全链路（HTTP 入口 → Dubbo 下游）已打通：画像 → `dubbo_routes` →
-> 自动注入 → 执行 → 报告一次跑完，目标端口零建连；全量测试与 agent e2e
-> 结果见“本轮完成”
+> 最后更新：2026-11-18
+> 分支：`unified-mock-runtime`（工作区干净，已同步远端）
+> 最新提交：`c8fd27f 新增：将状态路径展开为可执行多行数据`
 >
-> 2026-11-17 起优先做断言质量：已支持同响应字段关系、受限聚合/算术表达式、
-> `db_row.wait_ms` 落库轮询与跨步骤规则关系；规则关系已结构化，并由框架按
-> A4 选择的 `relation_key`（含 `$step` 步骤绑定）自动物化为断言。数据目录的
-> 结构来源已扩展到 DBML 与真实库（SQLite/PostgreSQL/MySQL）只读反射，
-> 并会从注释、DBML Enum note、规则常量、Java/Python/Go/TS 枚举与
-> Java `static final`/Go `const`/TS `as const` 常量组确定性地给出取值语义候选
-> （每条带 `source`）。`--rule-states` 还能把同一条件下的多表规则约束组合成
-> 跨表状态骨架，并把 `transition` 约束和 `from_*/to_*` 成对字段生成
-> “迁移前 → 迁移后”的 `target_state` 候选；占位值逐条写入 gaps。公式抽取已有 20 条离线评估集与脚本，v10 基线
-> 14/14 严格命中、P/R/表达式准确率均为 1.00；下一步用评估结果决定哪些公式值得
-> 进规则层。
+> 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
+> gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
+> Linux amd64/arm64 gripmock wheel 构建与包内解析。Dubbo 在 Hessian2 sidecar 之外，
+> 已支持 Triple unary：Protobuf descriptor 走 gRPC-compatible adapter，Java interface
+> 无 proto 时走 Dubbo 3.2.19 sidecar 泛化调用；真实 Apache Online Boutique 的
+> `tri` 服务 `run --mode full` 1/1 通过。gRPC target 配置已覆盖 Java
+> `@Value/@ConfigurationProperties/System.getenv/System.getProperty`、Python settings、
+> Node config/env 和 Go env/viper。
+>
+> 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
+> 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
+> 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。真实 gripmock、
+> Java、Triple、Online Boutique 与 Dubbo sidecar 联调开启后全量为
+> **632 passed / 38 skipped**。
 
 ## 当前状态
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
+| Dubbo Triple unary | ✅ 2026-11-18 | `tri://` Protobuf descriptor 走 Python gRPC-compatible；Java interface 走 Dubbo 3.2.19 sidecar；真实 `online_bontique_demo` full run 1/1 |
+| gRPC target 配置矩阵 | ✅ 2026-11-18 | Java `@Value/@ConfigurationProperties/System.getenv/System.getProperty`、Python settings、Node config/env、Go env/viper；硬编码 target 显式阻断 |
+| 多行 fixtures / 父子表 / state_paths | ✅ 2026-11-18 | 多父多子、`$ref` 父键、单父自动关联、歧义阻断；`state_paths` 展开为逐状态多行 DataState 并完成 SQLite apply/teardown |
 | C1 规则抽取 | ✅ v3 | `engine/examples/partner_onboarding/ruleset.json`：67 条 BR + 10 条 CR；0 冲突 / 4 缺口 / 5 待确认 |
 | 路由清单 | ✅ | 5 条，全部 `graph_repaired` / `verified` |
 | C3 接口画像 | ✅ V1.1 | `.astsight/runs/20261111-183042-853-full/profiles.json`：5 个接口（含 `/_reset`、`/_debug/state`），3 条下游依赖，响应码含 503；`--skip-execute --allow-unmapped` 只生成不执行 |
@@ -121,18 +115,18 @@
 | 成对字段迁移 | ✅ 2026-11-17 | `from_*/to_*`、`old_*/new_*`、`before_*/after_*` 生成 `transition_*` 候选；行内保存两列、`target_state` 声明 to 值；`NULL` 转 null；父表被引用列非主键时补占位值；示例 BR-27 生成 1 条转移候选 |
 | 状态造数闭环 | ✅ 2026-11-17 | e2e：规则生成的跨表状态/成对字段状态作为 `preconditions.state_key` → `data plan` → SQLite `apply`/`teardown`；修复 `apply._run` 二次反转 delete 导致外键失败；新增 2 条 e2e 测试 |
 | 状态审查命令 | ✅ 2026-11-17 | `data states`：列出 state_key、规则 key、各表行数、target_state、占位 gap 与 fixture 校验错误；`--state` 过滤、`--json`；分类计数 rule/transition/seed |
-| 多步迁移路径 | ✅ 2026-11-17 | `DataCatalog.state_paths` + `StatePath/StatePathStep`：同一 (table,column) 的 transition 边按 before=上一步 after 连成路径，最多 5 步/50 条；transition 与 from/to 成对字段都贡献边；`data states` 展示路径；只读描述，不生成 fixtures |
+| 多步迁移路径（历史阶段） | ✅ 2026-11-17 | 当时建立 `DataCatalog.state_paths` + `StatePath/StatePathStep`，最多 5 步/50 条，先作为只读描述；2026-11-18 已扩展为可执行 `state_path_*` 多行 DataState |
 | 迁移后断言 | ✅ 2026-11-17 | `DataPlan.post_assertions`：正例 + `transition_*` + 单表单列 + 非成对字段 + 单列主键且单行时生成只读 `db_row` eq 断言；生成物在用例结束后、teardown 前执行；负例/成对字段/多行/复合主键不生成；测试 503 passed / 37 skipped |
 
-## 未完成事项（截至 2026-11-17）
+## 未完成事项（截至 2026-11-18）
 
 ### 主线相关
 
 - **多步迁移路径已可执行**：`state_paths` 会展开成多行 DataState；仍缺
   “断言执行到第几步/中间步骤”的显式步骤跟踪语义。
 - **迁移后断言只覆盖最窄的一类**：正例、`operator=transition`、实体表单列、
-  单列主键、单行。未做负例“状态保持不变”、异步落库 `wait_ms`、`from_*/to_*`
-  成对字段/审计表、多行状态、复合主键、多步路径中间状态。
+  单列主键、单行。多行 path/父子 fixtures 已可执行，但未统一生成负例“状态保持
+  不变”、异步落库、审计表、多行状态、复合主键和多步中间状态断言。
 - **公式抽取评估未收尾**：只比较目标/运算/来源/字段路径，不比较操作数顺序；
   复杂条件与多分支公式覆盖少；提示词已到 v11，但基线仍是 v10，未用 v11 重跑。
 - **README 首屏定位**：把“为什么用 AstSight 而不是 pytest + LLM”搬到 README
@@ -142,8 +136,8 @@
 
 - **PostgreSQL 真库未验证**：按用户要求跳过；MySQL 已实测，PG 反射与造数仍属
   “代码路径完成、未真库验证”。
-- **多行/跨表业务态**：每个表只生成一行，没有多行组合、父子多行或整条路径的
-  fixtures。
+- **多行/跨表业务态已完成主链路**：多行、父子、`$ref` 和 `state_paths` 均可执行；
+  剩余是业务分支组合、路径中途步骤断言和更复杂的多行结果断言。
 - **接口造数**：只有 SQL 直插，没有“通过被测接口造数”的通道。
 - **非枚举代码常量**：Python 模块级常量、Go 单行 `const`、无 `as const` 的 TS
   对象、Java 注解/常量表达式、跨文件常量都未扫描。
@@ -152,11 +146,12 @@
 
 ### Agent / 下游 Mock
 
-- **gRPC 仅 unary**：流式与 server reflection 未做。
+- **gRPC 仅 unary**：流式与 server reflection 未做；Linux CI 尚未实际执行平台
+  wheel；多 gRPC descriptor 按当前范围暂不排期。
 - **Dubbo**：2.7.22/3.2.19 × JDK 8/11/17/21/26 已验证；classpath 形态明确不支持。
-  sidecar 首版（直连 URL + Hessian2）、wheel 分发、提供方画像、DTO 字段/约束/
-  时间/集合采样、A4 Dubbo 草案、多步骤、诊断/修复与执行已打通；注册中心、
-  异步/oneway 仍未接入，复杂正则与自定义约束只做有限推断。
+  Hessian2 sidecar 与 Triple-native/sidecar、protobuf unary、wheel 分发、提供方画像、
+  DTO/proto 采样、A4 草案、多步骤、诊断/修复与执行已打通；注册中心、Triple
+  streaming/reflection 仍未接入，复杂正则与自定义约束只做有限推断。
 - **Java agent 未实测清单**：改写后 `Host`/签名/pinning/连接池复用的副作用；
   异步/重试/重定向与二次改写；HTTPS 客户端拒绝 scheme 变化的实际比例；
   `/_agent/unmatched` 的延迟与证据归因。
@@ -173,8 +168,9 @@
 
 ### 验证缺口
 
-- 全量 **503 passed / 37 skipped**；跳过项主要是真实数据库联调（PostgreSQL）、
-  Java/Dubbo 矩阵 e2e（需要本地 JDK/Maven/样例工程）和其它外部服务集成测试。
+- 开启真实 gripmock、Java、Triple、Online Boutique 与 Dubbo sidecar 联调后全量为
+  **632 passed / 38 skipped**；跳过项主要是 Linux CI、真实 PostgreSQL 联调和其它
+  外部服务集成测试。
 
 ## 本轮完成（迁移后断言，2026-11-17）
 
@@ -1075,12 +1071,28 @@
    `prop-44d9f59e45cdf922` 已批准。
 6. **OpenAPI 快照漂移警告**：本次为 V1.1 补充了 503 响应并重新生成 `openapi.json`，
    已批准用例仍基于旧快照；运行报告提示 “OpenAPI 契约已变化”，属预期 warning。
-7. **工作区已清**：2026-11-16 的 Dubbo、2026-11-17 的关系断言与 DB 反射改动
-   均已提交并推送（`8393cbe`）；分支 `feat/postgres-mysql-data` 与远端同步。
+7. **工作区已清**：截至 2026-11-18，协议接入、Triple、target 配置、多行 fixtures
+   和 `state_paths` 展开均已提交并推送；分支 `unified-mock-runtime` 与远端同步。
 
 ## 下一步
 
-2026-11-17 优先级调整：断言质量优先于协议扩展。
+### 当前建议（2026-11-18）
+
+协议接入本轮已达到阶段目标。当前不做 Linux CI（暂无环境）和多 gRPC descriptor
+（当前范围暂不考虑），优先把多行/路径 fixtures 接到业务断言：
+
+1. **多行结果断言**：为多父多子、多状态行生成可定位的 `db_row` 断言，避免只验证
+   “行存在”。需要定义按业务唯一键/顺序/集合的定位规则。
+2. **迁移路径中间步骤**：除终态外，显式断言路径走到第几步、哪些行保持原状态。
+3. **负例状态不变**：失败/拒绝分支校验目标行未被修改，并覆盖审计/事件表。
+4. **异步落库与成对字段**：多行场景结合 `db_row.wait_ms`、`from_*/to_*`、
+   `old_*/new_*` 审计结构。
+5. **Java agent 正确性补测**：Host/签名/pinning、连接池复用、异步/重试/重定向、
+   二次改写和 HTTPS scheme 拒绝比例。
+
+### 历史优先级（2026-11-17）
+
+断言质量优先于协议扩展。
 
 1. **跨步骤关系**：✅ 已完成（2026-11-17），见“本轮完成（跨步骤规则关系）”。
    数据目录的结构来源（DDL / DBML / 真实库反射）也已于同日完成。
