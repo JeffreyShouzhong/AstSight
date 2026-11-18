@@ -41,7 +41,7 @@ AstSight 是一套**接口自动化测试引擎**，不是测试管理平台。�
 | C3 | 路由清单、接口画像、下游调用点 | `run`、`cases prepare`、`mock plan` |
 | C3.5.1 | 契约 `success` + 规则分支 → Mock 语义 | `mock semantics`；`agent run` 内部也会生成 |
 | C3.5.5 | 明文 HTTP 下游 Mock 服务与调用证据 | `mock plan`、`run --mock-plan` |
-| Dubbo 入口 | `@DubboService`/XML 提供方画像 → sidecar 泛化调用 → 原生断言 | `run --dubbo-url`、`cases prepare` |
+| Dubbo 入口 | `@DubboService`/XML 提供方画像 → sidecar/Triple 调用 → 原生断言 | `run --dubbo-targets`、`cases prepare` |
 | C5a | DDL/FK/seed → 数据目录与业务态候选 | `data catalog`、`data semantics` |
 | A4 / C4 | 规则驱动用例草案 → 校验 → 待审 proposal → 版本化用例库 | `cases prepare`、`cases import`、`cases approve` |
 | C5b | 已批准用例 + 数据目录 → 逐用例造数计划 | `data plan`、`data apply` |
@@ -96,7 +96,8 @@ PYTHONPATH=. python -m astsight codegraph status
 - 目标运行环境是 Linux（服务器 / CI 容器）；Windows 只用于本地开发调试。
 - 路径分隔符、子进程、端口绑定和文件锁按 POSIX 语义设计。
 - 被执行的 SUT 需要可访问的 HTTP 地址（`--base-url`）或 Dubbo 直连地址
-  （`--dubbo-url`，或画像端口 + `--dubbo-host`）；两者都没有时只生成、不执行。
+  （`--dubbo-url`、`--dubbo-target`，或服务级映射 `--dubbo-targets`）；
+  两者都没有时只生成、不执行。
 
 ---
 
@@ -1163,15 +1164,57 @@ record 组件、枚举常量、必填标记（`@NotNull` / `@NotBlank` / `@NotEm
 
 ### 11A.3 目标地址
 
+测试必须钉到具体的 SUT provider，**不使用注册中心**。注册中心只能说明
+“存在可用实例”，不能证明返回地址属于本次被测部署；解析不到就阻断，
+不拿全局 URL 猜一个。
+
 按优先级解析：
 
-1. `--dubbo-url dubbo://host:port`（或 `ASTSIGHT_DUBBO_URL`）；
-2. 用例 `dubbo.url`（来自 `@DubboService(url=...)` / XML）；
-3. 画像从 `application.properties` / `application.yml` / XML 解析出的
-   `dubbo.protocol.port` + `--dubbo-host`（默认 `127.0.0.1`）。
+1. **来源校验**：`--dubbo-source-commit` / `--dubbo-source-branch`
+   或 `--dubbo-source-sha256` + `--dubbo-artifact`；不一致阻断为
+   `dubbo_source_mismatch`，未提供时报告 `dubbo_source_unverified` 告警；
+2. **代码/XML 显式地址**：`@DubboService(url=...)`、XML 等；
+3. **端点去重**：代码地址收敛到同一个 `protocol + IP + port` 时，
+   未解析服务可以共享该 endpoint；
+4. **服务级映射**：`--dubbo-targets FILE`，键为
+   `interface?group=&version=`；同一 endpoint 下多服务各自指定地址时用它；
+   代码地址与映射不一致时默认阻断，加 `--dubbo-target-override` 才允许覆盖；
+5. **运行直连地址**：`--dubbo-target IP:port`（可带 `dubbo://` /
+   `tri://` / `grpc://`），或 `--dubbo-host IP` + 画像
+   `dubbo.protocol.port`；只补映射和代码都没给出的服务；
+6. **全局 URL**：`--dubbo-url` 只在所有服务收敛到同一个 endpoint 时可用；
+   出现多个 endpoint 时一律阻断；
+7. 仍无唯一 endpoint，或出现多个不可消歧的 endpoint →
+   `dubbo_target_unresolved` / `dubbo_target_ambiguous`，用例 blocked。
 
-三个都拿不到时用例 skip 为 `dubbo_target_unresolved`，报告按 blocked 处理。
-多个协议端口时标 `dubbo_protocol_port_ambiguous`，不猜。
+只接受 **IPv4 / IPv6 字面量 + 显式端口**；域名、K8s Service、VIP 别名
+一律拒绝，避免“以为钉住了、其实还是负载均衡”。
+
+多服务映射文件示例：
+
+```json
+{
+  "source": {
+    "commit": "b87134655e8cf9c589147312ac9dde59a8978bb2",
+    "branch": "master"
+  },
+  "targets": {
+    "com.acme.OrderService?group=order&version=1.0.0": "dubbo://10.0.0.12:20880",
+    "com.acme.PayService": "dubbo://10.0.0.13:20881"
+  }
+}
+```
+
+```bash
+PYTHONPATH=. python -m astsight run \
+  --project /path/to/sut \
+  --mode full --codegraph off \
+  --dubbo-targets .astsight/dubbo-targets.json
+```
+
+报告会写到 `dubbo_targets.json`，逐服务记录实际 endpoint、来源
+（code / code_shared / mapping / mapping_override / direct / direct_host /
+global）和代码文件/行号，便于审计。
 
 ### 11A.4 运行
 
@@ -1186,6 +1229,7 @@ PYTHONPATH=. python -m astsight run \
 ```
 
 有 HTTP 入口的项目同时带 `--base-url` 和 `--dubbo-url` 即可跑两种入口。
+多服务/多端口项目改用 `--dubbo-targets`，不要用一个全局 URL 套所有服务。
 
 手工用例走 `cases prepare` → 导入草案 → 审核 → `run --mode cases`。
 下面只保留 Dubbo 相关字段；business 用例仍需 `requirement_refs`：
@@ -1264,10 +1308,12 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 
 ### 11A.6 边界
 
-- 首版只支持直连 URL + Hessian2；注册中心（Nacos/ZooKeeper）与 Kryo/FST
-  显式失败。
-- 不支持 Triple 协议。真实项目若默认 `dubbo.protocol.name=tri`，需要改成
-  `dubbo` + `hessian2` 并直连 URL，sidecar 才能调用。
+- 只支持直连地址；注册中心（Nacos/ZooKeeper）不作为目标发现或兜底。
+- Hessian2 与 Triple unary 已支持：`dubbo://` 走 Hessian2 泛化调用；
+  `tri://` 有 Protobuf descriptor 时走 gRPC-compatible adapter，无 proto
+  的 Java 接口走 sidecar Triple-native。Kryo/FST 显式失败。
+- 多服务/多端口项目用 `--dubbo-targets` 逐服务指定地址；全局 URL 只在
+  所有服务共用一个 endpoint 时可用。
 - sidecar 固定同步调用；异步/oneway 不生成用例。
 - Dubbo 多步骤已支持；A5 可通过 `steps[].dubbo.arguments` / `steps[].asserts`
   修多步骤用例，单步用例用顶层 `dubbo.arguments`。
@@ -1339,8 +1385,13 @@ PYTHONPATH=. python -m astsight run \
 | 参数 | 说明 |
 |---|---|
 | `--base-url` | 被测 HTTP 服务地址；不提供则只生成不执行 |
-| `--dubbo-url` | 被测 Dubbo 直连地址 `dubbo://host:port`；纯 Dubbo 项目用它执行 |
+| `--dubbo-url` | 全局 Dubbo 直连地址；只在所有服务共用一个 endpoint 时可用 |
+| `--dubbo-target` | 运行直连地址 `IP:port`（可带 `dubbo://`/`tri://`/`grpc://`）；只补未解析服务 |
+| `--dubbo-targets` | 服务级目标映射 JSON，键为 `interface?group=&version=` |
 | `--dubbo-host` | 画像只解析出端口时拼 `dubbo://host:port`，默认 `127.0.0.1` |
+| `--dubbo-source-commit` / `--dubbo-source-branch` | 校验 SUT git 来源与画像一致 |
+| `--dubbo-source-sha256` + `--dubbo-artifact` | 校验 SUT 构建产物 sha256 |
+| `--dubbo-target-override` | 允许 `--dubbo-targets` 覆盖代码里的显式地址 |
 | `--reset-url` | 每条用例前的重置接口；Git Bash 下建议传完整 URL |
 | `--openapi` | OpenAPI 文件或 URL；缺省自动发现 |
 | `--out` | 产物根目录，相对 `project`，默认 `.astsight/runs` |

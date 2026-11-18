@@ -38,6 +38,11 @@ from .changes.impact import analyze_impact
 from .changes.symbol_diff import symbols_for_changes
 from .codegen import generate_pytest
 from .execute.diagnose import classify
+from .execute.dubbo_targets import (
+    DubboTargetError,
+    config_from_run,
+    resolve_dubbo_targets,
+)
 from .execute.runner import collect_only, run_pytest
 from .inventory import (
     discover_openapi,
@@ -74,6 +79,13 @@ class RunConfig:
     reset_url: str | None = None
     dubbo_url: str | None = None
     dubbo_host: str | None = None
+    dubbo_target: str | None = None
+    dubbo_targets: str | None = None
+    dubbo_source_sha256: str | None = None
+    dubbo_source_commit: str | None = None
+    dubbo_source_branch: str | None = None
+    dubbo_artifact: str | None = None
+    dubbo_target_override: bool = False
     openapi: str | None = None
     out: str = ".astsight/runs"
     depth: int = 5
@@ -266,8 +278,65 @@ def _data_env(
     }
 
 
-def _dubbo_env(config: "RunConfig") -> dict[str, Any]:
-    return {"dubbo_url": config.dubbo_url, "dubbo_host": config.dubbo_host}
+def _dubbo_profiles_from_cases(cases: list[Any]) -> list[dict[str, Any]]:
+    """cases 模式没有画像时，从用例反推最小服务集合。"""
+    profiles: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for case in cases:
+        if case.transport is not Transport.DUBBO or case.dubbo is None:
+            continue
+        call = case.dubbo
+        key = (call.interface, call.group or "", call.version or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        serialization = str(call.serialization or "").lower()
+        url = str(call.url or "")
+        if serialization in {"protobuf", "proto"} or url.startswith(
+            ("tri://", "grpc://")
+        ):
+            protocol = "grpc" if url.startswith("grpc://") else "tri"
+            compatibility = "grpc_compatible"
+        else:
+            protocol = "dubbo"
+            compatibility = "native"
+        profiles.append(
+            {
+                "transport": "dubbo",
+                "service": call.interface,
+                "group": call.group or "",
+                "version": call.version or "",
+                "protocol": protocol,
+                "serialization": serialization or (
+                    "protobuf" if protocol in {"tri", "grpc"} else "hessian2"
+                ),
+                "compatibility": compatibility,
+                "direct_url": call.url,
+                "protocol_port": call.target_port,
+                "file": "",
+                "line": 0,
+            }
+        )
+    return profiles
+
+
+def _dubbo_env(
+    config: "RunConfig",
+    target_state: Any | None = None,
+    target_error: str | None = None,
+) -> dict[str, Any]:
+    env: dict[str, Any] = {
+        "dubbo_url": config.dubbo_url,
+        "dubbo_host": config.dubbo_host,
+    }
+    if target_error:
+        env["dubbo_target_error"] = target_error
+    elif target_state is not None:
+        if getattr(target_state, "ok", False):
+            env["dubbo_targets"] = dict(target_state.targets)
+        else:
+            env["dubbo_target_error"] = target_state.error_text
+    return env
 
 
 def _changed_scope_full(routes: list[dict]) -> tuple[list[dict], dict]:
@@ -714,6 +783,36 @@ def _execute_and_report_inner(
     run_dir.write_json("changed_apis.json", impact)
     run_dir.write_json("cases.json", [case.model_dump(mode="json") for case in cases])
 
+    needs_dubbo = any(case.transport is Transport.DUBBO for case in cases)
+    dubbo_target_state: Any | None = None
+    dubbo_target_error: str | None = None
+    if needs_dubbo:
+        try:
+            target_config = config_from_run(config, project=project)
+            target_profiles = profiles or _dubbo_profiles_from_cases(cases)
+            dubbo_target_state = resolve_dubbo_targets(
+                target_profiles,
+                config=target_config,
+                project=project,
+            )
+        except DubboTargetError as exc:
+            dubbo_target_error = f"{exc.code}: {exc.message}"
+            run_dir.write_json(
+                "dubbo_targets.json",
+                {
+                    "ok": False,
+                    "errors": [
+                        {"code": exc.code, "message": exc.message}
+                    ],
+                },
+            )
+        else:
+            run_dir.write_json(
+                "dubbo_targets.json", dubbo_target_state.as_dict()
+            )
+            if not dubbo_target_state.ok:
+                dubbo_target_error = dubbo_target_state.error_text
+
     data_bundle = _load_data_plan_bundle(project, config)
     data_plan_state = _data_plan_state(
         data_bundle,
@@ -759,7 +858,6 @@ def _execute_and_report_inner(
     changed_endpoints = {api["handler"] for api in impact.get("changed_apis", [])}
     execution_meta: dict[str, Any] = {"collect_only": False, "executed": False}
     needs_http = any(case.transport is Transport.HTTP for case in cases)
-    needs_dubbo = any(case.transport is Transport.DUBBO for case in cases)
     can_execute = (bool(config.base_url) if needs_http else True) and (
         needs_http or needs_dubbo
     )
@@ -772,7 +870,7 @@ def _execute_and_report_inner(
                 timeout=config.timeout,
                 **_mock_env(config, mock_run_scope),
                 **_data_env(config, data_plan_path),
-                **_dubbo_env(config),
+                **_dubbo_env(config, dubbo_target_state, dubbo_target_error),
             )
             execution_meta["collect_only"] = True
             execution_meta["collect_ok"] = ok
@@ -788,7 +886,7 @@ def _execute_and_report_inner(
                 timeout=config.timeout,
                 **_mock_env(config, mock_run_scope),
                 **_data_env(config, data_plan_path),
-                **_dubbo_env(config),
+                **_dubbo_env(config, dubbo_target_state, dubbo_target_error),
             )
             run_dir.write_json("execution-first.json", first.as_dict())
             execution_meta["executed"] = True
@@ -805,10 +903,19 @@ def _execute_and_report_inner(
                     changed_endpoints, attempt_no=attempt,
                     mock_run_scope=mock_run_scope,
                     data_plan_path=data_plan_path,
+                    dubbo_target_state=dubbo_target_state,
+                    dubbo_target_error=dubbo_target_error,
                 ):
                     break
                 attempt += 1
     execution_meta["data_plan"] = data_plan_state
+    if dubbo_target_state is not None:
+        execution_meta["dubbo_targets"] = dubbo_target_state.as_dict()
+    elif dubbo_target_error:
+        execution_meta["dubbo_targets"] = {
+            "ok": False,
+            "error": dubbo_target_error,
+        }
     run_dir.write_json("execution.json", {"meta": execution_meta, "records": entries})
 
     mock_evidence_path, mock_evidence_reason = _resolve_mock_evidence(project, config)
@@ -1187,6 +1294,8 @@ def _apply_retry(
     attempt_no: int,
     mock_run_scope: str | None = None,
     data_plan_path: str | None = None,
+    dubbo_target_state: Any | None = None,
+    dubbo_target_error: str | None = None,
 ) -> bool:
     """对可重试失败做一次有界重跑。返回是否有重跑。"""
     retryable = [
@@ -1210,7 +1319,7 @@ def _apply_retry(
         timeout=config.timeout,
         **_mock_env(config, mock_run_scope),
         **_data_env(config, data_plan_path),
-        **_dubbo_env(config),
+        **_dubbo_env(config, dubbo_target_state, dubbo_target_error),
     )
     run_dir.write_json(f"attempt{attempt_no}_summary.json", retry_result.as_dict())
     retry_by_node = {r.nodeid: r for r in retry_result.records}

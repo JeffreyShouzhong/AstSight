@@ -130,6 +130,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dubbo-host", default=None,
         help="Dubbo 目标主机；画像只解析出 hessian2 端口时拼 dubbo://host:port",
     )
+    run_parser.add_argument(
+        "--dubbo-target", default=None,
+        help="SUT 直连地址 IP:port（或 dubbo://IP:port / tri://IP:port）；只补未解析服务",
+    )
+    run_parser.add_argument(
+        "--dubbo-targets", default=None,
+        help="服务级直连目标映射 JSON；键为 interface?group=&version=",
+    )
+    run_parser.add_argument(
+        "--dubbo-source-sha256", default=None,
+        help="期望的 SUT 构建产物 sha256；需配合 --dubbo-artifact",
+    )
+    run_parser.add_argument(
+        "--dubbo-source-commit", default=None,
+        help="期望的 SUT git commit；与画像来源不一致时阻断",
+    )
+    run_parser.add_argument(
+        "--dubbo-source-branch", default=None,
+        help="期望的 SUT git branch",
+    )
+    run_parser.add_argument(
+        "--dubbo-artifact", default=None,
+        help="用于校验 sha256 的 SUT 构建产物路径",
+    )
+    run_parser.add_argument(
+        "--dubbo-target-override", action="store_true",
+        help="允许服务级映射覆盖代码里的显式 Dubbo 地址",
+    )
     run_parser.add_argument("--openapi", default=None, help="OpenAPI 文件或 URL；缺省自动发现")
     run_parser.add_argument("--out", default=".astsight/runs", help="产物根目录（相对 project）")
     run_parser.add_argument("--depth", type=int, default=5)
@@ -589,6 +617,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dubbo-host", default=None,
         help="Dubbo 目标主机；画像只解析出 hessian2 端口时拼 dubbo://host:port",
     )
+    agent_run.add_argument(
+        "--dubbo-target", default=None,
+        help="SUT 直连地址 IP:port（或 dubbo://IP:port / tri://IP:port）；只补未解析服务",
+    )
+    agent_run.add_argument(
+        "--dubbo-targets", default=None,
+        help="服务级直连目标映射 JSON；键为 interface?group=&version=",
+    )
+    agent_run.add_argument(
+        "--dubbo-source-sha256", default=None,
+        help="期望的 SUT 构建产物 sha256；需配合 --dubbo-artifact",
+    )
+    agent_run.add_argument(
+        "--dubbo-source-commit", default=None,
+        help="期望的 SUT git commit；与画像来源不一致时阻断",
+    )
+    agent_run.add_argument(
+        "--dubbo-source-branch", default=None,
+        help="期望的 SUT git branch",
+    )
+    agent_run.add_argument(
+        "--dubbo-artifact", default=None,
+        help="用于校验 sha256 的 SUT 构建产物路径",
+    )
+    agent_run.add_argument(
+        "--dubbo-target-override", action="store_true",
+        help="允许服务级映射覆盖代码里的显式 Dubbo 地址",
+    )
     agent_run.add_argument("--reset-url", default=None)
     agent_run.add_argument("--codegraph", choices=("auto", "on", "off"), default="auto")
     agent_run.add_argument("--codegraph-module-root", default=None)
@@ -685,6 +741,13 @@ def _run_command(args) -> int:
         reset_url=args.reset_url,
         dubbo_url=args.dubbo_url,
         dubbo_host=args.dubbo_host,
+        dubbo_target=args.dubbo_target,
+        dubbo_targets=args.dubbo_targets,
+        dubbo_source_sha256=args.dubbo_source_sha256,
+        dubbo_source_commit=args.dubbo_source_commit,
+        dubbo_source_branch=args.dubbo_source_branch,
+        dubbo_artifact=args.dubbo_artifact,
+        dubbo_target_override=args.dubbo_target_override,
         openapi=args.openapi,
         out=args.out,
         depth=args.depth,
@@ -1952,6 +2015,13 @@ def _agent_command(args) -> int:
             reset_url=args.reset_url,
             dubbo_url=args.dubbo_url,
             dubbo_host=args.dubbo_host,
+            dubbo_target=args.dubbo_target,
+            dubbo_targets=args.dubbo_targets,
+            dubbo_source_sha256=args.dubbo_source_sha256,
+            dubbo_source_commit=args.dubbo_source_commit,
+            dubbo_source_branch=args.dubbo_source_branch,
+            dubbo_artifact=args.dubbo_artifact,
+            dubbo_target_override=args.dubbo_target_override,
             codegraph=args.codegraph,
             codegraph_module_root=args.codegraph_module_root,
             full_index=True if args.full_index else None,

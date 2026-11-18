@@ -705,7 +705,7 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 > 约束/时间/集合元素采样、正则样例与自定义校验注解、C4 A4 Dubbo 草案、
 > 多步骤、C6 codegen 与 C7 执行/诊断链路已接入，用例使用
 > `rpc_status` / `result_field` 等原生断言；sidecar 随 wheel 分发并校验
-> manifest，目标地址支持 `ASTSIGHT_DUBBO_URL`、用例 URL 与画像端口 + host。
+> manifest；新版的直连目标解析见本节下方“实现状态（2026-11-18）”。
 > 纯 Dubbo 项目无 HTTP 路由时 `run --mode full` 也可执行。
 
 **Dubbo 直连目标解析（2026-11-18 设计口径）**：
@@ -728,6 +728,8 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 5. **服务级目标映射**：仅当存在多个不同 endpoint 或部分服务需要独立地址时，按 `sut_id + protocol + interface + group + version` 查找显式映射；
 6. **阻断**：仍无法得到唯一 endpoint，或得到多个不可消歧的 endpoint 时，阻断为 `dubbo_target_unresolved` / `dubbo_target_ambiguous`，不猜、不回退注册中心、不回退全局 URL。
 
+实现口径：服务级映射先于通用运行直连应用。两者都只补代码未解析出的服务；同时提供时，显式映射更具体，优先于 `--dubbo-target` / `--dubbo-host` 这类通用地址。
+
 代码地址与运行映射的关系：
 
 - 代码中已解析出的唯一显式地址优先；
@@ -744,6 +746,20 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 精准直连配置只接受 IPv4 / IPv6 字面量与显式端口，不接受域名、Kubernetes Service 名或 VIP 别名。用户填写的 SUT `IP:port` 被视为确定性的 provider 目标，框架按 `determinism="exact"` 记录；无法解析、协议不支持或地址不确定时必须在执行前显式阻断。
 
 `tri://` 目标在满足 Protobuf + descriptor + unary + gRPC-compatible 条件时走独立 Python adapter；不满足时以 `dubbo_protocol_unsupported` / `UNSUPPORTED_PROTOCOL` 阻断，不把地址解析成功等同于协议适配完成。
+
+> **实现状态（2026-11-18）**：直连目标解析已落地
+> （`engine/astsight/execute/dubbo_targets.py`）。运行前校验
+> `--dubbo-source-commit/branch` 或 `--dubbo-source-sha256 + --dubbo-artifact`；
+> 依次解析代码/XML 地址、单 endpoint 去重、`--dubbo-targets` 服务级映射、
+> `--dubbo-target` 运行直连与受限全局 URL（映射优先于通用直连，便于显式指定），
+> 未解析/多义端点分别阻断为
+> `dubbo_target_unresolved` / `dubbo_target_ambiguous`。只接受 IP 字面量 + 端口，
+> 域名/Service/VIP 拒绝（`dubbo_target_invalid`）。生成的 conftest 按
+> `interface?group=&version=` 严格查表，查不到 skip 为 `dubbo_target_unresolved`，
+> 不回退全局 URL。解析结果写入 `dubbo_targets.json`，逐服务记录
+> `source/determinism` 与代码文件/行号。真实 Apache Online Boutique 多服务试点
+> （adService/cartService/productCatalogsService，`tri://127.0.0.1:20880/20881/20886`）
+> 已完成 6 条用例，5 通过、1 条因采样商品 ID 不存在返回空值。
 
 **Dubbo Triple 与 gRPC unary 支持边界（2026-11-18 设计口径）**：
 

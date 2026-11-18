@@ -147,6 +147,33 @@ public class LiteralServiceImpl {
     )
 
 
+def test_serializable_is_not_treated_as_ambiguous(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    _write(
+        root,
+        "SerializableServiceImpl.java",
+        """package com.acme;
+
+import java.io.Serializable;
+
+import org.apache.dubbo.config.annotation.DubboService;
+
+@DubboService(group = "order", version = "1.0.0")
+public class SerializableServiceImpl implements OrderService, Serializable {
+    public OrderView create(CreateOrderRequest request) { return null; }
+    public OrderView byId(String id) { return null; }
+}
+""",
+    )
+
+    result = _scan(root)
+
+    endpoints = {item["endpoint"] for item in result.providers}
+    assert CREATE_ENDPOINT in endpoints
+    assert BY_ID_ENDPOINT in endpoints
+    assert result.unsupported == []
+
+
 def test_multiple_interfaces_without_override_is_ambiguous(tmp_path: Path) -> None:
     root = _project(tmp_path)
     _write(root, "OtherService.java", "package com.acme;\npublic interface OtherService {}\n")

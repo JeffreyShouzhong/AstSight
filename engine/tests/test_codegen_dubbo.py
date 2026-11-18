@@ -145,6 +145,15 @@ def test_multistep_dubbo_case_generates_refs(tmp_path: Path) -> None:
     compile(text, str(test_file), "exec")
 
 
+def test_conftest_reads_service_target_map(tmp_path: Path) -> None:
+    result = generate_pytest([_case()], tmp_path)
+    conftest = (tmp_path / "conftest.py").read_text(encoding="utf-8")
+    assert "ASTSIGHT_DUBBO_TARGETS" in conftest
+    assert "_dubbo_service_key" in conftest
+    assert "dubbo_target_unresolved" in conftest
+    assert "DUBBO_TARGET_ERROR.split" in conftest
+
+
 def test_dubbo_error_assertions_are_generated(tmp_path: Path) -> None:
     case = _case().model_copy(
         update={

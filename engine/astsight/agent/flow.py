@@ -103,6 +103,13 @@ class FlowConfig:
     reset_url: str | None = None
     dubbo_url: str | None = None
     dubbo_host: str | None = None
+    dubbo_target: str | None = None
+    dubbo_targets: str | None = None
+    dubbo_source_sha256: str | None = None
+    dubbo_source_commit: str | None = None
+    dubbo_source_branch: str | None = None
+    dubbo_artifact: str | None = None
+    dubbo_target_override: bool = False
     codegraph: str = "auto"
     codegraph_module_root: str | None = None
     full_index: bool | None = None
@@ -333,6 +340,13 @@ def _execution_config(
         reset_url=config.reset_url,
         dubbo_url=config.dubbo_url,
         dubbo_host=config.dubbo_host,
+        dubbo_target=config.dubbo_target,
+        dubbo_targets=config.dubbo_targets,
+        dubbo_source_sha256=config.dubbo_source_sha256,
+        dubbo_source_commit=config.dubbo_source_commit,
+        dubbo_source_branch=config.dubbo_source_branch,
+        dubbo_artifact=config.dubbo_artifact,
+        dubbo_target_override=config.dubbo_target_override,
         openapi=config.openapi,
         timeout=config.timeout,
         retries=config.retries,

@@ -52,6 +52,24 @@ MOCK_TTL_MS = int(os.environ.get("ASTSIGHT_MOCK_TTL_MS", "60000"))
 
 DUBBO_URL = os.environ.get("ASTSIGHT_DUBBO_URL", "").strip()
 DUBBO_HOST = os.environ.get("ASTSIGHT_DUBBO_HOST", "127.0.0.1").strip() or "127.0.0.1"
+DUBBO_TARGET_ERROR = os.environ.get("ASTSIGHT_DUBBO_TARGET_ERROR", "").strip()
+try:
+    DUBBO_TARGETS = json.loads(
+        os.environ.get("ASTSIGHT_DUBBO_TARGETS", "{}") or "{}"
+    )
+except ValueError:
+    DUBBO_TARGETS = {}
+if not isinstance(DUBBO_TARGETS, dict):
+    DUBBO_TARGETS = {}
+
+
+def _dubbo_service_key(interface, group, version):
+    query = []
+    if group:
+        query.append(f"group={group}")
+    if version:
+        query.append(f"version={version}")
+    return interface + ("?" + "&".join(query) if query else "")
 
 DB_URL = os.environ.get("ASTSIGHT_DB_URL", "")
 DB_POLL_MS = max(10, int(os.environ.get("ASTSIGHT_DB_POLL_MS", "50")))
@@ -725,15 +743,34 @@ def dubbo_client():
 @pytest.fixture()
 def dubbo_call(request):
     def call(*, url=None, target_port=None, **kwargs):
-        target = str(url or "").strip() or DUBBO_URL
+        interface = str(kwargs.get("interface") or "")
+        group = kwargs.get("group")
+        version = kwargs.get("version")
+        service_key = _dubbo_service_key(interface, group, version)
+        if DUBBO_TARGET_ERROR:
+            # 保留原始错误码（来源不一致、映射冲突等），执行层按 blocked 归类。
+            error_code = DUBBO_TARGET_ERROR.split(":", 1)[0].strip()
+            pytest.skip(f"{error_code or 'dubbo_target_unresolved'}: {DUBBO_TARGET_ERROR}")
+        target = str(url or "").strip()
+        if not target and DUBBO_TARGETS:
+            # 多服务严格映射：命中不了就阻断，不拿全局 URL 猜一个。
+            target = str(
+                DUBBO_TARGETS.get(service_key)
+                or DUBBO_TARGETS.get(interface)
+                or ""
+            )
+            if not target:
+                pytest.skip(f"dubbo_target_unresolved: {service_key}")
+        if not target:
+            target = DUBBO_URL
         if not target and target_port:
             serialization = str(kwargs.get("serialization") or "").lower()
             scheme = "tri" if serialization in {"protobuf", "proto"} else "dubbo"
             target = f"{scheme}://{DUBBO_HOST}:{int(target_port)}"
         if not target:
             pytest.skip(
-                "dubbo_target_unresolved: 设置 ASTSIGHT_DUBBO_URL 或 "
-                "ASTSIGHT_DUBBO_HOST；不回退成 HTTP"
+                "dubbo_target_unresolved: 设置 ASTSIGHT_DUBBO_URL、"
+                "ASTSIGHT_DUBBO_TARGETS 或 ASTSIGHT_DUBBO_HOST；不回退成 HTTP"
             )
         scheme = target.partition("://")[0].lower()
         serialization = str(kwargs.get("serialization") or "").lower()

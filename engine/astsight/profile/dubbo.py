@@ -167,6 +167,13 @@ _RECORD_COMPONENT = re.compile(
     r"(?P<name>[A-Za-z_$][\w$]*)\s*$",
     re.S,
 )
+_IGNORED_IMPL_INTERFACES = {
+    "java.io.Serializable",
+    "java.io.Closeable",
+    "java.lang.Comparable",
+    "java.lang.Cloneable",
+    "java.lang.AutoCloseable",
+}
 _REQUIRED_ANNOTATIONS = {
     "NotNull",
     "NotBlank",
@@ -1592,6 +1599,10 @@ def _scan_provider_annotations(
                 resolved = _resolve_type(
                     item, package=package, imports=imports, classes=classes
                 )
+                if resolved in _IGNORED_IMPL_INTERFACES:
+                    # 业务实现经常顺带 implements Serializable 等标记接口，
+                    # 不能因此把真正的 Dubbo 服务接口判成歧义。
+                    continue
                 if resolved:
                     impl_interfaces.append(resolved)
                 else:

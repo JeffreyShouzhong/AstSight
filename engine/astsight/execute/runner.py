@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -16,6 +17,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _CASE_ID_RE = re.compile(r"tc_(\d+)", re.I)
+
+# Dubbo 目标/来源类错误都不是 SUT 缺陷，跳过时必须按 blocked 记录。
+_BLOCKED_DUBBO_PREFIXES = (
+    "dubbo_target_unresolved",
+    "dubbo_target_ambiguous",
+    "dubbo_target_invalid",
+    "dubbo_target_config_missing",
+    "dubbo_target_config_invalid",
+    "dubbo_target_override_required",
+    "dubbo_target_unknown_service",
+    "dubbo_global_url_ambiguous",
+    "dubbo_source_mismatch",
+    "dubbo_source_unavailable",
+    "dubbo_source_artifact_missing",
+    "dubbo_sidecar_unavailable",
+)
 
 
 @dataclass
@@ -93,6 +110,8 @@ def _env(
     database_url: str | None = None,
     dubbo_url: str | None = None,
     dubbo_host: str | None = None,
+    dubbo_targets: dict[str, str] | None = None,
+    dubbo_target_error: str | None = None,
 ) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -111,6 +130,13 @@ def _env(
         env["ASTSIGHT_DUBBO_URL"] = dubbo_url
     if dubbo_host:
         env["ASTSIGHT_DUBBO_HOST"] = dubbo_host
+    if dubbo_targets:
+        # 多服务严格映射：生成物只按服务键查表，不再回退全局 URL。
+        env["ASTSIGHT_DUBBO_TARGETS"] = json.dumps(
+            dubbo_targets, ensure_ascii=False
+        )
+    if dubbo_target_error:
+        env["ASTSIGHT_DUBBO_TARGET_ERROR"] = dubbo_target_error
     env["ASTSIGHT_TIMEOUT"] = str(timeout)
     # 造数计划路径与数据库 URL 只通过环境变量传给生成物，不写入报告。
     if data_plan_path:
@@ -160,6 +186,8 @@ def collect_only(
     database_url: str | None = None,
     dubbo_url: str | None = None,
     dubbo_host: str | None = None,
+    dubbo_targets: dict[str, str] | None = None,
+    dubbo_target_error: str | None = None,
 ) -> tuple[bool, str]:
     """生成代码的收集自检：import/fixture 错误在开跑前暴露。"""
     cwd = Path(generated_dir).resolve()
@@ -180,6 +208,8 @@ def collect_only(
             database_url=database_url,
             dubbo_url=dubbo_url,
             dubbo_host=dubbo_host,
+            dubbo_targets=dubbo_targets,
+            dubbo_target_error=dubbo_target_error,
         ),
         timeout,
     )
@@ -206,6 +236,8 @@ def run_pytest(
     database_url: str | None = None,
     dubbo_url: str | None = None,
     dubbo_host: str | None = None,
+    dubbo_targets: dict[str, str] | None = None,
+    dubbo_target_error: str | None = None,
 ) -> ExecutionResult:
     """执行 pytest（可选只跑指定 nodeids，用于有界重试）。"""
     cwd = Path(generated_dir).resolve()
@@ -234,6 +266,8 @@ def run_pytest(
             database_url=database_url,
             dubbo_url=dubbo_url,
             dubbo_host=dubbo_host,
+            dubbo_targets=dubbo_targets,
+            dubbo_target_error=dubbo_target_error,
         ),
         timeout,
     )
@@ -300,7 +334,10 @@ def _parse_junit(path: Path) -> list[TestRecord]:
             # 造数前置未满足、Dubbo 目标/客户端不可用都是 blocked
             # （不能算通过，也不是 SUT 缺陷）；与普通 skip 区分。
             if message.lower().startswith(
-                ("data_unavailable", "dubbo_target_unresolved", "dubbo_sidecar_unavailable")
+                (
+                    "data_unavailable",
+                    *_BLOCKED_DUBBO_PREFIXES,
+                )
             ):
                 outcome = "blocked"
 

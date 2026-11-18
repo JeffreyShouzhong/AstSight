@@ -811,8 +811,12 @@ Dubbo 入口用例已打通模板 → codegen → 执行：
   `exception_type` / `error_message`；
 - 生成物通过 conftest 的 `dubbo_call` 调 `astsight.sidecar`，sidecar jar
   由 `ASTSIGHT_DUBBO_SIDECAR_JAR` 或仓库构建产物解析；
-- 目标地址顺序：`ASTSIGHT_DUBBO_URL` → 用例 `dubbo.url` →
-  画像端口 + `ASTSIGHT_DUBBO_HOST`；解析不了 skip 为 blocked；
+- 目标地址由 `dubbo_targets` 直连解析：来源校验 → 代码/XML 显式 URL →
+  单 endpoint 去重 → `--dubbo-target IP:port`（或 `--dubbo-host` + 画像端口）→
+  `--dubbo-targets` 服务键映射 → 受限全局 `--dubbo-url`；只接受 IP 字面量，
+  不用注册中心，解析不了 skip 为 blocked；
+- 服务键为 `interface?group=&version=`，映射文件同时可写 `source.commit/branch`
+  或 `source.sha256/artifact`；代码地址与映射冲突需 `--dubbo-target-override`；
 - 纯 Dubbo 项目（无 HTTP 路由）`run --mode full` 仍可生成/执行；
 - 模板只生成正向冒烟；DTO 参数按字段采样（普通字段、嵌套 DTO、record、
   枚举、集合元素、时间类型、`@NotNull` 等必填标记与 `@Size`/`@Min`/`@Max`/
