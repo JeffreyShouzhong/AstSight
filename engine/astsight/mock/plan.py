@@ -13,9 +13,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from contracts import (
+    DubboMockLocator,
+    HttpMockLocator,
     MockCall,
     MockInjection,
     MockPlan,
+    MockPlanDep,
     MockPlanDubboRoute,
     MockPlanInjection,
     MockPlanRoute,
@@ -442,6 +445,43 @@ def validate_mock_plan(plan: MockPlan) -> MockPlanValidation:
                 "mock_injection_invalid",
                 f"{route.dep_id}: unsupported 必须提供 injection.reason",
             )
+
+    plan.deps = [
+        MockPlanDep(
+            dep_id=route.dep_id,
+            transport=Transport.HTTP,
+            route_key=route.route_key,
+            strategy=route.strategy,
+            source=route.source,
+            locator=HttpMockLocator(
+                method=route.method,
+                path_key=route.path_key,
+                host=route.host,
+                target=route.target,
+            ),
+            branches=dict(route.branches),
+        )
+        for route in plan.routes
+    ] + [
+        MockPlanDep(
+            dep_id=route.dep_id,
+            transport=Transport.DUBBO,
+            route_key=route.route_key,
+            strategy=inject_by_dep.get(route.dep_id).strategy
+            if inject_by_dep.get(route.dep_id) is not None
+            else None,
+            source=route.source,
+            locator=DubboMockLocator(
+                service=route.service,
+                method=route.method,
+                parameter_types=list(route.parameter_types),
+                group=route.group,
+                version=route.version,
+            ),
+            branches=dict(route.branches),
+        )
+        for route in plan.dubbo_routes
+    ]
     return validation
 
 
@@ -523,6 +563,9 @@ class MockPlanRuntime:
             "dubbo_routes": [
                 route.model_dump(mode="json") for route in self.plan.dubbo_routes
             ],
+            "deps": [
+                dep.model_dump(mode="json") for dep in self.plan.deps
+            ],
             "injections": [
                 injection.model_dump(mode="json", exclude_none=True)
                 for injection in self.injections
@@ -554,6 +597,9 @@ class MockPlanRuntime:
                 for route in self.plan.routes
             ],
             "dubbo_deps": [route.dep_id for route in self.plan.dubbo_routes],
+            "deps": [
+                dep.model_dump(mode="json") for dep in self.plan.deps
+            ],
             "injections": [
                 injection.model_dump(mode="json", exclude_none=True)
                 for injection in self.injections
@@ -571,6 +617,7 @@ class MockPlanRuntime:
             "endpoint": self.server.endpoint,
             "route_count": len(self.plan.routes),
             "dubbo_route_count": len(self.plan.dubbo_routes),
+            "dep_count": len(self.plan.deps),
             "injection_count": len(self.injections),
             "unsupported_count": sum(
                 1

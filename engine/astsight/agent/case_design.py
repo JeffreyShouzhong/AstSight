@@ -103,12 +103,14 @@ def _semantic_view(semantic: MockSemantic | None) -> list[dict[str, Any]]:
     return [
         {
             "dep_id": dep.dep_id,
+            "transport": dep.transport.value,
             "endpoint": dep.endpoint,
             "route_key": dep.route_key,
             "strategy": dep.strategy.value,
             "branches": [
                 {
                     "branch": branch.branch,
+                    "outcome": branch.outcome.value,
                     "semantics": branch.semantics,
                     "source_kind": branch.source.kind,
                     "rule_keys": list(branch.source.rule_keys),

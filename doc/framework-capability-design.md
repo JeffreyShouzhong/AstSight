@@ -1966,6 +1966,8 @@ HTTP、Dubbo、gRPC 下游 Mock 统一采用：
   - `GrpcMockReply`：canonical `grpc_status`、message、protobuf body、metadata、trailers、delay；
 - 旧 `MockStub` 在迁移期保留，由兼容层转换为协议响应；新数据优先填写 `reply`；
 - gRPC 错误分支必须显式给 `grpc_status`，不得从 HTTP status 推导。
+- `MockPlan` 在校验后派生统一 `deps[]`；`MockPlanDep` 携带 `transport`、`route_key`、`strategy` 与协议 locator（HTTP / Dubbo / gRPC），legacy `routes` / `dubbo_routes` 在迁移期继续供现有 runtime 使用；
+- C3 MockSemantic 按真实 dep 类型生成 transport：Dubbo 使用 `agent_rewrite`，gRPC 使用 `grpc_server`，不再把 Dubbo 默认建模为 HTTP。
 
 **运行接口**：
 
@@ -2019,7 +2021,13 @@ MockRuntimeAdapter
 4. 收敛 `MockPlan` 的协议路由为统一 dep 集合；
 5. 最后接入 gRPC/gripmock。
 
-**当前实现（P0）**：`HttpMockReply`、`DubboMockReply`、`GrpcMockReply`、`MockOutcome`、`MockRuntimeAdapter`、`EmbeddedMockRuntimeAdapter`、`MockRuntimeManager` 已加入契约层；HTTP/Dubbo runtime 已通过包装 adapter 接入统一 manager，现有行为保持兼容。gRPC runtime 与本轮尚未实现的统一 Plan 收敛仍属后续阶段。
+**当前实现（P0/P1）**：
+
+- `HttpMockReply`、`DubboMockReply`、`GrpcMockReply`、`MockOutcome`、`MockRuntimeAdapter`、`EmbeddedMockRuntimeAdapter`、`MockRuntimeManager` 已加入契约层；
+- HTTP/Dubbo runtime 已通过包装 adapter 接入统一 manager，现有行为保持兼容；
+- `MockPlan` 校验后生成统一 `MockPlanDep[]`，HTTP/Dubbo legacy 路由均投影为协议 locator；
+- MockSemantic 已使用真实 `transport=dubbo` / `DubboMockReply`，HTTP status 不再校验 Dubbo/gRPC；
+- gRPC Plan 已具备 locator 契约，但 gRPC runtime、gripmock 接入、显式 gRPC Plan 输入和 semantic 自动采样仍属后续阶段。
 
 ### C5 数据准备（C5a 数据目录 / C5b 造数计划）
 

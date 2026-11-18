@@ -105,6 +105,7 @@ class MockStrategy(str, Enum):
     DISCOVERY_OVERRIDE = "discovery_override"
     HTTP_PROXY = "http_proxy"
     AGENT_REWRITE = "agent_rewrite"
+    GRPC_SERVER = "grpc_server"
     UNSUPPORTED = "unsupported"
 
 

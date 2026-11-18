@@ -12,10 +12,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from contracts import (
+    DubboMockReply,
     Evidence,
+    GrpcMockReply,
+    GrpcStatus,
     MockBranch,
     MockBranchSource,
     MockDep,
+    MockOutcome,
     MockSemantic,
     MockSemanticGap,
     MockSemanticQuestion,
@@ -167,8 +171,28 @@ def _contract_body(raw: dict[str, Any] | None) -> Any:
     return None
 
 
-def _default_branch(raw: dict[str, Any] | None = None) -> MockBranch:
+def _dep_transport(raw: dict[str, Any]) -> Transport:
+    dep_id = str(raw.get("dep_id") or "")
+    dep_type = str(raw.get("dep_type") or "").lower()
+    if dep_type == "dubbo" or dep_id.startswith("dubbo:"):
+        return Transport.DUBBO
+    if dep_type == "grpc" or dep_id.startswith("grpc:"):
+        return Transport.GRPC
+    return Transport.HTTP
+
+
+def _default_branch(
+    raw: dict[str, Any] | None = None,
+    *,
+    transport: Transport = Transport.HTTP,
+) -> MockBranch:
     body = _contract_body(raw)
+    value = body if body is not None else {}
+    reply = None
+    if transport is Transport.DUBBO:
+        reply = DubboMockReply(body=value)
+    elif transport is Transport.GRPC:
+        reply = GrpcMockReply(body=value)
     return MockBranch(
         branch="success",
         semantics=(
@@ -176,22 +200,43 @@ def _default_branch(raw: dict[str, Any] | None = None) -> MockBranch:
             if body is not None
             else "下游正常返回"
         ),
-        stub=MockStub(status=200, body=body if body is not None else {}),
+        outcome=MockOutcome.SUCCESS,
+        reply=reply,
+        stub=MockStub(status=200, body=value),
         evidence=Evidence.INFERRED,
         source=MockBranchSource(kind="contract", rule_keys=[]),
     )
 
 
-def _rule_branch(rule: Rule) -> MockBranch:
+def _rule_branch(rule: Rule, transport: Transport) -> MockBranch:
     branch = f"rule_{rule.rule_id}"
     match = _STATUS_RE.search(rule.text)
     status = int(match.group(1)) if match else 500
+    body = {"error": "downstream_error", "rule_id": rule.rule_id}
+    reply = None
+    if transport is Transport.DUBBO:
+        reply = DubboMockReply(body=body)
+    elif transport is Transport.GRPC:
+        grpc_status = GrpcStatus.INTERNAL
+        if status == 400:
+            grpc_status = GrpcStatus.INVALID_ARGUMENT
+        elif status == 404:
+            grpc_status = GrpcStatus.NOT_FOUND
+        elif status in (502, 503, 504):
+            grpc_status = GrpcStatus.UNAVAILABLE
+        reply = GrpcMockReply(
+            grpc_status=grpc_status,
+            message=rule.text[:1_000],
+            body=body,
+        )
     return MockBranch(
         branch=branch,
         semantics=rule.text,
+        outcome=MockOutcome.BUSINESS_ERROR,
+        reply=reply,
         stub=MockStub(
-            status=status,
-            body={"error": "downstream_error", "rule_id": rule.rule_id},
+            status=status if transport is Transport.HTTP else 200,
+            body=body,
         ),
         evidence=Evidence.INFERRED,
         source=MockBranchSource(kind="rule", rule_keys=[rule.rule_key]),
@@ -217,29 +262,50 @@ def build_mock_semantic(
             dep_id = str(raw.get("dep_id") or "")
             if not dep_id:
                 continue
+            transport = _dep_transport(raw)
             dep = deps.get(dep_id)
             if dep is None:
                 method = str(raw.get("method") or "").upper()
                 path_key = str(raw.get("path_key") or "")
+                service = str(raw.get("service") or "")
+                grpc_path = str(
+                    raw.get("grpc_path")
+                    or raw.get("path_key")
+                    or raw.get("endpoint")
+                    or ""
+                )
+                if transport is Transport.DUBBO:
+                    endpoint = (
+                        f"{service}#{raw.get('method')}"
+                        if service and raw.get("method")
+                        else dep_id
+                    )
+                    strategy = MockStrategy.AGENT_REWRITE
+                elif transport is Transport.GRPC:
+                    endpoint = grpc_path or dep_id
+                    strategy = MockStrategy.GRPC_SERVER
+                else:
+                    endpoint = f"{method} {path_key}".strip()
+                    strategy = MockStrategy.URL_OVERRIDE
                 dep = MockDep(
                     dep_id=dep_id,
-                    transport=Transport.HTTP,
-                    endpoint=f"{method} {path_key}".strip(),
-                    route_key=path_key,
-                    strategy=MockStrategy.URL_OVERRIDE,
+                    transport=transport,
+                    endpoint=endpoint,
+                    route_key=path_key if transport is Transport.HTTP else "",
+                    strategy=strategy,
                     property=(
                         str((raw.get("config_keys") or [""])[0])
-                        if raw.get("config_keys")
+                        if raw.get("config_keys") and transport is Transport.HTTP
                         else None
                     ),
-                    branches=[_default_branch(raw)],
+                    branches=[_default_branch(raw, transport=transport)],
                 )
                 deps[dep_id] = dep
             existing = {branch.branch for branch in dep.branches}
             for rule in active_rules:
                 if not _rule_matches_dep(rule, raw, only_dep=only_dep):
                     continue
-                branch = _rule_branch(rule)
+                branch = _rule_branch(rule, transport)
                 if branch.branch in existing:
                     continue
                 if len(dep.branches) >= _MAX_BRANCHES:
@@ -332,6 +398,8 @@ def apply_mock_semantic_candidates(
                     )
                     current.stub = candidate.stub
                     current.semantics = candidate.semantics
+                    current.outcome = candidate.outcome
+                    current.reply = candidate.reply
                     current.source = candidate.source
                     warnings.append(
                         f"branch_stub_overridden:{dep_id}:{candidate.branch}"
@@ -409,7 +477,11 @@ def validate_mock_semantic(
         seen_deps.add(dep.dep_id)
         if known_deps and dep.dep_id not in known_deps:
             errors.append(f"dep_not_in_profile:{dep.dep_id}")
-        if dep.transport is not Transport.HTTP:
+        if dep.transport not in (
+            Transport.HTTP,
+            Transport.DUBBO,
+            Transport.GRPC,
+        ):
             errors.append(f"transport_unsupported:{dep.dep_id}")
         if not dep.branches:
             errors.append(f"dep_no_branch:{dep.dep_id}")
@@ -418,7 +490,17 @@ def validate_mock_semantic(
             if branch.branch in names:
                 errors.append(f"branch_duplicate:{dep.dep_id}:{branch.branch}")
             names.add(branch.branch)
-            if not (200 <= branch.stub.status <= 599):
+            if branch.reply is not None and branch.reply.transport != dep.transport.value:
+                errors.append(
+                    f"reply_transport_mismatch:{dep.dep_id}:{branch.branch}"
+                )
+            if dep.transport is Transport.GRPC and branch.reply is None:
+                errors.append(
+                    f"grpc_reply_required:{dep.dep_id}:{branch.branch}"
+                )
+            if dep.transport is Transport.HTTP and not (
+                200 <= branch.stub.status <= 599
+            ):
                 errors.append(
                     f"branch_status_invalid:{dep.dep_id}:{branch.branch}"
                 )

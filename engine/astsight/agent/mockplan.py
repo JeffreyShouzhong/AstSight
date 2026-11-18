@@ -168,6 +168,16 @@ def _injection_for(dep: dict[str, Any]) -> MockPlanInjection:
             path_mode="append",
             reason="dubbo_filter_requires_java_agent",
         )
+    if dep_id.startswith("grpc:") or dep.get("dep_type") == "grpc":
+        return MockPlanInjection(
+            dep_id=dep_id,
+            strategy=MockStrategy.GRPC_SERVER,
+            kind="base_url",
+            property=None,
+            original=None,
+            path_mode="replace",
+            reason="grpc_target_rewrite_required",
+        )
     if _is_java_dep(dep):
         return _java_injection(dep, dep_id)
     config_keys = [str(key) for key in dep.get("config_keys") or [] if str(key)]
@@ -296,6 +306,11 @@ def build_mock_plan(
             route_branches[branch] = spec.stub
         if dep_id.startswith("dubbo:") or dep.get("dep_type") == "dubbo":
             dubbo_routes.append(_dubbo_route(dep, dep_id, route_branches))
+        elif dep_id.startswith("grpc:") or dep.get("dep_type") == "grpc":
+            raise AgentError(
+                "mock_grpc_runtime_unimplemented",
+                f"{dep_id}: gRPC 下游 Mock runtime 尚未实现",
+            )
         else:
             method = str(dep.get("method") or "").upper()
             path_key = str(dep.get("path_key") or "")

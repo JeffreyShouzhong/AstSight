@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
+from typing import Literal, Union
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from .enums import MockStrategy
+from .enums import MockStrategy, Transport
 from .mock import MockStub
 
 
@@ -75,6 +77,63 @@ class MockPlanInjection(BaseModel):
     reason: str | None = Field(default=None, description="unsupported 时必填")
 
 
+class HttpMockLocator(BaseModel):
+    """统一 Plan 中的 HTTP 路由定位信息。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["http"] = "http"
+    method: str
+    path_key: str
+    host: str | None = None
+    target: str | None = None
+
+
+class DubboMockLocator(BaseModel):
+    """统一 Plan 中的 Dubbo 服务方法定位信息。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["dubbo"] = "dubbo"
+    service: str
+    method: str
+    parameter_types: list[str] = Field(default_factory=list)
+    group: str | None = None
+    version: str | None = None
+
+
+class GrpcMockLocator(BaseModel):
+    """统一 Plan 中的 gRPC unary 方法定位信息。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["grpc"] = "grpc"
+    grpc_path: str
+    target: str | None = None
+    descriptor_source: str | None = None
+
+
+MockLocator = Union[HttpMockLocator, DubboMockLocator, GrpcMockLocator]
+
+
+class MockPlanDep(BaseModel):
+    """协议中立的 Mock 依赖视图。
+
+    当前由 legacy routes/dubbo_routes 在 Plan 校验后派生，作为后续统一
+    runtime 和 gRPC Plan 的稳定消费接口。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dep_id: str
+    transport: Transport
+    route_key: str | None = None
+    strategy: MockStrategy | None = None
+    source: str = "plan"
+    locator: MockLocator
+    branches: dict[str, MockStub] = Field(default_factory=dict)
+
+
 class MockPlan(BaseModel):
     """一个 `sut_id` 的完整 Mock 运行计划。"""
 
@@ -90,11 +149,20 @@ class MockPlan(BaseModel):
     capture_bodies: bool = False
     routes: list[MockPlanRoute] = Field(default_factory=list)
     dubbo_routes: list[MockPlanDubboRoute] = Field(default_factory=list)
+    deps: list[MockPlanDep] = Field(
+        default_factory=list,
+        description="由 validated routes/dubbo_routes 派生的协议中立视图",
+    )
     injections: list[MockPlanInjection] = Field(default_factory=list)
 
 
 __all__ = [
+    "DubboMockLocator",
+    "GrpcMockLocator",
+    "HttpMockLocator",
+    "MockLocator",
     "MockPlan",
+    "MockPlanDep",
     "MockPlanDubboRoute",
     "MockPlanInjection",
     "MockPlanRoute",
