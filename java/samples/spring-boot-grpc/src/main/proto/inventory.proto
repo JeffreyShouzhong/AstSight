@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package inventory.v1;
+
+option java_multiple_files = true;
+option java_package = "io.astsight.sample.inventory";
+
+message ReserveRequest {
+  string sku = 1;
+}
+
+message ReserveResponse {
+  bool available = 1;
+  string reservation_id = 2;
+}
+
+service InventoryService {
+  rpc Reserve(ReserveRequest) returns (ReserveResponse);
+}
