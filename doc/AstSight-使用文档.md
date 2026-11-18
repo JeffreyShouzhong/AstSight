@@ -1266,6 +1266,8 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 
 - 首版只支持直连 URL + Hessian2；注册中心（Nacos/ZooKeeper）与 Kryo/FST
   显式失败。
+- 不支持 Triple 协议。真实项目若默认 `dubbo.protocol.name=tri`，需要改成
+  `dubbo` + `hessian2` 并直连 URL，sidecar 才能调用。
 - sidecar 固定同步调用；异步/oneway 不生成用例。
 - Dubbo 多步骤已支持；A5 可通过 `steps[].dubbo.arguments` / `steps[].asserts`
   修多步骤用例，单步用例用顶层 `dubbo.arguments`。

@@ -688,7 +688,7 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 **Dubbo sidecar**：
 
 - 独立 Java 进程，通过 stdio JSON 接收调用请求；**不 Attach 被测 JVM、不使用 java agent**；
-- 支持直连 URL、Nacos、ZooKeeper 发现；
+- 被测 provider 只通过测试运行配置中的直连 URL / `IP:port` 定位；注册中心不作为测试目标发现、染色选择或兜底路径；
 - 使用 `GenericService` / `ReferenceConfig<GenericService>` 泛化调用，不要求 consumer 侧引入 api jar；
 - 首版固定 Hessian2 序列化；Kryo/FST/自定义序列化标 `unsupported`；
 - `param_types` 必须与 provider 签名完全一致；重载方法必须显式声明；
@@ -706,6 +706,104 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 > `rpc_status` / `result_field` 等原生断言；sidecar 随 wheel 分发并校验
 > manifest，目标地址支持 `ASTSIGHT_DUBBO_URL`、用例 URL 与画像端口 + host。
 > 纯 Dubbo 项目无 HTTP 路由时 `run --mode full` 也可执行。
+
+**Dubbo 直连目标解析（2026-11-18 设计口径）**：
+
+测试必须钉到具体的 SUT provider。注册中心只能说明“存在可用 provider”，不能证明返回的地址属于本次被测的部署或染色实例；因此本版本不使用注册中心确定测试目标，也不允许注册中心作为目标解析失败后的回退。
+
+服务身份与物理 endpoint 分开建模：
+
+- **服务身份**：`interface + group + version`，用于选择正确的 Dubbo service；
+- **物理 endpoint**：`protocol + IP + port`，用于建立连接；
+- 同一 SUT 的多个 service 可以共享同一个 endpoint；多接口共用一个端口不得被判为目标冲突；
+- 只有出现多个不同的 `protocol + IP + port` 时，才需要服务级目标映射。
+
+目标解析按以下顺序执行；来源校验必须通过，后续步骤一旦得到可用的唯一 endpoint 即停止继续查找：
+
+1. **校验代码来源一致性**：运行前必须证明 SUT 实际使用的构建产物与画像来源一致。校验依据为构建产物 SHA-256，或 `commit SHA + branch`；不一致时阻断为 `dubbo_source_mismatch`，不得继续解析或调用；
+2. **代码 / XML 显式地址**：从与运行 SUT 一致的代码版本中解析 `@DubboService(url=...)`、XML 等显式 Dubbo URL，作为权威目标；
+3. **按物理 endpoint 去重**：将代码解析结果按 `protocol + IP + port` 去重。若所有目标 Dubbo service 都收敛到同一个 endpoint，则所有 service 共享该目标；
+4. **运行配置的 SUT 直连地址**：仅当代码没有解析出某服务所需的 endpoint 时，使用运行配置提供的 SUT `IP:port`；同一协议、同一 SUT 下可复用于多个未解析 service；
+5. **服务级目标映射**：仅当存在多个不同 endpoint 或部分服务需要独立地址时，按 `sut_id + protocol + interface + group + version` 查找显式映射；
+6. **阻断**：仍无法得到唯一 endpoint，或得到多个不可消歧的 endpoint 时，阻断为 `dubbo_target_unresolved` / `dubbo_target_ambiguous`，不猜、不回退注册中心、不回退全局 URL。
+
+代码地址与运行映射的关系：
+
+- 代码中已解析出的唯一显式地址优先；
+- 运行映射只补充代码未解析出的服务；
+- 同一服务键在代码与映射中给出不同 endpoint 时，默认阻断；只有显式开启目标覆盖才允许运行映射覆盖代码地址；
+- 报告必须写出每个用例实际使用的 endpoint、解析来源及代码文件/行号，便于审计。
+
+全局 Dubbo URL 的边界：
+
+- 只有本次 run 的所有 Dubbo service 都收敛到同一个 `protocol + IP + port` 时，才允许使用全局 URL；
+- 出现多个不同 endpoint 时，全局 URL 不得作为任何服务的兜底；
+- “使用了多个 interface”不等于“存在多个 endpoint”；多接口共用端口时仍属于单 endpoint。
+
+精准直连配置只接受 IPv4 / IPv6 字面量与显式端口，不接受域名、Kubernetes Service 名或 VIP 别名。用户填写的 SUT `IP:port` 被视为确定性的 provider 目标，框架按 `determinism="exact"` 记录；无法解析、协议不支持或地址不确定时必须在执行前显式阻断。
+
+Triple 等非 `dubbo://` 目标可以在地址解析阶段得到 endpoint，但当前 sidecar 尚不支持时必须以 `dubbo_protocol_unsupported` 阻断；目标地址解析成功不代表协议适配已完成。
+
+**Dubbo Triple 与 gRPC unary 支持边界（2026-11-18 设计口径）**：
+
+测试调用统一限定为 **一次请求、一次响应（unary）**。不接 client streaming、server streaming、bidirectional streaming；流式方法在画像/计划阶段显式标 `unsupported`，不得进入执行阶段后才发现。
+
+| 调用类型 | 支持口径 | 说明 |
+|---|---|---|
+| `dubbo://` + Hessian2 | 正式支持 | 使用 `ReferenceConfig<GenericService>` 泛化调用，精确 `param_types` |
+| `tri://` + Protobuf + descriptor + unary | 正式支持 | 满足 gRPC 兼容条件时复用 gRPC unary adapter |
+| `tri://` + Java interface + unary | 按需支持 | 仅在真实试点证明必要时建设 Triple-native unary adapter |
+| `grpc://` + Protobuf + descriptor + unary | 正式支持 | 以仓库 descriptor 为契约源 |
+| client/server/bidi streaming | 不支持 | 画像期标 `streaming_unsupported`，不生成用例 |
+| gRPC server reflection | 不建议支持 | descriptor 缺失时标 `no_descriptor`，不依赖运行时 reflection |
+| 注册中心目标发现 | 不支持 | 继续使用 Dubbo 直连目标解析，不引入 Nacos/ZooKeeper 选 provider |
+
+调用适配统一分三层：
+
+```text
+UnaryRpcAdapter
+  ├─ DubboHessianGenericAdapter
+  ├─ GrpcUnaryAdapter
+  └─ TripleUnaryAdapter
+       ├─ grpc-compatible mode
+       └─ triple-native mode（按需）
+```
+
+gRPC 与 Triple-compatible 可共享 HTTP/2 channel、deadline/timeout、metadata、TLS、trailer/status 解析、protobuf descriptor/动态消息及错误归一；服务身份与协议来源仍须分别记录。报告至少保留：
+
+```json
+{
+  "transport_class": "dubbo | grpc",
+  "protocol": "dubbo | tri | grpc",
+  "adapter": "dubbo_generic | grpc_unary | triple_native_unary",
+  "compatibility": "native | grpc_compatible",
+  "streaming": "unary"
+}
+```
+
+Triple 与 gRPC 兼容不得只依据 URL scheme 推断。进入 `grpc-compatible mode` 前必须确认：
+
+- 服务使用 Protobuf 编解码且有可用 descriptor；
+- 调用为 unary；
+- service/method path 与 gRPC 兼容；
+- `grpc-status` / `grpc-message` trailer 语义可用；
+- Dubbo `group/version` 已由唯一 endpoint 选定，或能通过明确、可验证的方式完成服务选择。
+
+不满足兼容条件时走 Triple-native 或显式阻断，不得静默回退到其他协议、endpoint 或注册中心。`tri://` 地址解析成功不代表协议调用能力已完成。
+
+测试端调用统一采用同步语义：发起请求、等待唯一响应、返回结果或结构化错误。建议固定 `retries=0`，每次调用显式给出 `timeout_ms`；不暴露异步/流式 API，不自动回退到其他 endpoint。
+
+错误统一归入 `rpc_status`：`OK` / `BAD_REQUEST` / `TIMEOUT` / `NETWORK` / `NO_PROVIDER` / `SERIALIZATION` / `RPC_EXCEPTION` / `UNIMPLEMENTED` / `UNSUPPORTED_PROTOCOL`，同时保留 Dubbo `RpcException`、gRPC `grpc-status` / `grpc-message`、Triple HTTP/2 status/trailer 和序列化异常等原始信息，避免把业务异常、协议兼容问题和网络故障混为一类。
+
+本边界只解决 `AstSight → SUT` 的 unary 调用，不改变下游 Mock 边界：`SUT → gRPC` 下游仍使用独立 gripmock 方案，`SUT → Triple` 下游 Mock 当前不支持；测试端具备 Triple 调用能力不代表其下游已经可 Mock。
+
+落地顺序：
+
+1. `grpc:// + Protobuf + descriptor + unary`；
+2. `tri:// + Protobuf + descriptor + unary`，复用 gRPC unary adapter；
+3. 使用真实 Triple 项目做兼容性试点；
+4. 仅在试点证明必要时增加 `tri:// + Java interface` 的 Triple-native unary；
+5. streaming、reflection 与注册中心保持明确不支持。
 
 **Dubbo 识别（确定性，零 LLM）**：
 
@@ -984,7 +1082,7 @@ HTTP 端点继续保留 `method/path`；gRPC / Dubbo 端点使用 `endpoint` 字
 |---|---|---|---|
 | `http` | `method`、`path`、`params`、`responses` | — | 端点标识 `http:{METHOD} {path}`；**下游** `id` 另加下游身份：`http:{downstream_key} {METHOD} {path}`，同一下游端点的多个调用点合并为同一个 `dep_id`（见 C3.5.5） |
 | `grpc` | `service`、`method`、`grpc_path`、`request_type`、`response_type`、`descriptor_source`、`streaming` | `path`、HTTP 语义的 `params`/`responses` | 仅 `streaming="unary"`；`grpc_path` 固定 `/{package}.{Service}/{Method}`；`request_type`/`response_type` 必须是 proto 中存在的 message 全限定名 |
-| `dubbo` | `interface`、`method`、`param_types`、`return_type`、`serialization`、`registry` 或 `direct_url` | `path`、HTTP 语义的 `params`/`responses` | `interface` 为 FQN 且必须在仓库源码内；`param_types` 按方法声明顺序，用于重载消歧；`serialization` 固定 `hessian2`（本版本） |
+| `dubbo` | `interface`、`method`、`param_types`、`return_type`、`serialization`、`direct_url`、`target_source` | `path`、HTTP 语义的 `params`/`responses` | `interface` 为 FQN 且必须在仓库源码内；`param_types` 按方法声明顺序，用于重载消歧；`serialization` 固定 `hessian2`（本版本）；测试目标只接受直连 endpoint，不做注册中心发现 |
 
 gRPC 附加字段：
 
@@ -1011,8 +1109,8 @@ Dubbo 附加字段：
   "group": "order",
   "version": "1.0.0",
   "serialization": "hessian2",
-  "registry": {"type": "nacos | zookeeper | direct", "address": "nacos://..."},
-  "direct_url": null,
+  "direct_url": "dubbo://10.10.2.15:20880",
+  "target_source": "annotation | run_config | target_map | unresolved",
   "timeout_ms": 3000,
   "attachments": {}
 }
@@ -1508,6 +1606,43 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 
 **结论**：SUT → gRPC 下游的 Mock 不再走进程内拦截，改为**独立 Mock 服务器**：每个 Mock 命名空间拉起一个 gripmock 实例，SUT 的 gRPC target 指向它；用例通过 gripmock 的 REST stub API 装桩，通过请求 history 取证。v4.3 的实现边界不变（gRPC 下游仍 `mock="unsupported"`），本节只定 v4.4 的落地约束。
 
+**简化路由与 proto 口径（2026-11-18）**：
+
+同一 SUT 调用多个 gRPC 下游时，仍然只启动一个 gripmock。所有下游 gRPC client 的 target 都在 SUT 启动前重定向到该 Mock endpoint；不为每个下游 target 单独启动进程。
+
+下游身份不参与选桩。Mock 路由键直接使用 gRPC 完整方法路径：
+
+```text
+dep_id = grpc:{grpc_path}
+
+grpc:/payment.v1.PaymentService/Pay
+grpc:/inventory.v1.InventoryService/Reserve
+grpc:/user.v1.UserService/Get
+```
+
+`grpc_path` 由 package、service 和 method 组成，通常在一个 SUT 的依赖集合内唯一。不同下游即使 host/服务名不同，只要完整 `grpc_path` 不同即可正确选桩；不需要保留原始下游 target。
+
+完整路径重复属于低频异常，只做构建期低成本检测：如果当前 run 中两个不同 descriptor 生成了相同的完整 `grpc_path`，阻断为 `grpc_path_ambiguous`，不启动该 run。不为该极端情况引入多实例路由或 host 身份机制。
+
+proto descriptor 是 Mock 响应的事实源：
+
+- descriptor 来自与运行 SUT 一致的代码版本；运行前按构建产物 sha256 或 `commit SHA + branch` 校验；
+- 支持仓库 `.proto` 或用户显式提供的 `.protoset`，必须包含递归 import、well-known types 和全部 service/method/message；
+- 生成 descriptor 后记录文件清单与 `descriptor_sha256`；缺失或无法解析分别阻断为 `mock_descriptor_missing` / `proto_descriptor_invalid`；
+- stub body 在安装前按 descriptor 校验字段、类型、enum、`int64`、`oneof`、map、repeated 等结构；错误为 `mock_stub_invalid`；
+- 不从网络下载 proto，不依赖 gRPC server reflection。
+
+每个 active session 下，每个 `grpc_path` 只安装一个当前分支 stub。v1 不使用请求体 matcher，也不支持同一方法的调用序列；这同时规避 gripmock 的 int64 matcher 缺陷。若一个用例需要同方法多次返回不同结果，标 `unsupported`。
+
+v1 边界：
+
+- 只支持 unary；
+- 只支持明文 gRPC；TLS/mTLS 及其证书边界未解决时标 `grpc_tls_unsupported`；
+- 只支持可重定向 target；硬编码 target 标 `grpc_target_not_overridable`，依赖用例 `blocked`；
+- 不支持 streaming、reflection、请求体匹配和调用序列；
+- 一个 SUT 一个 gripmock；按 `grpc_path` 路由；
+- SUT 的所有 gRPC 下游 target 都可显式改写到同一个 Mock endpoint。
+
 选型依据、候选对比、实测证据、落选原因与待复验项见 **[决策记录.md §4](决策记录.md)**，本文不复述。
 
 **已知缺陷与框架侧处置**：
@@ -1532,8 +1667,9 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 **运行形态（Linux 基线）**：
 
 - 每个 Mock 命名空间一个 gripmock 进程/容器，按 `sut_id` 归属；端口按 **5.5** 原子分配（`bind(:0)` 后写回 run manifest），只绑回环或容器内网；
+- 同一 SUT 的多个 gRPC 下游共享该 gripmock endpoint；SUT 启动前把各下游 client target 显式改写到该 endpoint，原下游 host 不参与 Mock 路由；
 - 装桩走 REST `POST /api/stubs`（或启动时挂载 stub 目录）；SUT 通过 `--target` / 配置指向该地址，改写必须显式写入启动参数与报告；
-- 用例开始：清理并装桩 → 调用 SUT → 读 `/api/history` 取证 → 用例结束清理；
+- 用例开始：清理并按 `grpc_path` 装桩 → 调用 SUT → 读 `/api/history` 取证 → 用例结束清理；同一 `grpc_path` 当前 session 只有一个 stub；
 - 健康检查走管理端接口，不靠端口探测；停止用 SIGTERM（容器 stop），超时 SIGKILL；
 - descriptor 由框架从仓库 `.proto` / `.protoset` 生成并挂载，缺失 → `mock_descriptor_missing`；
 - stub 与 history 落 run 目录，作为可追溯证据。
@@ -1547,6 +1683,10 @@ SUT 调用下游：Cluster/Directory 选中 provider → Filter 命中会话
 | `port_alloc_failed` | 原子端口分配/绑定失败（见 5.5） | 环境类，整批阻断 |
 | `mock_identity_mismatch` | 心跳或会话命名空间与本 run 的 `sut_id`/endpoint/pid 不一致（见 5.5） | 框架/配置类，整批阻断 |
 | `mock_descriptor_missing` | 缺 proto / protoset，无法建桩 | 相关下游 `unsupported`，用例排除 |
+| `proto_descriptor_invalid` | proto import、类型或 descriptor 生成失败 | 相关下游 `unsupported`，用例 `blocked` |
+| `grpc_path_ambiguous` | 当前 run 中两个不同 descriptor 生成相同完整 `grpc_path` | 构建期阻断 |
+| `grpc_target_not_overridable` | SUT 的 gRPC target 硬编码或无法重定向到 Mock endpoint | 相关下游 `unsupported`，依赖用例 `blocked` |
+| `grpc_tls_unsupported` | 下游要求 TLS/mTLS 或证书固定，v1 无法重定向 | 相关下游 `unsupported`，依赖用例 `blocked` |
 | `mock_stub_invalid` | 桩被服务器拒绝（JSON 非法、字段不存在） | 阻断，归 `mock_error` |
 | `mock_unexpected_dep` | 请求未命中任何桩（以 history 为准） | 阻断，归 `mock_error` |
 | `mock_branch_not_found` | 用例要求的语义分支没有对应桩 | 阻断 |
@@ -2645,7 +2785,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | ChangedAPI   | C2     | C3/C4    | transport, endpoint, handler, business_key, change_kinds, contract_change{source,status,details}, confidence, trace, external_dependency_change, unsupported_reason |
 | Profile      | C3     | C4/C5    | transport, transport_class, transport_evidence, business_key, coverage_role, alias_of, adapter_fingerprint, contract_source, params.constraints, db_mapping, dependencies, grpc/dubbo 调用字段, downstream_deps（含 HTTP/gRPC/Dubbo 下游）, db_lineage[] |
 | CoverageGroup | C3     | C4/C7    | business_key, endpoints[], primary, aliases[], independents[], adapter_fingerprint, evidence |
-| TransportAdapter | C3/C6 | C7    | transport, grpc descriptor_source / dubbo sidecar{version,serialization,registry,direct_url}, status(ready/unsupported), evidence |
+| TransportAdapter | C3/C6 | C7    | transport, grpc descriptor_source / dubbo sidecar{version,serialization,direct_url,target_source}, status(ready/unsupported), evidence |
 | DBLineage    | C3     | C5       | edge(READS/WRITES/MAPS_TO/FK), table, column, evidence        |
 | DataCatalog  | C5a    | C4/C5b   | catalog_id, tables/columns, foreign_keys, tables_order, states, field_semantics, limits |
 | DataPlan     | C5b    | C6/C7    | plan_id, catalog_id, ruleset_hash, case_id, run_scope, tables_order, fixtures, target_state, fk_links(源自血缘), preconditions, 参数化 statements/teardown |
@@ -2881,8 +3021,8 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M2.2 | **业务级用例**：规则驱动的 C4a 草案 + `rule_refs` + 审核展示规则依据 + 规则覆盖报告 | business 用例全部挂 `rule_refs`；BR/CR 覆盖率分列；B 级规则被批准用例确认 |
 | M2.3 | **代码级用例**：C2 变更选择 + 覆盖矩阵 + C4b 差分草案 + `change_refs` + `change_without_oracle` | delta 只为未覆盖变更生成 code 用例；无规则依据时不生成；变更覆盖率可见 |
 | M2.4 | **HTTP 下游通用接入**：出站 HTTP 调用点识别（配置/服务发现/代理注入点定位）+ 契约源优先级（OpenAPI > Spring MVC 注解）+ 稳定且唯一的 `dep_id`（C3.5.5） | 无 OpenAPI 的 Spring 项目也能建画像；下游 id 跨构建稳定；同路径跨下游不重名，多调用点不重复；无法识别的调用点进缺口清单 |
-| M2.5 | **transport 模型 + gRPC**：`transport/transport_class/transport_evidence`、端点标识、gRPC descriptor 加载、unary 调用、`grpc_status/response_field/metadata` 断言、`unsupported` 清单 | gRPC 项目可建画像并执行 unary 用例；无 descriptor 端点显式 `unsupported`；无 HTTP 伪装 |
-| M2.6 | **Dubbo sidecar**：Dubbo 2.7+ 注解/XML 识别、接口源码校验、sidecar 泛化调用（Hessian2、精确 `param_types`）、`rpc_status/result_field/exception_type` 断言、注册中心直连 | Dubbo 2.7+ 标准场景可执行；2.6/jar-only/动态查找显式 `unsupported`；sidecar 启动自检与错误归一 |
+| M2.5 | **transport 模型 + gRPC/Triple unary**：`transport/transport_class/transport_evidence`、端点标识、gRPC descriptor 加载、gRPC unary、Triple gRPC-compatible unary、`grpc_status/response_field/metadata` 断言、`unsupported` 清单 | gRPC 与 Triple-compatible unary 项目可执行；无 descriptor/streaming 显式 `unsupported`；报告保留 `protocol=tri` 与实际 adapter；无 HTTP 伪装 |
+| M2.6 | **Dubbo sidecar**：Dubbo 2.7+ 注解/XML 识别、接口源码校验、sidecar 直连泛化调用（Hessian2、精确 `param_types`）、Triple-native unary（按需）、`rpc_status/result_field/exception_type` 断言；测试目标不做注册中心发现 | Dubbo 2.7+ 标准场景可执行；Triple 不满足 gRPC 兼容且未启用 native 时显式阻断；2.6/jar-only/动态查找显式 `unsupported`；目标未解析/歧义阻断；sidecar 启动自检与错误归一 |
 | M2.7 | **transport 回退（受限）**：仅 `transport_class=dubbo` 的 gRPC→sidecar，`--allow-transport-fallback` 显式开启、单次、报告 `transport_fallback + degraded` | 默认关闭；回退失败归 `adapter_error`；禁止跨形态回退 |
 | M2.8 | **多协议覆盖策略**：C2 provider-only + base/target 契约 diff + `change_kinds`；C3 `business_key`/`coverage_role`/`adapter_fingerprint`；C4 alias 冒烟 + `--transport-scope`；C7.4 `transport_coverage` | 纯契约变更分支可产出端点；每个 `business_key` 仅一个 primary；alias 冒烟可执行且不计入业务覆盖；`transport_alias_skipped` 可见 |
 | M2.9 | **Mock 用例级会话（方案 A）**：Mock 服务 admin session API、`mock_bindings` 导入期补全、C7.1 `mock:<namespace>` 独占、C7.2 mock lease 串行、C6 session fixture、C7.4 `mock_sessions` 证据 | 单命名空间单 active session；冲突/未命中/晚到调用全部显式报错；mock-bound 用例串行且证据可复核；无 session 证据的 Mock 用例标 `weak_oracle` |

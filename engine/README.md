@@ -715,7 +715,9 @@ Dubbo 有效，无法覆盖 HTTP）。矩阵外的 Dubbo 版本不做运行期�
 - RPC 失败（`TIMEOUT`/`SERIALIZATION`/`NETWORK`/`NO_PROVIDER`/
   `RPC_EXCEPTION`）作为 `DubboCallResult` 返回；进程崩溃、协议错才抛
   `DubboSidecarError`；
-- 首版只支持直连 `url`；传 `registry` 返回 `registry_not_supported`；
+- 首版只支持直连 `url` + Hessian2；传 `registry` 返回
+  `registry_not_supported`；Triple 协议不支持，需要把 provider 改成
+  `dubbo` + `hessian2`；
 - jar 解析顺序：`ASTSIGHT_DUBBO_SIDECAR_JAR` → 已安装的
   `astsight-dubbo-sidecar` wheel（校验 manifest/版本/协议/sha256/size）→
   仓库 `java/astsight-sidecar-dubbo/target/astsight-dubbo-sidecar.jar`；
