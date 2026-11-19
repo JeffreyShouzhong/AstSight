@@ -3,7 +3,7 @@
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
 > 最新代码提交：`a831676`（`新增：删除接口用例自动逻辑删除；待办范围收敛`）；
-> 当前存档已同步远端。
+> 文档与代码对齐提交：`1884fd2`；当前存档已同步远端。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
