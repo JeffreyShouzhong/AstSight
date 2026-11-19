@@ -67,8 +67,13 @@ jobs:
       - name: Build gripmock Linux wheels (amd64 + arm64)
         run: python tools/build_gripmock_wheels.py --arch all --download
 
+      # arm64 wheel 只是为了产物和分发校验而构建，不能在 x86 runner 上安装。
       - name: Install wheels
-        run: python -m pip install --force-reinstall dist/*.whl
+        run: |
+          python -m pip install --force-reinstall \
+            dist/astsight_java_agent-*.whl \
+            dist/astsight_dubbo_sidecar-*.whl \
+            dist/astsight_gripmock_bin-*manylinux_2_17_x86_64.whl
 
       - name: Verify wheel distribution
         working-directory: engine
