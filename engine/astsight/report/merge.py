@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any
 
+from contracts import AssertStrength
+
 
 def _contract_parts(diff: dict) -> str:
     parts: list[str] = []
@@ -245,6 +247,29 @@ def build_report(
         "checked": False,
         "reason": "mock_evidence_not_configured",
     }
+    executed_case_ids = {
+        str(record.get("case_id") or "")
+        for record in records
+        if record.get("case_id")
+    }
+    weak_oracle: list[str] = []
+    if mock.get("checked"):
+        mock_by_case = mock.get("by_case") or {}
+        for case in cases:
+            if case.id not in executed_case_ids:
+                continue
+            if not getattr(case, "mock_bindings", None):
+                continue
+            if getattr(case, "assert_strength", None) != AssertStrength.L1:
+                continue
+            calls = int((mock_by_case.get(case.id) or {}).get("calls") or 0)
+            if calls == 0:
+                weak_oracle.append(case.id)
+        if weak_oracle:
+            warnings.append(
+                f"{len(weak_oracle)} 条用例只有状态码断言且 Mock 未命中"
+                "（weak_oracle）"
+            )
     if mock.get("checked"):
         blocking = int(mock.get("blocking_errors") or 0)
         if blocking:
@@ -422,6 +447,7 @@ def build_report(
             "recovered_by_retry": recovered,
             "unknown_attribution": unknown,
             "flaky_candidates": flaky,
+            "weak_oracle": weak_oracle,
             "unexecuted_cases": len(unexecuted),
             "blocked_cases": blocked,
         },
@@ -459,6 +485,23 @@ def build_report(
         "failures": failures,
         "unexecuted": unexecuted,
         "codegen": codegen,
+        "audit": {
+            "egress_guard": {"status": "not_implemented"},
+            "weak_oracle": {
+                "checked": bool(mock.get("checked")),
+                "count": len(weak_oracle),
+            },
+            "mock_sessions": {
+                "checked": bool(mock.get("sessions_checked")),
+                "evidence": len(mock.get("session_evidence") or []),
+                "truncated": bool(mock.get("session_evidence_truncated")),
+                "binding_fields": "dep_id/branch/calls",
+            },
+            "transport_coverage": {"status": "not_implemented"},
+            "transport_fallback": {"status": "not_applicable"},
+            "instance": {"status": "not_applicable"},
+            "token_usage": {"status": "not_available"},
+        },
     }
     return report
 
@@ -494,6 +537,9 @@ def render_markdown(report: dict) -> str:
     lines.append(f"| 重试恢复 | {summary['recovered_by_retry']} |")
     lines.append(f"| 未执行 | {summary['unexecuted_cases']} |")
     lines.append(f"| 数据阻断（blocked） | {summary.get('blocked_cases', 0)} |")
+    weak_oracle = summary.get("weak_oracle") or []
+    if weak_oracle:
+        lines.append(f"| 弱断言（weak_oracle） | {len(weak_oracle)} |")
     if report.get("case_store"):
         store = report["case_store"]
         coverage = store.get("requirement_coverage") or {}
@@ -794,6 +840,23 @@ def render_markdown(report: dict) -> str:
                     f"{call.get('error') or '-'}"
                 )
             lines.append("</details>")
+        evidence = mock.get("session_evidence") or []
+        if evidence:
+            lines.append("")
+            lines.append(
+                f"<details><summary>逐用例会话证据（{len(evidence)}）</summary>"
+            )
+            for item in evidence:
+                calls = sum(
+                    int(binding.get("calls") or 0)
+                    for binding in item.get("bindings") or []
+                )
+                lines.append(
+                    f"- `{item.get('case_id') or '-'}` / session "
+                    f"`{item.get('session_id') or '-'}`："
+                    f"状态 `{item.get('status') or '-'}`，调用 {calls} 次"
+                )
+            lines.append("</details>")
         lines.append("")
     agent_state = mock.get("agent") or {}
     if int((mock.get("plan") or {}).get("dubbo_route_count") or 0):
@@ -948,6 +1011,43 @@ def render_markdown(report: dict) -> str:
         lines.append("")
         for item in report["unexecuted"][:30]:
             lines.append(f"- {item['case_id']} `{item['endpoint']}`（{item['reason']}）")
+        lines.append("")
+
+    audit = report.get("audit") or {}
+    if audit:
+        lines.append("## 审计完整性")
+        lines.append("")
+        labels = {
+            "not_implemented": "未实现",
+            "not_applicable": "不适用",
+            "not_available": "无数据",
+        }
+        for name, item in audit.items():
+            status = item.get("status")
+            if status in labels:
+                lines.append(f"- `{name}`：{labels[status]}")
+            elif item.get("checked") is False:
+                lines.append(f"- `{name}`：未检查")
+            elif item.get("checked") is not None:
+                detail = "已检查"
+                if name == "weak_oracle":
+                    detail += f"，{item.get('count', 0)} 条弱断言"
+                if name == "mock_sessions":
+                    detail += f"，{item.get('evidence', 0)} 条会话证据"
+                lines.append(f"- `{name}`：{detail}")
+        lines.append("")
+
+    usage = report.get("token_usage") or {}
+    if usage.get("calls"):
+        lines.append("## Token 用量")
+        lines.append("")
+        lines.append(
+            f"- 调用 {usage.get('calls', 0)} 次 / 输入 "
+            f"{usage.get('total_input_tokens', 0)} / 输出 "
+            f"{usage.get('total_output_tokens', 0)}"
+        )
+        if usage.get("by_node_status") == "not_available":
+            lines.append("- 按节点统计不可用：当前 LLMUsage 未记录节点标签")
         lines.append("")
 
     lines.append("## 产物")

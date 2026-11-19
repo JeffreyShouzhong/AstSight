@@ -12,6 +12,7 @@ from contracts import MockCall, MockCallResult
 MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
 MAX_EVIDENCE_CALLS = 200_000
 MAX_EVIDENCE_LINE_BYTES = 2 * 1024 * 1024
+MAX_SESSION_EVIDENCE = 200
 _BLOCKING_RESULTS = {
     MockCallResult.UNKNOWN,
     MockCallResult.AMBIGUOUS,
@@ -96,6 +97,15 @@ def _session_dict(item: Any) -> dict[str, Any]:
     raise TypeError(f"unsupported session record: {type(item).__name__}")
 
 
+def _session_status(session: dict[str, Any]) -> str:
+    if session.get("active"):
+        return "open"
+    reason = str(session.get("close_reason") or "").lower()
+    if "expire" in reason:
+        return "expired"
+    return "closed"
+
+
 def _unused_bindings(
     calls: list[MockCall],
     sessions: list[Any],
@@ -172,6 +182,9 @@ def _unreadable_evidence(path: str | Path, exc: Exception) -> dict[str, Any]:
         "unused_bindings": [],
         "sessions_missing": 0,
         "session_ids_missing": [],
+        "session_evidence": [],
+        "session_evidence_total": 0,
+        "session_evidence_truncated": False,
         "degraded": True,
     }
 
@@ -211,6 +224,9 @@ def summarize_evidence(
             "unused_bindings": [],
             "sessions_missing": 0,
             "session_ids_missing": [],
+            "session_evidence": [],
+            "session_evidence_total": 0,
+            "session_evidence_truncated": False,
             "degraded": False,
         }
     missing = False
@@ -225,6 +241,7 @@ def summarize_evidence(
 
     by_result: Counter[str] = Counter()
     by_case: dict[str, dict[str, Any]] = {}
+    by_session_dep: Counter[tuple[str, str]] = Counter()
     session_ids: set[str] = set()
     late_calls: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -235,6 +252,8 @@ def summarize_evidence(
         by_result[result] += 1
         if call.session_id:
             session_ids.add(call.session_id)
+            if call.dep_id:
+                by_session_dep[(call.session_id, call.dep_id)] += 1
         if not call.case_id:
             unattributed += 1
         else:
@@ -293,6 +312,40 @@ def summarize_evidence(
     missing_sessions = (
         sorted(session_ids - known_sessions) if sessions_checked else []
     )
+    session_evidence: list[dict[str, Any]] = []
+    if sessions_checked:
+        for raw in sessions or []:
+            session = _session_dict(raw)
+            session_id = str(session.get("session_id") or "")
+            if not session_id:
+                continue
+            bindings: list[dict[str, Any]] = []
+            for binding in session.get("bindings") or []:
+                dep_id = str(binding.get("dep_id") or "")
+                if not dep_id:
+                    continue
+                bindings.append(
+                    {
+                        "dep_id": dep_id,
+                        "branch": str(binding.get("branch") or ""),
+                        "calls": int(
+                            by_session_dep.get((session_id, dep_id), 0)
+                        ),
+                    }
+                )
+            session_evidence.append(
+                {
+                    "case_id": str(session.get("case_id") or ""),
+                    "session_id": session_id,
+                    "sut_id": str(session.get("sut_id") or ""),
+                    "namespace": str(session.get("namespace") or ""),
+                    "status": _session_status(session),
+                    "bindings": bindings,
+                }
+            )
+    session_evidence_total = len(session_evidence)
+    session_evidence_truncated = session_evidence_total > MAX_SESSION_EVIDENCE
+    session_evidence = session_evidence[:MAX_SESSION_EVIDENCE]
     return {
         "checked": True,
         "path": str(path),
@@ -312,6 +365,9 @@ def summarize_evidence(
         "unused_bindings": unused_samples,
         "sessions_missing": len(missing_sessions),
         "session_ids_missing": missing_sessions[:max_samples],
+        "session_evidence": session_evidence,
+        "session_evidence_total": session_evidence_total,
+        "session_evidence_truncated": session_evidence_truncated,
         "degraded": bool(
             blocking
             or unused_count

@@ -61,6 +61,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| C7.4 审计报告补强 | ✅ 2026-11-19 | 报告新增 `audit` 完整性块；`weak_oracle` 标出 mock-bound + L1 + 零 Mock 命中的用例；`summarize_evidence` 输出逐用例 `session_evidence`（bindings/dep_id/branch/calls/status）；agent flow 把 `token_usage` 汇总写进 report；`egress_guard` 标 `not_implemented`，`instance`/`transport_coverage`/`transport_fallback` 标 `not_applicable`/`not_implemented`；新增 5 条测试 |
 | 文档与代码对齐 | ✅ 2026-11-19 | 运行模式统一为 `full`/`delta`/`cases`（`replay` 明确不实现）；修正 gRPC 下游“仍 unsupported”的过期表述、C7.2 并行调度未实现标注、CLI 无 `--sut-id`；ROADMAP 非目标补全 RocketMQ 批量/连接级 Mock 与注册中心；README/设计文档能力表与测试计数同步 |
 | C1 四类契约源 ContractModel | ✅ 2026-11-19 | 新增 `rules/contract_model.py`：OpenAPI、Spring MVC 参数/DTO、gRPC descriptor unary、Dubbo 2.7+ 接口先归一为统一操作/字段/来源/gap；CR 只从各源能力子集生成，跨源同事实合并 `support[]`，不同约束生成 framework conflict；Spring 常见校验注解、gRPC enum/repeated/oneof、Dubbo 源 DTO 约束、OpenAPI `$ref` 缺口均已接入；未定位 gRPC provider 时 `contract_eligible=false`，不生成 CR；新增 5 条测试，默认全量 706 passed / 72 skipped |
 | 删除接口旧用例自动废弃 | ✅ 2026-11-19 | 新增 `cases/deleted_cleanup.py`：delta 确认接口删除后，把 caseset 中指向该接口的 approved HTTP 用例标为 `deprecated`（逻辑删除），`approved_cases` 与执行流程不再包含；`review_log` 以 `astsight:deleted-api` 记录，落库前备份；报告单列被废弃用例；扫描未完成或没有用例库时不动；新增 5 条测试，全量 701 passed / 72 skipped |

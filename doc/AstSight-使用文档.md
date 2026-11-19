@@ -1809,6 +1809,12 @@ PYTHONPATH=. python -m astsight agent run \
 
 `report.md` 是给人看的结论；`report.json` 用于机器消费；`execution.json` 保留执行明细。
 
+报告里的 `audit` 块显式列出审计完整性：`weak_oracle` 标出只有状态码断言且
+Mock 未命中的用例，`mock_sessions` 记录逐用例会话证据（详见
+`report.mock.session_evidence`），agent run 还会给出 `token_usage`。
+未实现或不适用的审计项（`egress_guard`、`instance`、`transport_coverage`、
+`transport_fallback`）直接标 `not_implemented` / `not_applicable`，不会静默省略。
+
 ---
 
 ## 17. 示例项目

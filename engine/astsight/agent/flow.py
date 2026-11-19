@@ -24,6 +24,7 @@ from typing import Any
 from contracts import DataCatalog, DataPlanBundle, MockSemantic, RuleSet
 
 from ..artifacts import RunDir, new_run_id, utc_now
+from ..report.merge import render_markdown
 from ..cases.context import build_context
 from ..cases.proposal import (
     approve_proposal,
@@ -1257,6 +1258,7 @@ def run_flow(
         if runtime is not None:
             runtime.stop()
         result.llm_usage = [usage.as_dict() for usage in client.usage]
+        _attach_token_usage(result, run_dir, client)
         run_dir.write_json(
             "flow.json",
             {
@@ -1270,6 +1272,53 @@ def run_flow(
         )
         if owned_llm:
             client.close()
+
+
+def _usage_summary(usages: list[dict[str, Any]], model: str) -> dict[str, Any]:
+    input_tokens = sum(int(item.get("input_tokens") or 0) for item in usages)
+    output_tokens = sum(int(item.get("output_tokens") or 0) for item in usages)
+    prompt_chars = sum(int(item.get("prompt_chars") or 0) for item in usages)
+    calls = len(usages)
+    summary: dict[str, Any] = {
+        "calls": calls,
+        "total_prompt_chars": prompt_chars,
+        "total_input_tokens": input_tokens,
+        "total_output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "by_model": {},
+        "by_node": {},
+        "by_node_status": "not_available",
+        "note": "LLMUsage 未记录节点标签；按节点统计不可用",
+    }
+    if calls:
+        summary["by_model"] = {
+            model: {
+                "calls": calls,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            }
+        }
+    return summary
+
+
+def _attach_token_usage(result: "FlowResult", run_dir: RunDir, client: Any) -> None:
+    """把 LLM 用量补进统一报告；run 模式没有 LLM，保持 not_available。"""
+    report = result.report
+    if not isinstance(report, dict):
+        return
+    model = str(getattr(client.config, "model", "") or "unknown")
+    usage = _usage_summary(result.llm_usage, model)
+    report["token_usage"] = usage
+    audit = report.setdefault("audit", {})
+    audit["token_usage"] = {
+        "status": "reported" if usage["calls"] else "not_available",
+        "by_node": "not_available",
+        "reason": "LLMUsage 未记录节点标签",
+    }
+    run_dir.write_json("report.json", report)
+    (run_dir.path / "report.md").write_text(
+        render_markdown(report), encoding="utf-8"
+    )
 
 
 __all__ = ["FlowConfig", "FlowResult", "run_flow"]
