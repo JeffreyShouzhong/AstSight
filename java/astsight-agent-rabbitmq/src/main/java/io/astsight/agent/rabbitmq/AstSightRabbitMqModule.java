@@ -22,7 +22,18 @@ public final class AstSightRabbitMqModule implements AgentModule {
     public void install(Instrumentation instrumentation, AgentRuntime runtime) {
         instrumentation.addTransformer(new RabbitMqChannelTransformer(runtime), true);
         runtime.registerAdapter(id(), version());
-        runtime.mqModuleInstalled("rabbitmq");
+        if (available()) {
+            runtime.mqModuleInstalled("rabbitmq");
+        }
+    }
+
+    private static boolean available() {
+        try {
+            Class.forName("com.rabbitmq.client.impl.ChannelN");
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private static String version() {
