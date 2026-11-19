@@ -40,6 +40,8 @@
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
 > 默认全量为 **685 passed / 72 skipped**；开启 MQ、Java agent、Dubbo、Triple
 > 与 gripmock 的真实后端联调后为 **724 passed / 32 skipped**。
+> A4 已用 DeepSeek 做真实验证：flash 的 MQ 场景能正确选 topic，chat 的实体场景
+> 能生成 data/mock_replies；flash 在实体场景会输出非法断言，已记录为模型差异。
 
 ## 待办盘点（2026-11-19）
 
