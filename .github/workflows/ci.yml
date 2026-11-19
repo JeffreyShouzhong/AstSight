@@ -4,7 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # 每天 UTC 18:00（北京时间次日 02:00）跑真实后端联调。
+    - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      run:
+        description: "手动运行范围"
+        type: choice
+        options: [core, matrix, all]
+        default: core
 
 permissions:
   contents: read
@@ -98,3 +107,153 @@ jobs:
           name: linux-wheels
           path: dist/*.whl
           if-no-files-found: error
+
+  real-backends:
+    name: Real backends (nightly / manual core)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.run == 'core' || inputs.run == 'all'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: engine/requirements.txt
+
+      - uses: actions/setup-java@v4
+        id: jdk
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: java/pom.xml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r engine/requirements.txt
+          # Python SUT 的 MQ 拦截 e2e 需要真实客户端；版本与本地验证一致。
+          python -m pip install kafka-python==3.0.13 pika==1.3.2
+
+      - name: Build agent, sidecar and samples
+        run: |
+          mvn -q -B -DskipTests -f java/pom.xml package
+          for sample in \
+            dubbo-consumer dubbo-provider dubbo-triple-provider mq-producer \
+            spring-boot-dubbo spring-boot-grpc spring-boot-okhttp
+          do
+            mvn -q -B -DskipTests -f "java/samples/$sample/pom.xml" package
+          done
+
+      - name: Build and install gripmock
+        run: |
+          python tools/build_gripmock_wheels.py --arch amd64 --download
+          python -m pip install --force-reinstall \
+            dist/astsight_gripmock_bin-*manylinux_2_17_x86_64.whl
+
+      - name: Run real backend e2e
+        working-directory: engine
+        env:
+          ASTSIGHT_MQ_E2E: "1"
+          ASTSIGHT_JAVA_E2E: "1"
+          ASTSIGHT_JAVA_AGENT_E2E: "1"
+          ASTSIGHT_JAVA_AGENT_SPRING_E2E: "1"
+          ASTSIGHT_JAVA_AGENT_FLOW_E2E: "1"
+          ASTSIGHT_JAVA_AGENT_DUBBO_FLOW_E2E: "1"
+          ASTSIGHT_DUBBO_SIDECAR_E2E: "1"
+          ASTSIGHT_DUBBO_PROVIDER_SAMPLE_E2E: "1"
+          ASTSIGHT_DUBBO_TRIPLE_E2E: "1"
+        run: |
+          GRIPMOCK_BIN="$(python -c 'from astsight.mock.gripmock_binary import resolve_gripmock_binary; print(resolve_gripmock_binary().path)')"
+          export GRIPMOCK_BIN
+          echo "GRIPMOCK_BIN=$GRIPMOCK_BIN"
+          python -m pytest -q tests/integration
+
+  java-matrix:
+    name: Java matrix (JDK ${{ matrix.jdk }})
+    if: github.event_name == 'workflow_dispatch' && (inputs.run == 'matrix' || inputs.run == 'all')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ["8", "11", "17", "21"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: engine/requirements.txt
+
+      # Maven 需要 JDK 17+；矩阵 JDK 后续单独安装，只用于运行样例。
+      - uses: actions/setup-java@v4
+        id: maven_jdk
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: java/pom.xml
+
+      - uses: actions/setup-java@v4
+        id: matrix_jdk
+        with:
+          distribution: temurin
+          java-version: "${{ matrix.jdk }}"
+
+      - name: Install dependencies
+        run: python -m pip install -r engine/requirements.txt
+
+      - name: Build agent jar
+        run: |
+          JAVA_HOME="${{ steps.maven_jdk.outputs.java-home }}" \
+            mvn -q -B -DskipTests -f java/pom.xml package
+
+      - name: Run JDK and client matrix
+        working-directory: engine
+        env:
+          ASTSIGHT_JAVA_AGENT_MATRIX_E2E: "1"
+          ASTSIGHT_JAVA_AGENT_MATRIX_JDKS: "${{ steps.matrix_jdk.outputs.java-home }}"
+          ASTSIGHT_JAVA_AGENT_DUBBO_MATRIX_E2E: "1"
+          ASTSIGHT_JAVA_AGENT_DUBBO_MATRIX_JDKS: "${{ steps.matrix_jdk.outputs.java-home }}"
+          ASTSIGHT_MAVEN_JAVA_HOME: "${{ steps.maven_jdk.outputs.java-home }}"
+        run: |
+          python -m pytest -q \
+            tests/integration/test_java_agent_matrix_e2e.py \
+            tests/integration/test_java_agent_dubbo_matrix_e2e.py
+
+  mq-matrix:
+    name: MQ client version matrix
+    if: github.event_name == 'workflow_dispatch' && (inputs.run == 'matrix' || inputs.run == 'all')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: engine/requirements.txt
+
+      - uses: actions/setup-java@v4
+        id: jdk
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: java/pom.xml
+
+      - name: Install dependencies
+        run: python -m pip install -r engine/requirements.txt
+
+      - name: Build agent jar
+        run: mvn -q -B -DskipTests -f java/pom.xml package
+
+      - name: Run MQ client version matrix
+        working-directory: engine
+        env:
+          ASTSIGHT_MQ_MATRIX: "1"
+        run: python -m pytest -q tests/integration/test_mq_version_matrix_e2e.py
