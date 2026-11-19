@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-18
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
-> 最新代码提交：`f52f447`（`测试：MQ 真实客户端生产者拦截 e2e`）；
+> 最新代码提交：`c2b3f11`（`新增：Python MQ 生产者拦截（kafka-python / pika）`）；
 > 当前存档已同步远端。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
