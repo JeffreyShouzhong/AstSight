@@ -35,8 +35,8 @@
 > aio-pika、kombu 暂不支持。MQ 断言只覆盖消息是否发出、topic/key/headers/body 子集
 > 与条数，不做先后顺序；引擎也不测试 SUT 的多线程/并发行为。MQ 自动发现已解析
 > Spring `@Value`/`@ConfigurationProperties` 与 properties/yml 配置键。
-> 默认套件与平台 wheel 冒烟已进入 GitHub Actions Linux CI；真实后端 e2e 和
-> JDK/客户端矩阵仍是本地验证。
+> 默认套件、平台 wheel 冒烟、真实后端 e2e 与 JDK/客户端矩阵均已进入 GitHub
+> Actions Linux CI（真实后端 nightly + 手动触发）。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
@@ -51,7 +51,6 @@
 
 | 优先级 | 事项 | 现状 | 下一步 |
 |---|---|---|---|
-| P2 | Linux CI 真实后端 | 默认套件与平台 wheel 冒烟已进 CI；真实后端 e2e 与 JDK/客户端矩阵仍只本地跑 | 补 nightly + 手动触发 job，开 gated 环境变量跑 `tests/integration`；矩阵单独 job |
 | P2 | 删除接口的旧用例处置 | 只报告，不自动废弃旧用例 | 评估是否把指向已删除端点的已批准用例标 stale，仍由人审核 |
 | P2 | pika BlockingChannel e2e | 直接 Channel 已 e2e；BlockingChannel 只有 patch 逻辑 | 起一个最小阻塞连接调用（仍需 broker 或测试替身）验证返回 bool |
 | P2 | 时间窗口测试 | 用连续请求近似 | 时钟注入或专用测试接口，覆盖频控窗口/跨月零点 |
@@ -69,7 +68,7 @@
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
 | 修复：心跳 adapter 分类 | ✅ 2026-11-19 | Linux CI 真实后端首跑暴露：Java agent 心跳把 `kafka/rabbitmq/rocketmq-producer` 也放进 `http_adapters`，Spring Boot e2e 的严格集合断言失败；`registerAdapter` 增加 kind，MQ 模块注册为 `mq`，心跳拆出 `mq_adapters`，`MockAgent` 契约同步；本地 Spring Boot 与 Java MQ e2e 均通过 |
-| Linux CI 最小版 | ✅ 2026-11-19 | 新增 `.github/workflows/ci.yml`：`default-suite` 在 ubuntu + Python 3.12 跑默认套件；`linux-wheels` 用 Temurin 17 + Maven 构建 Java agent/Dubbo sidecar wheel，构建 gripmock amd64/arm64 平台 wheel，安装后跑三个分发校验，并解析包内二进制在 Linux 实跑 `test_grpc_gripmock_e2e.py`；2026-11-19 首次运行通过（默认套件 77s、wheel 流水线 64s）；真实后端 e2e 与版本矩阵待补 |
+| Linux CI 最小版 | ✅ 2026-11-19 | 新增 `.github/workflows/ci.yml`：`default-suite` 在 ubuntu + Python 3.12 跑默认套件；`linux-wheels` 用 Temurin 17 + Maven 构建 Java agent/Dubbo sidecar wheel，构建 gripmock amd64/arm64 平台 wheel，安装后跑三个分发校验，并解析包内二进制在 Linux 实跑 `test_grpc_gripmock_e2e.py`；另加 nightly/手动 core 真实后端 job 与手动 matrix job（JDK 8/11/17/21、MQ 客户端版本）；2026-11-19 手动触发全绿：默认套件 696 passed / 90 skipped，真实后端 core 40 passed / 28 skipped，JDK 矩阵各 18 passed，MQ 矩阵 6 passed |
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
 | gRPC/Dubbo 契约 diff | ✅ 2026-11-19 | 新增 `changes/transport_contracts.py`：gRPC 比较 method/request/response 类型、streaming、message 字段编号/类型/枚举；Dubbo 比较方法签名、group/version、DTO 字段；`contract_changes.json` 增加 grpc/dubbo 段，报告单列并统一 `contract_change` 告警；只报告不自动生成入口用例；新增 2 条测试，全量 690 passed / 72 skipped |
