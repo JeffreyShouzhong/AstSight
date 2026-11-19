@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import functools
+import importlib.util
 import json
 import os
 import sys
@@ -31,6 +32,46 @@ def install() -> None:
         return
     _PATCHED = True
     sys.meta_path.insert(0, _Finder())
+    _send_heartbeat()
+
+
+def _send_heartbeat() -> None:
+    """让 Mock 门禁知道 Python 生产者拦截已安装。"""
+    clients = []
+    for name in ("kafka", "pika"):
+        try:
+            if importlib.util.find_spec(name):
+                clients.append("kafka" if name == "kafka" else "rabbitmq")
+        except Exception:
+            continue
+    payload = {
+        "sut_id": _SUT_ID,
+        "agent_version": "python-mq-capture",
+        "pid": os.getpid(),
+        "jvm_start_time_ms": 0,
+        "http_adapters": [],
+        "mq": {
+            "installed": True,
+            "clients": sorted(set(clients)),
+            "published": 0,
+            "suppressed": 0,
+            "errors": 0,
+        },
+    }
+    request = urllib.request.Request(
+        f"{_ADMIN}/_admin/agent/heartbeat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_TOKEN}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT):
+            pass
+    except Exception:
+        pass
 
 
 def _publish(

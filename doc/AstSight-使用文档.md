@@ -1474,7 +1474,9 @@ A4 只从这些候选生成 `mq_assertions`，找不到候选就写未覆盖，�
 - `pika`：`Channel.basic_publish` 与 `BlockingChannel.basic_publish`，同步/阻塞
   连接都覆盖；命中后返回 `True`（阻塞）或 `None`（Channel）。
 
-手工启动 SUT 时，照上面的环境变量自己设置即可。当前不支持 confluent-kafka、
+手工启动 SUT 时，照上面的环境变量自己设置即可。Python 注入启动时会向 Mock
+服务上报一次心跳（`mq.installed=true` 与已安装 client），门禁据此确认拦截已生效；
+没有心跳时按 `mq_producer_not_installed` 阻断。当前不支持 confluent-kafka、
 aio-pika、kombu/Celery；Go/Node/.NET 也还没有生产者拦截。
 
 ---
