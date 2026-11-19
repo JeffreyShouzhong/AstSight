@@ -1819,7 +1819,10 @@ Mock 未命中的用例，`mock_sessions` 记录逐用例会话证据（详见
 
 ## 16.1 本地诊断包与反馈
 
-遇到疑似框架自身的问题时，可以用反馈命令从本次运行产物生成脱敏诊断包：
+`run` 和 `agent run` 在门禁失败时会自动生成诊断包（默认 `--feedback auto`），
+与 `report.json` / `report.md` 一起写进 run 目录；成功运行不生成。
+`--feedback always` 总是生成，`--feedback off` 关闭。
+也可以随时手动从任意 run 目录生成脱敏诊断包：
 
 ```bash
 # 预览将包含哪些文件，不写盘

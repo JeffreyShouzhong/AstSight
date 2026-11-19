@@ -119,6 +119,7 @@ class RunConfig:
     mock_drain_ms: int | None = None
     mock_ttl_ms: int | None = None
     mock_evidence: str | None = None
+    feedback: str = "auto"           # auto | always | off
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -1044,6 +1045,11 @@ def _execute_and_report_inner(
         report["route_notes"] = route_notes
     report["artifacts"] = _artifacts(run_dir)
     report_path = run_dir.write_json("report.json", report)
+    feedback_bundle = _emit_feedback_bundle(config, run_dir, report)
+    if feedback_bundle:
+        report["artifacts"]["feedback_zip"] = run_dir.rel(
+            Path(feedback_bundle["path"])
+        )
     markdown = render_markdown(report)
     md_path = run_dir.write_text("report.md", markdown)
     report["artifacts"] = {
@@ -1053,6 +1059,27 @@ def _execute_and_report_inner(
     }
     run_dir.write_json("report.json", report)
     return report
+
+
+def _emit_feedback_bundle(
+    config: RunConfig, run_dir: RunDir, report: dict
+) -> dict | None:
+    """按 `--feedback` 生成诊断包；失败不影响主流程。"""
+    mode = getattr(config, "feedback", "auto") or "auto"
+    if mode == "off":
+        return None
+    verdict = str((report.get("gate") or {}).get("verdict") or "")
+    if mode != "always" and verdict != "fail":
+        return None
+    try:
+        from .feedback import collect_feedback
+
+        return collect_feedback(run_dir, report=report)
+    except Exception as exc:
+        report.setdefault("gate", {}).setdefault("warnings", []).append(
+            f"feedback_bundle_failed: {type(exc).__name__}: {exc}"[:300]
+        )
+        return None
 
 
 def _execute_and_report(

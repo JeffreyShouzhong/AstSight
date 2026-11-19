@@ -285,6 +285,8 @@ def _summary_markdown(
         "- `execution.json`：脱敏后的执行记录",
         "- `mock_evidence.json`：脱敏后的 Mock 证据",
         "- `diagnostic.json`：结构化摘要与失败快照",
+        "- `diagnosis.json`：A5 诊断与修复记录（如存在）",
+        "- `flow.json`：agent 流程摘要与 token 用量（如存在）",
         "- `cases/`：失败用例代码（如包含）",
         "",
         "所有内容已在本地脱敏；提交前请再检查一遍。",
@@ -314,15 +316,21 @@ def collect_feedback(
     run_dir: str | Path,
     out: str | Path | None = None,
     *,
+    report: dict[str, Any] | None = None,
     include_case_code: bool = True,
     max_bytes: int = MAX_BUNDLE_BYTES,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """生成脱敏诊断包；`dry_run` 只返回清单，不写文件。"""
+    """生成脱敏诊断包；`dry_run` 只返回清单，不写文件。
+
+    `report` 用于流程内自动生成——直接使用内存中的最终报告，
+    避免依赖刚写出的 report.json；不传则从 run 目录读取。
+    """
     root = Path(run_dir).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"run 目录不存在: {root}")
-    report = _load_json(root / "report.json")
+    if report is None:
+        report = _load_json(root / "report.json")
     if not isinstance(report, dict):
         raise ValueError(f"缺少或无法解析 report.json: {root / 'report.json'}")
     run_meta = report.get("run") or _load_json(root / "run_meta.json") or {}
@@ -373,6 +381,10 @@ def collect_feedback(
         "execution.json": _dump(cleaned_execution),
         "mock_evidence.json": _dump(cleaned_mock),
     }
+    for name in ("diagnosis.json", "flow.json"):
+        payload = _load_json(root / name)
+        if payload is not None:
+            files[name] = _dump(scrub_value(payload, project=project))
     truncated: list[str] = []
     used = sum(len(data) for data in files.values())
     if include_case_code:

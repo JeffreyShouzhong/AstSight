@@ -814,9 +814,10 @@ A1 的 LLM 节点只是一次结构化输出（规则分析），不存在跨步
 
 ### 6.5 历史缺陷案例库（框架自我改进资产）
 
-> **实现状态（2026-11-19，v4.97）**：第一版落地为**本地诊断包 + GitHub Issue**：
-> `astsight feedback collect` 从 run 目录生成脱敏 zip，`astsight feedback open`
-> 生成 issue 草稿与提交链接，使用者自行附加并提交。不自动上传、不需要服务端。
+> **实现状态（2026-11-19，v4.98）**：第一版落地为**本地诊断包 + GitHub Issue**：
+> `run` / `agent run` 在门禁失败时自动生成脱敏 `feedback.zip`（`--feedback auto`），
+> 与报告一起写进 run 目录；`astsight feedback collect/open` 也可手动生成诊断包和
+> issue 草稿/提交链接。不自动上传、不需要服务端。
 > 下面的 `framework_issues.jsonl` 自动入库与服务端汇聚仍为设计保留，未实现。
 
 **定位**：保存「框架自身不足导致的用例失败」案例，用于**反向促进框架改进**——它不是给 A5 做归因检索用的，是给框架迭代做依据的。

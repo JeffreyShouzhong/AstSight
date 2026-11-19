@@ -204,6 +204,53 @@ def test_cli_feedback_commands(tmp_path: Path) -> None:
     assert (run / "issue.md").is_file()
 
 
+def test_emit_bundle_respects_feedback_mode(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from astsight.pipeline import _emit_feedback_bundle
+
+    run, _project = _run_dir(tmp_path)
+    report = json.loads((run / "report.json").read_text(encoding="utf-8"))
+
+    bundle = _emit_feedback_bundle(
+        SimpleNamespace(feedback="auto"), run, report
+    )
+    assert bundle is not None
+    assert Path(bundle["path"]).is_file()
+
+    passed = {**report, "gate": {"verdict": "pass"}}
+    assert (
+        _emit_feedback_bundle(SimpleNamespace(feedback="auto"), run, passed)
+        is None
+    )
+    assert _emit_feedback_bundle(
+        SimpleNamespace(feedback="always"), run, passed
+    ) is not None
+    assert (
+        _emit_feedback_bundle(SimpleNamespace(feedback="off"), run, report)
+        is None
+    )
+
+
+def test_collect_uses_in_memory_report(tmp_path: Path) -> None:
+    run, _project = _run_dir(tmp_path)
+    (run / "report.json").unlink()
+    report = json.loads(
+        json.dumps(
+            {
+                "run": {"run_id": "r2", "mode": "cases"},
+                "summary": {"executed_cases": 0, "sut_defects": 0},
+                "gate": {"verdict": "fail", "warnings": []},
+                "failures": [],
+            }
+        )
+    )
+    result = collect_feedback(run, report=report)
+    assert Path(result["path"]).is_file()
+    names = {item["name"] for item in result["files"]}
+    assert "diagnostic.json" in names
+
+
 def test_scrub_helpers() -> None:
     assert scrub_text("token=abc password=xyz") == "token=*** password=***"
     assert scrub_text("a@b.com 13800138000") == "<email> <phone>"

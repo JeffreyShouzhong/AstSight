@@ -24,6 +24,7 @@ from typing import Any
 from contracts import DataCatalog, DataPlanBundle, MockSemantic, RuleSet
 
 from ..artifacts import RunDir, new_run_id, utc_now
+from ..feedback import collect_feedback
 from ..report.merge import render_markdown
 from ..cases.context import build_context
 from ..cases.proposal import (
@@ -132,6 +133,7 @@ class FlowConfig:
     mock_host: str = "127.0.0.1"
     mock_port: int = 0
     gripmock_path: str | None = None
+    feedback: str = "auto"             # auto | always | off
     rule_base: str | None = None
     data_ddl: list[str] = field(default_factory=list)
     data_seed: str | None = None
@@ -360,6 +362,7 @@ def _execution_config(
         data_plan=str(data_plan_path) if data_plan_path else None,
         database_url=config.database_url,
         ruleset=config.rule_base or "ruleset.json",
+        feedback="off",
     )
 
 
@@ -1258,7 +1261,7 @@ def run_flow(
         if runtime is not None:
             runtime.stop()
         result.llm_usage = [usage.as_dict() for usage in client.usage]
-        _attach_token_usage(result, run_dir, client)
+        _attach_token_usage(result, run_dir, client, config.feedback)
         run_dir.write_json(
             "flow.json",
             {
@@ -1301,8 +1304,13 @@ def _usage_summary(usages: list[dict[str, Any]], model: str) -> dict[str, Any]:
     return summary
 
 
-def _attach_token_usage(result: "FlowResult", run_dir: RunDir, client: Any) -> None:
-    """把 LLM 用量补进统一报告；run 模式没有 LLM，保持 not_available。"""
+def _attach_token_usage(
+    result: "FlowResult",
+    run_dir: RunDir,
+    client: Any,
+    feedback_mode: str = "auto",
+) -> None:
+    """补齐 token 用量与诊断包，再统一重写 report.json/report.md。"""
     report = result.report
     if not isinstance(report, dict):
         return
@@ -1315,6 +1323,19 @@ def _attach_token_usage(result: "FlowResult", run_dir: RunDir, client: Any) -> N
         "by_node": "not_available",
         "reason": "LLMUsage 未记录节点标签",
     }
+    verdict = str((report.get("gate") or {}).get("verdict") or "")
+    if feedback_mode != "off" and (
+        feedback_mode == "always" or verdict == "fail"
+    ):
+        try:
+            bundle = collect_feedback(run_dir, report=report)
+            report.setdefault("artifacts", {})["feedback_zip"] = run_dir.rel(
+                Path(bundle["path"])
+            )
+        except Exception as exc:
+            report.setdefault("gate", {}).setdefault("warnings", []).append(
+                f"feedback_bundle_failed: {type(exc).__name__}: {exc}"[:300]
+            )
     run_dir.write_json("report.json", report)
     (run_dir.path / "report.md").write_text(
         render_markdown(report), encoding="utf-8"

@@ -118,8 +118,9 @@ python examples/demo_agent_flow.py --keep
 
 demo 会自动启动示例服务，产物在临时目录的 `.astsight/runs/<run_id>/`，先看 `report.md`。
 
-遇到疑似框架自身的问题，可以用 `feedback collect` 从 run 目录生成脱敏诊断包，
-再按 `feedback open` 给出的链接提交 GitHub Issue。命令不会自动上传任何内容。
+遇到疑似框架自身的问题，`run` / `agent run` 在门禁失败时会自动生成脱敏诊断包；
+也可以用 `feedback collect` 手动生成，再按 `feedback open` 给出的链接提交 GitHub Issue。
+命令不会自动上传任何内容。
 
 完整示例项目：[engine/examples/partner_onboarding](engine/examples/partner_onboarding/README.md)
 （设计 V1.1，38 条已批准用例全部通过）。

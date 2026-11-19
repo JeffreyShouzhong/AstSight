@@ -230,6 +230,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--mock-evidence", default=None,
         help="mock_calls.jsonl 路径；缺省从 --mock-admin-url 的 /_admin/server 获取",
     )
+    run_parser.add_argument(
+        "--feedback",
+        choices=("auto", "always", "off"),
+        default="auto",
+        help="诊断包生成策略：auto=门禁失败时生成，always=总是生成，off=关闭",
+    )
     run_parser.add_argument("--json", action="store_true", help="把报告摘要打印为 JSON")
 
     cases_parser = sub.add_parser("cases", help="需求→用例上下文、导入、审核与用例库")
@@ -718,6 +724,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="gRPC 下游 Mock 使用的 gripmock 可执行文件",
     )
+    agent_run.add_argument(
+        "--feedback",
+        choices=("auto", "always", "off"),
+        default="auto",
+        help="诊断包生成策略：auto=门禁失败时生成，always=总是生成，off=关闭",
+    )
     agent_run.add_argument("--json", action="store_true")
 
     feedback_parser = sub.add_parser(
@@ -819,6 +831,7 @@ def _run_command(args) -> int:
         mock_drain_ms=args.mock_drain_ms,
         mock_ttl_ms=args.mock_ttl_ms,
         mock_evidence=args.mock_evidence,
+        feedback=args.feedback,
     )
     try:
         report = run(config)
@@ -2105,6 +2118,7 @@ def _agent_command(args) -> int:
             mock_host=args.mock_host,
             mock_port=args.mock_port,
             gripmock_path=args.gripmock_path,
+            feedback=args.feedback,
             rule_base=args.rule_base,
             data_ddl=list(args.ddl),
             data_seed=args.seed,
