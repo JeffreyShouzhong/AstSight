@@ -594,18 +594,20 @@ fingerprint 只覆盖**会改变执行行为或需求归属**的内容：
 precision/recall/expression_accuracy，比较目标字段、关系运算、运算集合、
 `response/request/step` 来源与字段路径；不比较操作数顺序。脚本不随测试自动
 调用模型。
-**MQ 生产者拦截（v4.75 Kafka / v4.76 RabbitMQ）**：Agent 在生产者侧截获消息，
-**不真正发送**；用例断言 topic/key/headers/payload 子集与条数。计划内 topic 由
-Agent 抑制，计划外 topic 继续走原始发送。Kafka 拦截
-`KafkaProducer.send`，RabbitMQ 拦截 `ChannelN.basicPublish` 三个重载，消息身份
-为 `exchange/routingKey`。它验证的是 SUT 准备发什么，不验证 broker 接收、
-分区路由与序列化字节。Kafka 返回的 RecordMetadata 为 null；RabbitMQ 的 SUT
-启动阶段仍可能先建 AMQP 连接或声明 exchange/queue，完全脱离中间件需要连接级
-Mock，当前未做。RocketMQ 尚未实现。消息内容进入统一 Mock 证据
-（`transport=mq`、`adapter=mq-producer`）。用例的 `MqAssertion.client`
-（kafka/rabbitmq）进入计划路由；Agent 心跳 `mq.clients` 列出实际安装的模块。
-计划含 MQ topic 但心跳缺 `mq.installed`，或缺少对应 client 的拦截模块时，门禁
-阻断 `mq_producer_not_installed`。
+**MQ 生产者拦截（v4.75 Kafka / v4.76 RabbitMQ / v4.77 RocketMQ）**：Agent 在
+生产者侧截获消息，**不真正发送**；用例断言 topic/key/headers/payload 子集与条数。
+计划内 topic 由 Agent 抑制，计划外 topic 继续走原始发送。Kafka 拦截
+`KafkaProducer.send`，RabbitMQ 拦截 `ChannelN.basicPublish` 三个重载（身份为
+`exchange/routingKey`），RocketMQ 拦截 `DefaultMQProducer` 的同步/异步 send
+（身份为 topic，key 取 `getKeys()`，headers 取 `getProperties()`）。它验证的是
+SUT 准备发什么，不验证 broker 接收、分区路由与序列化字节。Kafka 返回的
+RecordMetadata 为 null；RocketMQ 同步返回合成 `SendResult`（构造失败时为 null），
+异步回调尽力调用 `onSuccess`。RabbitMQ/RocketMQ 的 SUT 启动阶段仍可能先建立
+连接、声明 exchange/queue 或连接 NameServer，完全脱离中间件需要连接级 Mock，
+当前未做。消息内容进入统一 Mock 证据（`transport=mq`、`adapter=mq-producer`）。
+用例的 `MqAssertion.client`（kafka/rabbitmq/rocketmq）进入计划路由；Agent 心跳
+`mq.clients` 列出实际安装的模块。计划含 MQ topic 但心跳缺 `mq.installed`，或缺少
+对应 client 的拦截模块时，门禁阻断 `mq_producer_not_installed`。
 
 **异步断言优先级（v4.74）**：有消息边界时先断言消息——是否发出、topic/key、
 payload/headers、次数与顺序；不启动消费者，也不轮询数据库。只有 SUT 内部异步

@@ -1412,7 +1412,7 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 
 ---
 
-## 11C. MQ 消息断言（Kafka / RabbitMQ）
+## 11C. MQ 消息断言（Kafka / RabbitMQ / RocketMQ）
 
 异步消息不连 broker，也不启动消费者：Java agent 在生产者侧截获消息，命中
 计划内 topic 时不真正发送，只把内容交给 AstSight 做断言。
@@ -1430,8 +1430,8 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 ]
 ```
 
-- `topic` 必填；`client` 为 `kafka`（默认）或 `rabbitmq`；`key`、`headers`、`body`
-  都是子集匹配，`count` 为空表示至少一条。
+- `topic` 必填；`client` 为 `kafka`（默认）、`rabbitmq` 或 `rocketmq`；
+  `key`、`headers`、`body` 都是子集匹配，`count` 为空表示至少一条。
 - 需要 SUT 通过 Java agent 启动；计划内 topic 必须能从
   `/_admin/agent/routes` 的 `mq_deps` 读到。
 - 消息不会真正发到 broker；报告里 `transport=mq`、`mode=producer_intercept`。
@@ -1443,10 +1443,13 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 - Kafka：拦截 `KafkaProducer.send`；`topic` 就是 Kafka topic。
 - RabbitMQ：拦截 `ChannelN.basicPublish`；`topic` 用 `exchange/routingKey`
   表示，例如 `orders-exchange/order.created`，`key` 为 routingKey。
-- RocketMQ 尚未实现。
-- RabbitMQ 的 publish 可以拦掉，但 SUT 启动时仍可能先建立 AMQP 连接或声明
-  exchange/queue；没有 broker 时连接阶段就可能失败。要完全脱离中间件，还需要
-  连接级 Mock，当前未做。
+- RocketMQ：拦截 `DefaultMQProducer` 的同步/异步 send；`topic` 就是 RocketMQ
+  topic，`key` 取 `Message.getKeys()`，headers 取 `getProperties()`。同步发送
+  会返回合成的 `SendResult`（构造失败时为 null）；异步回调会尽力调用
+  `onSuccess`。
+- RabbitMQ 和 RocketMQ 的 publish 可以拦掉，但 SUT 启动时仍可能先建立连接、
+  声明 exchange/queue 或连接 NameServer；没有中间件时可能在连接/启动阶段就失败。
+  要完全脱离中间件，还需要连接级 Mock，当前未做。
 
 ---
 

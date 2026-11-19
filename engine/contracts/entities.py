@@ -247,7 +247,7 @@ class MqAssertion(BaseModel):
     client: str = Field(
         default="kafka",
         max_length=32,
-        description="消息客户端：kafka / rabbitmq",
+        description="消息客户端：kafka / rabbitmq / rocketmq",
     )
     key: Any = Field(default=None, description="消息 key；None 表示不约束")
     headers: dict[str, str] = Field(default_factory=dict, max_length=50)

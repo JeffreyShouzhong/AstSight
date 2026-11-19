@@ -51,7 +51,7 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、Open
 | 人工审核与版本化 | 提案逐条审批，`TC-NNNN` 编号永不复用，旧版本进入 history |
 | 多请求用例 | `steps[]` 顺序请求与跨步骤引用，覆盖频控、验证码、幂等重试 |
 | Mock 与造数 | 用例实体 `data` 驱动：本服务插表造数（含关联表），下游 Mock 返回同一实体；支持 HTTP/Dubbo/gRPC 下游，不调接口造数；Kafka 生产者侧消息拦截，不连 broker |
-| MQ 消息断言 | Agent 截获生产者消息、不真正发送，断言 topic/key/headers/payload/条数；已支持 Kafka、RabbitMQ |
+| MQ 消息断言 | Agent 截获生产者消息、不真正发送，断言 topic/key/headers/payload/条数；已支持 Kafka、RabbitMQ、RocketMQ |
 | 多语言下游契约 | Java/Go/Node 出站调用点识别；Java 可读 pom/gradle 与本地 jar，提取 DTO 字段和泛型签名，识别 Feign 调用并解析响应契约 |
 | 三种运行范围 | `full` 建基线、`delta` 按代码变更重判、`cases` 只执行已批准用例 |
 | 证据化报告 | 通过/失败之外，未映射范围、未执行用例、待审提案、规则漂移单列 |

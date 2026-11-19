@@ -39,6 +39,11 @@
       <artifactId>astsight-agent-rabbitmq</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <dependency>
+      <groupId>io.astsight</groupId>
+      <artifactId>astsight-agent-rocketmq</artifactId>
+      <version>${project.version}</version>
+    </dependency>
   </dependencies>
 
   <build>

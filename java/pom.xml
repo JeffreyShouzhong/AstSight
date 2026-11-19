@@ -18,6 +18,7 @@
     <module>astsight-agent-dubbo</module>
     <module>astsight-agent-kafka</module>
     <module>astsight-agent-rabbitmq</module>
+    <module>astsight-agent-rocketmq</module>
     <module>astsight-agent</module>
     <module>astsight-sidecar-dubbo</module>
   </modules>

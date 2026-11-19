@@ -1680,7 +1680,7 @@ def _check_mq_assertions(
             )
         seen_topics.add(topic)
         client = str(item.client or "").strip().lower()
-        if client not in {"kafka", "rabbitmq"}:
+        if client not in {"kafka", "rabbitmq", "rocketmq"}:
             result.errors.append(
                 _issue(
                     "error",

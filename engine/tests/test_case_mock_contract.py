@@ -559,3 +559,16 @@ def test_mq_cannot_be_case_transport(tmp_path: Path) -> None:
     result = validate_draft(draft, context, project=tmp_path)
     codes = {item.code for item in result.errors}
     assert "case.transport_mq_unsupported" in codes
+
+
+def test_rocketmq_client_is_supported(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    draft = _with_case_data(
+        _draft(context),
+        mq_assertions=[
+            MqAssertion(topic="rocket-topic", client="rocketmq")
+        ],
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    codes = {item.code for item in result.errors}
+    assert "mq.client_unsupported" not in codes
