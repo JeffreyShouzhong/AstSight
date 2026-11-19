@@ -20,7 +20,7 @@
 - **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`。
 - **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
 - **未实现/明确不支持**：多 SUT 并发隔离（设计见 5.5，实现待排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider；MQ 消息先后/顺序断言；针对 SUT 多线程/并发行为的测试。
-- **验证基数**：默认套件 696 passed / 72 skipped，由 GitHub Actions Linux CI 执行（配置已落地，首次运行待确认）；开启真实 MQ、Java agent、Dubbo、Triple、gripmock 后历史记录 724 passed / 32 skipped（本轮未重跑）。
+- **验证基数**：默认套件 696 passed / 72 skipped，由 GitHub Actions Linux CI 执行（2026-11-19 首次运行通过）；开启真实 MQ、Java agent、Dubbo、Triple、gripmock 后历史记录 724 passed / 32 skipped（本轮未重跑）。
 > gRPC 下游 Mock 使用 gripmock 假服务器（unary、明文），落地约束见 **C3.5.4**；v4.3 报告口径不变。
 > 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5）：实例身份、端口原子分配、持久化作用域缺一不可。
 > **v4.6 决策**：取消对 Feign 的特殊支持。Feign 不单独解析、不作契约源、不生成专用配置；
