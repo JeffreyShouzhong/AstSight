@@ -44,7 +44,7 @@
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 本地默认全量为 **701 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
+> 本地默认全量为 **706 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
 > **696 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
 > Java agent、Dubbo、Triple 与 gripmock 的历史本地全量为 **724 passed / 32 skipped**。
 > A4 已用 DeepSeek 做真实验证：flash 的 MQ 场景能正确选 topic，chat 的实体场景
@@ -55,13 +55,14 @@
 **当前没有计划中的待办项。** 删除接口的旧用例处置已落地（见“当前状态”）；
 其余原待办项按 2026-11-19 的决定统一移入下方“明确不做”。
 
-**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例、MQ 消息先后/顺序断言（消息在生产者侧被同步截断，只有 SUT 调用先后，没有投递顺序；并发发送时先后无业务意义）、针对 SUT 多线程/并发行为的测试（并发请求、竞态、并发发送）、pika BlockingChannel 真实调用 e2e（patch 已覆盖，不再补专项验证）、时间窗口测试（不做时钟注入或专用测试接口）、异步多行/多表分组轮询、gRPC/Dubbo streaming 与 reflection、replay 模式、多 SUT 并发隔离（5.5 设计保留但不排期）、变异测试、confluent-kafka/aio-pika/kombu/Celery 与 Node/.NET MQ 拦截。
+**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例、MQ 消息先后/顺序断言（消息在生产者侧被同步截断，只有 SUT 调用先后，没有投递顺序；并发发送时先后无业务意义）、针对 SUT 多线程/并发行为的测试（并发请求、竞态、并发发送）、pika BlockingChannel 真实调用 e2e（patch 已覆盖，不再补专项验证）、时间窗口测试（不做时钟注入或专用测试接口）、异步多行/多表分组轮询、gRPC/Dubbo streaming 与 reflection、replay 模式、多 SUT 并发隔离（5.5 设计保留但不排期）、变异测试、confluent-kafka/aio-pika/kombu/Celery 与 Node/.NET MQ 拦截、多协议覆盖策略（M2.8，仅字段占位，alias 冒烟/`--transport-scope`/`transport_coverage` 不排期）、跨 transport 回退（M2.7，`transport_fallback` 不实现）、C7.1 数据冲突检测与 C7.2 并行调度（当前全量串行执行）。
 
 ## 当前状态
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
 | 文档与代码对齐 | ✅ 2026-11-19 | 运行模式统一为 `full`/`delta`/`cases`（`replay` 明确不实现）；修正 gRPC 下游“仍 unsupported”的过期表述、C7.2 并行调度未实现标注、CLI 无 `--sut-id`；ROADMAP 非目标补全 RocketMQ 批量/连接级 Mock 与注册中心；README/设计文档能力表与测试计数同步 |
+| C1 四类契约源 ContractModel | ✅ 2026-11-19 | 新增 `rules/contract_model.py`：OpenAPI、Spring MVC 参数/DTO、gRPC descriptor unary、Dubbo 2.7+ 接口先归一为统一操作/字段/来源/gap；CR 只从各源能力子集生成，跨源同事实合并 `support[]`，不同约束生成 framework conflict；Spring 常见校验注解、gRPC enum/repeated/oneof、Dubbo 源 DTO 约束、OpenAPI `$ref` 缺口均已接入；未定位 gRPC provider 时 `contract_eligible=false`，不生成 CR；新增 5 条测试，默认全量 706 passed / 72 skipped |
 | 删除接口旧用例自动废弃 | ✅ 2026-11-19 | 新增 `cases/deleted_cleanup.py`：delta 确认接口删除后，把 caseset 中指向该接口的 approved HTTP 用例标为 `deprecated`（逻辑删除），`approved_cases` 与执行流程不再包含；`review_log` 以 `astsight:deleted-api` 记录，落库前备份；报告单列被废弃用例；扫描未完成或没有用例库时不动；新增 5 条测试，全量 701 passed / 72 skipped |
 | 修复：心跳 adapter 分类 | ✅ 2026-11-19 | Linux CI 真实后端首跑暴露：Java agent 心跳把 `kafka/rabbitmq/rocketmq-producer` 也放进 `http_adapters`，Spring Boot e2e 的严格集合断言失败；`registerAdapter` 增加 kind，MQ 模块注册为 `mq`，心跳拆出 `mq_adapters`，`MockAgent` 契约同步；本地 Spring Boot 与 Java MQ e2e 均通过 |
 | Linux CI 最小版 | ✅ 2026-11-19 | 新增 `.github/workflows/ci.yml`：`default-suite` 在 ubuntu + Python 3.12 跑默认套件；`linux-wheels` 用 Temurin 17 + Maven 构建 Java agent/Dubbo sidecar wheel，构建 gripmock amd64/arm64 平台 wheel，安装后跑三个分发校验，并解析包内二进制在 Linux 实跑 `test_grpc_gripmock_e2e.py`；另加 nightly/手动 core 真实后端 job 与手动 matrix job（JDK 8/11/17/21、MQ 客户端版本）；2026-11-19 手动触发全绿：默认套件 696 passed / 90 skipped，真实后端 core 40 passed / 28 skipped，JDK 矩阵各 18 passed，MQ 矩阵 6 passed |

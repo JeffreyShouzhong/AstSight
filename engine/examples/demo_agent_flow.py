@@ -8,7 +8,7 @@
 
 脚本会：
 1. 把 examples/downstream_service 复制到临时工作区；
-2. 调真实模型抽取 BR 规则（CR 由 OpenAPI 确定性提取），生成 C3.5.1 Mock 语义；
+2. 调真实模型抽取 BR 规则（CR 由 ContractModel 按源能力子集确定性提取），生成 C3.5.1 Mock 语义；
 3. 给了 `--ddl` 时先生成 C5a 数据目录（确定性结构 + 模型补语义）；
 4. 调真实模型做 A4 两级用例设计，生成待审 proposal；
 5. 以 demo 身份批准 new/update/revive（不批准 deprecate）；

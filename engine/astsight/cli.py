@@ -357,7 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rules_extract = rules_sub.add_parser(
         "extract",
         aliases=["c1"],
-        help="C1：需求+设计（可选）+OpenAPI（可选）→ ruleset.json + ruleset.md（调用模型）",
+        help="C1：需求+设计（可选）+ContractModel → ruleset.json + ruleset.md（调用模型）",
     )
     rules_extract.add_argument("--project", required=True)
     rules_extract.add_argument(
@@ -373,7 +373,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rules_extract.add_argument(
         "--openapi",
         default=None,
-        help="可选：补充 CR 契约规则；不传时自动发现项目内 openapi 文件，仍无则只生成 BR",
+        help="可选：OpenAPI 契约源；不传时自动发现，并继续扫描 Spring MVC、gRPC descriptor 与 Dubbo 接口",
     )
     rules_extract.add_argument("--out", default=".astsight/rules", help="相对 project")
     rules_extract.add_argument("--rule-base", default=None, help="相对 project")
@@ -1143,6 +1143,16 @@ def _rules_extract(args) -> int:
         "version": result.ruleset.version,
         "business_rules": len(result.ruleset.rules),
         "contract_rules": len(result.ruleset.contract_rules),
+        "contract_sources": {
+            kind: sum(
+                1
+                for rule in result.ruleset.contract_rules
+                if rule.source_kind == kind
+            )
+            for kind in sorted(
+                {rule.source_kind for rule in result.ruleset.contract_rules}
+            )
+        },
         "questions": len(result.ruleset.questions),
         "gaps": len(result.ruleset.gaps),
         "conflicts": [conflict.topic for conflict in result.ruleset.conflicts],
@@ -1188,6 +1198,7 @@ def _rules_prepare(args) -> int:
         "schema": str(prepared.schema_path),
         "documents": len(prepared.context.get("documents") or []),
         "operations": len(prepared.context.get("operations") or []),
+        "contract": prepared.context.get("contract_summary") or {},
         "warnings": prepared.context.get("warnings") or [],
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -1265,6 +1276,16 @@ def _rules_status(args) -> int:
         "hash": rule_set_hash(ruleset),
         "business_rules": len(ruleset.rules),
         "contract_rules": len(ruleset.contract_rules),
+        "contract_sources": {
+            kind: sum(
+                1
+                for rule in ruleset.contract_rules
+                if rule.source_kind == kind
+            )
+            for kind in sorted(
+                {rule.source_kind for rule in ruleset.contract_rules}
+            )
+        },
         "status": status_counts,
         "authority": authority_counts,
         "questions": [item.model_dump(mode="json") for item in ruleset.questions],

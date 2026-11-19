@@ -67,9 +67,14 @@ _JDK_BASES = {"java.lang.Object", "java.lang.Enum", "java.lang.Record"}
 class TypeField:
     name: str
     type: str
+    annotations: tuple[str, ...] = ()
 
-    def as_dict(self) -> dict[str, str]:
-        return {"name": self.name, "type": self.type}
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "type": self.type,
+            "annotations": list(self.annotations),
+        }
 
 
 @dataclass
@@ -682,9 +687,20 @@ def _top_level_segments(body: str) -> list[str]:
 def _class_fields(body: str) -> list[TypeField]:
     fields: list[TypeField] = []
     for segment in _top_level_segments(body):
-        if "(" in segment:
+        annotations = tuple(
+            re.findall(
+                r"@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?",
+                segment,
+            )
+        )
+        cleaned = re.sub(
+            r"@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?",
+            " ",
+            segment,
+        ).strip()
+        if "(" in cleaned:
             continue
-        match = _FIELD_RE.match(segment.strip())
+        match = _FIELD_RE.match(cleaned)
         if not match:
             continue
         if "static" in match.group("mods"):
@@ -692,7 +708,13 @@ def _class_fields(body: str) -> list[TypeField]:
         type_text = match.group("type").strip().lstrip("@").strip()
         if not type_text or type_text in {"return", "new"}:
             continue
-        fields.append(TypeField(name=match.group("name"), type=type_text))
+        fields.append(
+            TypeField(
+                name=match.group("name"),
+                type=type_text,
+                annotations=annotations,
+            )
+        )
         if len(fields) >= _MAX_CONTRACT_FIELDS:
             break
     return fields
@@ -704,13 +726,26 @@ def _record_fields(head: str) -> list[TypeField]:
         return []
     fields: list[TypeField] = []
     for item in _split_top_level(match.group(1)):
-        cleaned = re.sub(r"@[\w.]+(?:\([^)]*\))?", " ", item).strip()
+        annotations = tuple(
+            re.findall(r"@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?", item)
+        )
+        cleaned = re.sub(
+            r"@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?",
+            " ",
+            item,
+        ).strip()
         if not cleaned:
             continue
         parts = cleaned.rsplit(None, 1)
         if len(parts) != 2:
             continue
-        fields.append(TypeField(name=parts[1].strip(), type=parts[0].strip()))
+        fields.append(
+            TypeField(
+                name=parts[1].strip(),
+                type=parts[0].strip(),
+                annotations=annotations,
+            )
+        )
         if len(fields) >= _MAX_CONTRACT_FIELDS:
             break
     return fields

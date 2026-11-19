@@ -85,7 +85,7 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
 | `astsight/mock/` C3.5.5 | ◐ 核心+执行链路+语义+计划+启动注入 | `dep_id` 唯一性/`route_key`、Host/路径路由、会话分支、drain、晚到调用归因、会话历史、`mock_not_used`、`mock_calls.jsonl`、内嵌 uvicorn；`mock semantics` 生成契约 `success` + 规则分支（可选 `--draft`/`--llm` 候选）；`run --mock-plan` 管理生命周期、写 `run_manifest.json`/`mock_injection.json`；`mock plan` 从 C3 调用点生成计划草案；`agent run` 用注入清单启动 SUT |
 | `java/`（agent） | ✅ HTTP 五客户端 + Dubbo 闭环 | `astsight-agent-core` + `astsight-agent-http` + `astsight-agent-dubbo`：premain、admin 路由表拉取、心跳、ASM 织入 OkHttp `newCall`、Feign `SynchronousMethodHandler#targetRequest`、RestTemplate `doExecute`、HC4/HC5 `InternalHttpClient#doExecute` 的 URL 改写、`/_agent/unmatched` 零透传、HTTPS 改写为明文；Dubbo 消费端 Filter 在 `ExtensionLoader` 加载时 `defineClass` 注入应用类加载器，按会话向 `/_admin/dubbo/invoke` 取桩；画像识别、`dubbo_routes` 计划、自动注入与心跳门禁已打通；计划内失败关闭；普通 JVM（OkHttp、HC4+HC5）、Spring Boot 3.5.6 fat jar 联调通过，Dubbo 2.7.22/3.2.19 × JDK 8/11/17/21/26 共 10 组合通过；WebClient/自有传输 SDK/JDK HttpClient 明确不支持 |
 | `astsight/llm/` | ✅ | OpenAI 兼容/Anthropic 协议、JSON 提取、超时/大小/重试上限、密钥脱敏；无新增 SDK 依赖 |
-| `astsight/rules/` | ✅ | C1/A1 规则库：context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取、diff/漂移、冲突记录、原子写 `ruleset.json` |
+| `astsight/rules/` | ✅ | C1/A1 规则库：ContractModel（四源能力子集）、context、LLM 草案校验、`rule_key`/fingerprint、CR 确定性提取与跨源 `support[]`、`contract_gaps`、diff/漂移、冲突记录、原子写 `ruleset.json` |
 | `astsight/mock/semantic.py` C3.5.1 | ✅ | 契约层 `success` 确定性生成 + 规则映射分支；LLM 只补有依据的候选 |
 | `astsight/data/` C5 | ✅（SQLite/PostgreSQL/MySQL） | DDL/DBML/真实库反射/seed → `data_catalog.json`；批准后 → `data_plan.json`；参数化 SQL、FK 拓扑、事务化 apply/teardown；方言决定占位符与标识符引用，plan 与数据库不一致时拒执行；多 schema 用 `schema.table` 限定名 |
 | `astsight/agent/` | ✅ 首版 | A1 规则适配、C3.5.1 Mock 语义适配、C5a/C5b 造数适配、A4 用例设计、MockPlan、SUT 启动注入、A5/A6 合并诊断修复（含 Mock 分支热更新）与端到端编排 |
@@ -323,8 +323,8 @@ canonical 链路是规则驱动的；`cases prepare` 只生成端点/需求上�
 cd engine
 PROJECT=examples/order_service
 
-# 1. 需求/设计文档 → 规则库（C1 唯一入口；设计、OpenAPI 均可选）
-#    确定性 context/prompt/schema + 模型抽 BR + 校验/降级/冲突/CR/版本化，
+# 1. 需求/设计文档 → 规则库（C1 唯一入口；设计与其他契约源均可选）
+#    确定性 ContractModel/context/prompt/schema + 模型抽 BR + 校验/降级/冲突/CR/版本化，
 #    一次产出 ruleset.json 与人工评审用 ruleset.md；校验失败不写规则库。
 #    `rules c1` 是 `rules extract` 的别名。
 PYTHONPATH=. python -m astsight rules c1 \
@@ -1103,8 +1103,10 @@ python examples/demo_agent_flow.py --keep --no-auto-approve       # 停在待审
 
 边界：
 
-- OpenAPI 不是前置条件：没有本地契约时用代码路由构建画像，CR 契约规则为空，
-  字段格式/必填类用例无法生成；分析阶段 SUT 还没启动，因此不能从 `--base-url` 拉取契约。
+- OpenAPI 不是前置条件：C1 会继续扫描 Spring MVC、gRPC descriptor 与 Dubbo 2.7+
+  接口，并从各源可证明的能力子集生成 CR；所有契约源都缺失时 CR 才为空。
+  Spring/Dubbo 静态源码不能证明的运行时绑定与序列化语义进入 `contract_gaps`。
+  分析阶段 SUT 还没启动，因此不能从 `--base-url` 拉取契约。
   一个可用接口都扫不到时，仍会完成 A1 规则抽取并落盘 `ruleset.json`，然后以
   `not_run` 结束并给出 `routes_missing`，不生成猜测性用例；
 - C5 造数在 `agent run` 中只有提供 `--ddl` 才生成目录；提供 `--db-url` 才执行 apply/teardown。

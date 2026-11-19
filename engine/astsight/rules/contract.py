@@ -1,7 +1,8 @@
-"""C1 契约规则（CR）：从 OpenAPI operation 确定性提取。
+"""C1 契约规则（CR）：从统一 ContractModel 确定性提取。
 
-CR 不使用模型；同一份契约每次提取结果必须逐字节一致。
-v1 只覆盖 HTTP/OpenAPI；其他 transport 在调用方标 unsupported，不在此猜测。
+CR 不使用模型；同一份 ContractModel 每次提取结果必须逐字节一致。OpenAPI、
+Spring MVC、gRPC descriptor 与 Dubbo 接口只提交各自能力子集内的可证明字段；
+contract_gaps 保留不可证明内容。
 """
 from __future__ import annotations
 
@@ -114,9 +115,18 @@ def build_contract_rules(
     *,
     source: str = "openapi",
     source_version: str | None = None,
+    contract_model: dict[str, Any] | Any | None = None,
 ) -> list[ContractRule]:
-    rules: list[ContractRule] = []
-    seen: set[str] = set()
+    if contract_model is not None:
+        from .contract_model import contract_rules_from_model
+
+        return _build_rules(
+            contract_rules_from_model(contract_model),
+            default_source=source,
+            source_version=source_version,
+        )
+
+    records: list[dict[str, Any]] = []
     for operation in operations:
         endpoint = str(_get(operation, "endpoint", "") or "")
         if not endpoint:
@@ -127,29 +137,93 @@ def build_contract_rules(
             continue
         transport = Transport.HTTP
         for field_name, constraint in _operation_fields(operation):
-            key = contract_rule_key(transport.value, endpoint, field_name, constraint)
-            if key in seen:
-                continue
-            seen.add(key)
-            rules.append(
-                ContractRule(
-                    rule_key=key,
-                    rule_id="",
-                    transport=transport,
-                    endpoint=endpoint,
-                    field=field_name,
-                    constraint=constraint,
-                    source=RuleSource(
-                        doc=source,
-                        section=endpoint,
-                        kind=RuleSourceKind.EXPLICIT,
-                        version=source_version,
-                        quote=f"{field_name}: {constraint}",
-                    ),
-                    authority=RuleAuthority.A,
-                    status=RuleStatus.ACTIVE,
-                )
+            records.append(
+                {
+                    "transport": transport.value,
+                    "endpoint": endpoint,
+                    "field": field_name,
+                    "constraint": constraint,
+                    "source_kind": "openapi",
+                    "support": [
+                        {
+                            "source_kind": "openapi",
+                            "source_refs": [
+                                {
+                                    "path": source,
+                                    "line": 0,
+                                    "symbol": endpoint,
+                                    "version": source_version or "",
+                                }
+                            ],
+                        }
+                    ],
+                }
             )
+    return _build_rules(
+        records,
+        default_source=source,
+        source_version=source_version,
+    )
+
+
+def _build_rules(
+    records: list[dict[str, Any]],
+    *,
+    default_source: str,
+    source_version: str | None,
+) -> list[ContractRule]:
+    rules: list[ContractRule] = []
+    seen: set[str] = set()
+    for record in records:
+        transport = Transport(str(record.get("transport") or "http"))
+        endpoint = str(record.get("endpoint") or "")
+        field_name = str(record.get("field") or "")
+        constraint = str(record.get("constraint") or "")
+        if not endpoint or not constraint:
+            continue
+        key = contract_rule_key(
+            transport.value,
+            endpoint,
+            field_name,
+            constraint,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        support = list(record.get("support") or [])
+        first_ref: dict[str, Any] = {}
+        for item in support:
+            refs = item.get("source_refs") or []
+            if refs:
+                first_ref = refs[0]
+                break
+        doc = str(first_ref.get("path") or default_source)
+        version = str(first_ref.get("version") or source_version or "") or None
+        rules.append(
+            ContractRule(
+                rule_key=key,
+                rule_id="",
+                transport=transport,
+                endpoint=endpoint,
+                field=field_name,
+                constraint=constraint,
+                source=RuleSource(
+                    doc=doc,
+                    section=endpoint,
+                    kind=RuleSourceKind.EXPLICIT,
+                    version=version,
+                    quote=f"{field_name}: {constraint}",
+                ),
+                source_kind=str(
+                    record.get("source_kind")
+                    or (support[0].get("source_kind") if support else "")
+                    or "openapi"
+                ),
+                support=support,
+                authority=RuleAuthority.A,
+                status=RuleStatus.ACTIVE,
+            )
+        )
     rules.sort(key=lambda rule: (rule.endpoint, rule.field, rule.constraint))
     for index, rule in enumerate(rules, 1):
         rule.rule_id = f"CR-{index:02d}"

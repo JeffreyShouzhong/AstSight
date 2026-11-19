@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（实现基线 v4.94，2026-11-19）
+# AstSight — 能力设计规格说明书（实现基线 v4.95，2026-11-19）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -15,12 +15,12 @@
 
 > **当前口径**：本文只描述当前有效的能力规格、契约与约束。决策过程（候选对比、落选原因、被推翻的判断、版本变更历史）统一记录在 [`决策记录.md`](决策记录.md)，本文不复述“为什么”。
 
-**当前实现状态（2026-11-19，v4.94）**
+**当前实现状态（2026-11-19，v4.95）**
 
 - **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口与旧用例自动逻辑删除）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告（串行）；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`；MQ topic 的字面量、常量、Spring `@Value`/`@ConfigurationProperties` 与 properties/yml 解析。
-- **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
+- **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归；多协议覆盖策略（M2.8）仅有字段占位，`coverage_role` 固定 primary、`adapter_fingerprint` 为空，alias 冒烟、`--transport-scope` 与 `transport_coverage` 未实现，不排期。C1 已引入统一 ContractModel，并支持按源能力子集确定性生成 CR；Spring/Dubbo 静态源码不能证明的运行时绑定与约束会进入 `contract_gaps`。
 - **明确不做（2026-11-19 范围收敛）**：多 SUT 并发隔离（5.5 设计保留，不排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider；MQ 消息先后/顺序断言；针对 SUT 多线程/并发行为的测试；pika BlockingChannel 专项 e2e；异步多行/多表分组轮询。
-- **验证基数**：本地默认套件 701 passed / 72 skipped；GitHub Actions Linux CI 默认套件 696 passed / 90 skipped（2026-11-19）。真实后端 core job 40 passed / 28 skipped；JDK 8/11/17/21 的 agent+Dubbo 矩阵各 18 passed；Kafka/RabbitMQ/RocketMQ 客户端矩阵 6 passed。开启全部真实后端的历史本地全量为 724 passed / 32 skipped。
+- **验证基数**：本地默认套件 706 passed / 72 skipped；GitHub Actions Linux CI 默认套件 696 passed / 90 skipped（2026-11-19）。真实后端 core job 40 passed / 28 skipped；JDK 8/11/17/21 的 agent+Dubbo 矩阵各 18 passed；Kafka/RabbitMQ/RocketMQ 客户端矩阵 6 passed。开启全部真实后端的历史本地全量为 724 passed / 32 skipped。
 > gRPC 下游 Mock 使用 gripmock 假服务器（unary、明文），落地约束见 **C3.5.4**；v4.3 报告口径不变。
 > 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5，设计保留、不排期）：实例身份、端口原子分配、持久化作用域缺一不可。
 > **v4.6 决策**：取消对 Feign 的特殊支持。Feign 不单独解析、不作契约源、不生成专用配置；
@@ -247,7 +247,22 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 | 来源 | 编号 | 生成方式 | 权威等级 |
 | --- | --- | --- | --- |
 | 需求/设计文档 | `BR-NN` | A1 需求分析（LLM，prompt=`a1_requirement_analysis.md`） | A / B |
-| 接口契约（OpenAPI / Spring MVC 注解 / gRPC proto / Dubbo 接口） | `CR-NN` | C1 确定性提取（required/type/enum/min/max/format） | A（契约事实） |
+| 接口契约（OpenAPI / Spring MVC 注解 / gRPC proto / Dubbo 接口） | `CR-NN` | C1 先归一为 ContractModel，再按各源声明的能力子集确定性提取 | A（可证明的契约事实） |
+
+**契约源确定性边界**：
+
+> “确定性”只表示同一输入、同一解析器版本得到同一结果，并且每条 CR 都有稳定来源；
+> 不表示四种契约源拥有相同表达力，也不表示静态源码能证明全部运行时契约。
+
+| 契约源 | 确定性能力子集 | 必须显式进入 `contract_gaps` 的内容 |
+| --- | --- | --- |
+| OpenAPI | operation、参数、请求体、响应状态码、schema/required/type/enum/min/max/format | 外部 `$ref` 无法解析、OpenAPI 未描述的运行时校验 |
+| Spring MVC 注解 + Java DTO | 路由、路径/查询参数、常见参数注解、请求/响应 DTO 字段、可识别的 Jakarta Validation 约束 | 自定义参数解析/转换器、Jackson 定制、validation group、全局异常映射、动态路由 |
+| gRPC `.proto` / descriptor | unary service/method、请求/响应 message 字段、类型、repeated/optional、enum、oneof | metadata/鉴权语义、业务错误码、服务端额外校验、streaming/reflection |
+| Dubbo 2.7+ 接口源码 + 标准注解/XML | service/method 签名、参数/返回类型、仓库源码 DTO 字段、enum、可识别的校验注解 | jar-only 接口、动态代理、运行时序列化定制、无法确定的泛型/配置覆盖 |
+
+契约源解析器只负责产出可证明字段与 gap；CR 由统一构造器生成。不得用某个来源缺失的字段
+反推“不存在”“可选”或默认类型，也不得为了四源对齐而伪造相同覆盖率。
 
 #### 3.1.1 数据模型
 
@@ -257,7 +272,8 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 | `Rule` | rule_key, rule_id, text, type, entities[], fields[], constraints[], relations[], source{doc, version(sha256), doc_version, section, kind}, authority, impact, priority, reasoning, fingerprint | BR 业务规则；字段对齐 a1 提示词输出契约（`version` 回填为文档 hash） |
 | `RuleConstraint` | field, operator(eq/ne/in/not_in/min/max/between/pattern/required/forbidden/transition/other), values[], condition, error_code, exhaustive | 结构化约束；只用于 quote 落地与确定性冲突检测，不是运行时表达式 |
 | `RuleRelation` | relation_id, relation_key, assertion_kind(body_field/db_row), target, op, expect, where, wait_ms, description, evidence | 原文明确的关系配方；`$response/$request/$step` 表示取值来源，`$op` 仅为受限运算；`relation_key` 由框架计算，A4 只选择该键 |
-| `ContractRule` | rule_key, rule_id, transport, endpoint, field, constraint, source, authority=A | CR 契约规则；由契约源（HTTP：OpenAPI / Spring MVC 注解；gRPC：proto/descriptor；Dubbo：接口源码）确定性生成，不调用 LLM |
+| `ContractModel` | schema_version, sources[], operations[], gaps[] | C1 的规范化契约中间层；每个 operation 含 transport/endpoint/source/source_ref/request/response，字段与 gap 保留来源能力等级 |
+| `ContractRule` | rule_key, rule_id, transport, endpoint, field, constraint, source, source_kind, support, authority=A | CR 契约规则；由 ContractModel 确定性生成，不调用 LLM |
 | `RuleQuestion` | id, text, reason, impact | 文档没写清、必须人工澄清的问题；不参与判定 |
 | `RuleGap` | kind(implicit/quantity/cross_system), desc, reason, related_interfaces[] | 抽不出的规则；不占 BR 编号，不计入覆盖率分母 |
 | `RuleConflict` | topic, rule_keys[], docs[], origin(model/framework/model+framework), reason | 模型自报或框架确定性检测到的规则冲突；只记录，不改变规则状态，在用例审核中确认 |
@@ -299,7 +315,7 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 ```
 rules extract --project <repo> --requirements <docs> [--openapi ...]
   → .astsight/rules/<analysis_id>/
-      context.json      # 文档 section/quote/hash + 契约端点目录（HTTP：OpenAPI/Spring MVC；gRPC：proto/descriptor；Dubbo：接口源码）+ transport
+      context.json      # 文档 section/quote/hash + ContractModel（契约端点/字段/gap/来源证据）+ transport
       prompt.md         # a1_requirement_analysis.md 的实例化
       rules.schema.json # RuleDraft 输出 schema
       rules.draft.json  # 本次模型输出（先落盘再校验）
@@ -331,6 +347,10 @@ rules import --context <analysis_id> --draft rules.draft.json
   用例审核文件中显式展示，全流程唯一的人工门禁是用例审核。
 - `rules extract`/`rules import` 不修改 `caseset.json`；规则变化对用例的影响通过
   `rule_drift` 标记与重新审核解决（见 3.1.3）。
+- **CR 不是四源同质产物**：每种源只在其能力子集内生成规则；所有未证明字段统一进入
+  `contract_gaps`，并按 `source_kind/endpoint/field/code/detail` 排序。跨源相同 CR
+  可合并为一条事实，但必须保留 `support[]` 中的全部来源；跨源矛盾进入 conflicts，
+  不自动择一。
 
 #### 3.1.3 规则 diff、生命周期与漂移
 
@@ -406,7 +426,9 @@ A4 不得自行合并或改写冲突规则，引用冲突规则的用例带 `rul
 
 | 指标 | 阈值 / 条件 | 说明 |
 | --- | --- | --- |
-| 契约源 | 每个被支持端点至少一种：OpenAPI / Spring MVC 注解 / gRPC proto / Dubbo 2.7+ 接口 | 全缺失时 CR 为空、标 `contract_incomplete`，阻断契约断言用例；`unsupported` 端点单列 |
+| 契约源 | 每个被支持端点至少一种：OpenAPI / Spring MVC 注解 / gRPC proto descriptor / Dubbo 2.7+ 接口 | 全缺失时 CR 为空、标 `contract_incomplete`；已识别源中的不可证明字段写 `contract_gaps`，阻断对应字段的契约断言，不阻断其他可证明用例；`unsupported` 端点单列 |
+| 契约确定性 | 同输入 + 同解析器版本 → ContractModel 与 CR 逐字节一致 | 重复运行结果不一致视为解析器缺陷 |
+| 来源证据 | 每条 CR 至少一个 `source_ref`；每个 gap 有稳定 code | 无证据 CR 拒绝写入；gap 无原因拒绝写入 |
 | 规则库可加载 | schema 受支持；`rule_key`/fingerprint 重算一致 | 否则拒绝加载 |
 | 来源可定位 | `source.section` 解析成功 | 解析失败标 `ungrounded`，不得为 A |
 | 规则值落地 | 数字/枚举/错误码能在 `source.quote` 找到 | 只在 section 其他位置：ungrounded/降 B；哪儿都没有：拒绝 |
@@ -928,6 +950,8 @@ adapter。streaming、reflection 和注册中心仍不做。
 
 **端点覆盖角色（同一业务实现暴露多协议）**：
 
+> **实现状态（2026-11-19，v4.95）**：仅字段占位。画像固定写 `coverage_role="primary"`、`adapter_fingerprint=null`，没有按 `business_key` 归组、primary 选择、alias 冒烟、`--transport-scope` 与 `transport_coverage` 报告。单协议项目不受影响；多协议同业务项目当前会重复生成/执行。明确不排期。
+
 > 同一个业务实现可能同时通过 HTTP、Dubbo、gRPC 暴露。**同一个 service 不等于同一个被测接口**：业务场景可以复用，传输契约不能默认省略。C2/C3 必须保留每个 `transport + endpoint`，不按方法名去重。
 
 | 情况 | 是否同一端点 | 处理 |
@@ -983,15 +1007,15 @@ adapter。streaming、reflection 和注册中心仍不做。
 1. 扫描文档，跳过 `.astsight`、`.git`、`__pycache__`；拒绝绝对路径、`..` 和指向项目外的 symlink
 2. 按 Markdown 标题建立稳定 section 路径（如 `订单服务接口设计 > POST /api/orders`），保留正文、表格与代码块文本，计算文档与 section 的 sha256
 3. 排除元数据标题（版本、变更记录、目录、附录、术语、背景、范围、目标、参考资料、待确认）：**不计入覆盖率分母，但保留在 context 中可见**
-4. 按端点形态解析契约源并建立全部端点目录：
-   - **HTTP**：`OpenAPI > Spring MVC 注解`；缺 OpenAPI 时按 Spring 路由注解拼接路径、参数绑定与 DTO 字段/校验注解提取。HTTP 客户端（含 Feign）只作为下游调用点，不作契约源
-   - **gRPC**：读取仓库 `.proto` 或 descriptor；无 descriptor 且 server reflection 不可用 → `unsupported`
-   - **Dubbo 2.7+**：接口类 + 标准注解/XML；接口类必须在仓库源码内，只在依赖 jar 或 Dubbo 2.6 → `unsupported`
+4. 按端点形态先解析为统一 `ContractModel`：
+   - **HTTP**：`OpenAPI > Spring MVC 注解`；缺 OpenAPI 时按 Spring 路由注解拼接路径、参数绑定与 DTO 字段/校验注解提取。Spring 只能证明静态可解析子集，自定义解析器、转换器、Jackson 配置、validation group 与全局异常映射进入 `contract_gaps`。HTTP 客户端（含 Feign）只作为下游调用点，不作契约源
+   - **gRPC**：读取仓库 `.proto` 编译出的 descriptor 或 `.protoset`；仅 unary service/method 进入能力子集，无 descriptor/reflection 不猜
+   - **Dubbo 2.7+**：接口类 + 标准注解/XML；接口类必须在仓库源码内，只在依赖 jar、Dubbo 2.6、动态代理或无法确定的泛型/序列化行为 → 不生成对应 CR，并写 gap
 
-   对应形态的契约源全部缺失时 `contract_incomplete=true`、CR 规则为空，报告显式标注；**任何情况下都不猜字段**。C1 不因缺 OpenAPI 中断：业务规则只依赖文档原文；接口事实可由 C3 从代码路由补，缺失字段留给 `contract_incomplete` 显式降级
+   对应形态的契约源全部缺失时 `contract_incomplete=true`、CR 规则为空，报告显式标注；**任何情况下都不猜字段**。同一输入与解析器版本必须产生完全一致的 ContractModel、CR 编号和 gap 顺序
 5. 实例化 `a1_requirement_analysis.md` 为 `prompt.md`（注入文档 section 与端点目录），生成 `rules.schema.json`。**框架内入口 `rules extract`** 直接调用适配层模型产出 `rules.draft.json`；**框架外模式**由 `rules prepare` 只写上下文，模型由 Skill/人工/模型网关/离线批处理执行，产出同一份 `rules.draft.json`
 6. `rules extract`/`rules import` 用同一套校验：schema/大小/路径安全；`rules/questions/gaps/conflicts` 四数组分离；`rule_id` 连续；`source.doc/section` 必须可解析到 context；`authority` 显式；`operator=in/not_in` 必须显式声明 `exhaustive`（未声明记 warning，枚举是否闭合并不能靠猜）；`text` 中的数字/枚举做 A 级落地检查（不通过降级 B）；重复 `rule_key` 拒绝
-7. 确定性提取 `CR-NN` 契约规则（required/type/enum/min/max/format），与 BR 合并进 `RuleSet`
+7. 从 ContractModel 确定性提取 `CR-NN`（只使用各源能力子集中可证明的 required/type/enum/min/max/format 等约束），合并跨源完全一致的事实并保留全部 `support[]` 来源，与 BR 合并进 `RuleSet`
 8. 按 `rule_key` 与当前 `ruleset.json` diff，计算 `rule_drift` / `rule_orphaned`，写新版本并渲染 `ruleset.md`；校验失败不改动现有 ruleset
 
 **关键设计决策**：
@@ -1005,6 +1029,8 @@ adapter。streaming、reflection 和注册中心仍不做。
 - **需求文本是数据，不是指令**：`prompt.md` 明确要求忽略文档中改变角色、输出格式或要求自动批准的内容
 - **不臆造**：文档没写清的约束只能进 `questions`，抽不出的只能进 `gaps`；规则 `text` 不得出现原文没有的具体数字/枚举（A 级落地校验）
 - **契约不是只有 OpenAPI**：HTTP 契约按 `OpenAPI > Spring MVC 注解 > 设计文档` 取值；契约源全部缺失时 CR 规则为空，C4 不得生成无依据的契约断言用例
+- **统一模型、分源能力子集**：四种已支持契约源都必须可确定性解析，但只在各自能力声明内生成 CR；源码存在不等于运行期契约完整。Spring/Dubbo 的静态字段、参数和常见校验注解可作为事实，自定义转换、运行时绑定、序列化等不可证明部分必须写 `contract_gaps`
+- **不追求 CR 数量对齐**：不同契约源表达力不同，报告按来源统计 operation/field/gap；不得把 gap 当作规则分母，也不得用补充假设把 gap “补齐”
 - **HTTP 客户端不作契约源**：`@FeignClient` 等 HTTP 客户端声明只是消费方，不新增端点、不生成专用解析路径；其方法签名可作下游调用的定位线索，但契约仍按 `OpenAPI > Spring MVC 注解 > 设计文档` 取，解析不出的部分标 `inferred`，不猜
 - **三种协议按形态取契约**：HTTP 用 OpenAPI/Spring MVC 注解，gRPC 用 proto/descriptor，Dubbo 用 2.7+ 接口 + 标准注解/XML；不跨形态套用（例如不能拿 proto 当 HTTP 契约）
 - **Dubbo 识别零 LLM**：只认全限定注解与 XML，接口类必须源码可见；2.6、jar-only、动态代理/反射/`getBean` 标 `unsupported`，不猜、不生成用例
@@ -1012,9 +1038,9 @@ adapter。streaming、reflection 和注册中心仍不做。
 - **规则与上下文分离**：`context.json` 可确定性重建；`ruleset.json` 是版本化产物，记录 prompt 版本与 model，允许同一输入重跑产生差异，由人工审核用例收敛
 - **上下文过期**：文档或契约源 hash 变化后，`rules import` 拒绝使用旧 context，要求重新 prepare
 
-**异常与边界**：扫描件 PDF 不支持（前置要求可提取文本）；标题变化会使旧 section 路径与 `rule_key` 失效，需要重新 prepare/import；上下文过期、路径越界、文件/规则/字段超限一律拒绝；模型输出非 JSON 或超出规则规模上限直接拒绝，不截断后继续；对应形态的契约源全部缺失时 CR 为空，明确标 `contract_incomplete`，不退化成猜字段；gRPC 无 descriptor/reflection、Dubbo 2.6/jar-only/动态代理一律标 `unsupported`，不生成契约断言用例
+**异常与边界**：扫描件 PDF 不支持（前置要求可提取文本）；标题变化会使旧 section 路径与 `rule_key` 失效，需要重新 prepare/import；上下文过期、路径越界、文件/规则/字段超限一律拒绝；模型输出非 JSON 或超出规则规模上限直接拒绝，不截断后继续；对应形态的契约源全部缺失时 CR 为空，明确标 `contract_incomplete`，不退化成猜字段；gRPC 无 descriptor/reflection、Dubbo 2.6/jar-only/动态代理一律标 `unsupported`；Spring 自定义参数解析、转换、序列化、校验组与全局异常映射等静态不可证明项写 `contract_gaps`，不得猜字段或约束
 
-**门禁**：见 3.1.6。C1 自身保证：ruleset 可确定性加载；`questions/gaps` 不混入 rules；每条规则来源可解析；A 级数字/枚举有原文依据；规则 diff 可审计；每个被支持端点至少一种契约源，否则 CR 为空并在报告中阻断“契约断言用例”生成；`unsupported` 端点单列
+**门禁**：见 3.1.6。C1 自身保证：ruleset 可确定性加载；`questions/gaps` 不混入 rules；每条规则来源可解析；A 级数字/枚举有原文依据；规则 diff 可审计；每个被支持端点至少一种契约源，否则 CR 为空并在报告中阻断“契约断言用例”生成；`unsupported` 端点单列；同输入 + 同解析器版本生成完全一致的 ContractModel 与 CR
 
 ---
 
@@ -1243,7 +1269,7 @@ Dubbo 附加字段：
 
 1. **transport 判定**（确定性，零 LLM）：按 3.3 矩阵从端点证据判定 `http | grpc | dubbo`。Dubbo 家族中满足「Dubbo 3 + Triple + protobuf + 可用 descriptor + 无 group/version」→ `grpc`；否则 → `dubbo`（sidecar）。证据只够判定“属于 Dubbo 家族”但不足以区分时 → `dubbo` + `transport_evidence="inferred"`。无任何可用调用路径 → `unsupported` + `unsupported_reason`，不生成画像
 2. 契约提取（按 transport 分派）：
-   - **HTTP**：按 `OpenAPI > Spring MVC 注解 > 设计文档` 取值。OpenAPI 缺失时从代码 AST 提取（框架插件），只认提供方路由注解；HTTP 客户端声明（含 Feign）不参与契约提取。全部契约源缺失时标 `contract_incomplete`，不猜字段；C3 仍产出 method/path/handler 画像，流程不因缺契约中断
+   - **HTTP**：按 `OpenAPI > Spring MVC 注解 > 设计文档` 取值。OpenAPI 缺失时从代码 AST 提取（框架插件），只认提供方路由注解；Spring 可证明路由、参数绑定和 DTO 静态字段，运行时转换/序列化/校验组等写 `contract_gaps`。HTTP 客户端声明（含 Feign）不参与契约提取。全部契约源缺失时标 `contract_incomplete`，不猜字段；C3 仍产出 method/path/handler 画像，流程不因缺契约中断
    - **gRPC**：从仓库 `.proto` / descriptor 提取 service/method 与 message 字段、类型、`repeated/optional`。无 descriptor 且 server reflection 不可用 → `unsupported`（`no_descriptor`），不靠猜
    - **Dubbo**：接口源码 + `@DubboService`/`@DubboReference`（全限定名）或 XML `dubbo:service`/`dubbo:reference` 提取 `interface/method/param_types/return_type/group/version`；接口只在依赖 jar 或动态代理/反射/`getBean` → `unsupported`（`interface_in_jar` / `dynamic_lookup`）。Dubbo 2.6 → `unsupported`（`dubbo_2_6`）
 3. DB 映射：字段名匹配 + 命名约定（驼峰/下划线归一）+ 设计文档表映射章节
@@ -1338,7 +1364,7 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 
 **异常与边界**：字段无法映射 DB 时标记 `unmapped` 而非猜测；OpenAPI/Spring MVC 注解全部缺失时标记 `contract_incomplete` 并显式告警（不降级兜底）；下游地址来自运行时拼接、SpEL 表达式、配置中心或动态注册时，`target` 标 `inferred` 并在报告中单列，不静默当作已知；调用点无法静态定位（反射、`getBean`、SDK 内部发起）→ 标 `unidentified`，进入缺口清单，不阻断主链路；gRPC 无 descriptor 且 reflection 关闭 → `unsupported`（`no_descriptor`）；Dubbo 2.6 / 接口在 jar / 动态查找 → `unsupported`（对应 `unsupported_reason`）；任何 `unsupported` 都不得产出可执行画像或静默降级为 HTTP；`business_key` 无法回溯时不归组，避免把不同实现误当 alias
 
-**门禁**：字段约束提取准确率 100%；映射冲突检出率 = 人工基准；下游依赖识别召回率 ≥85%（对照人工梳理的调用清单）；HTTP 下游按“识别成功 / `unidentified`”分列统计，`unidentified` 必须出现在缺口清单，不得静默；HTTP/gRPC/Dubbo 分形态统计端点召回与 `unsupported` 清单，`unsupported` 不得计入已覆盖；**多协议组必须 100% 有明确 `coverage_role`**，每个 `business_key` 只能有一个 `primary`，`alias` 必须带 `alias_of` 与 `adapter_fingerprint`（或显式 `fingerprint_unavailable`）
+**门禁**：字段约束提取准确率 100%；映射冲突检出率 = 人工基准；下游依赖识别召回率 ≥85%（对照人工梳理的调用清单）；HTTP 下游按“识别成功 / `unidentified`”分列统计，`unidentified` 必须出现在缺口清单，不得静默；HTTP/gRPC/Dubbo 分形态统计端点召回与 `unsupported` 清单，`unsupported` 不得计入已覆盖；**多协议组必须 100% 有明确 `coverage_role`**，每个 `business_key` 只能有一个 `primary`，`alias` 必须带 `alias_of` 与 `adapter_fingerprint`（或显式 `fingerprint_unavailable`）——**多协议角色判定未实现，见 3.3「实现状态」，当前不排期**
 
 ---
 
@@ -2740,6 +2766,8 @@ Dubbo 草案片段：
 
 #### C7.1 数据冲突检测
 
+> **实现状态（2026-11-19）**：未实现。执行层按顺序串行运行用例，没有数据资源清单、冲突图、`ConflictSet`、`conflicts.json` 或 Mock 命名空间租约；串行下不会发生数据竞争，但也没有冲突报告。与 C7.2 一并明确不排期。
+
 **目的**：并行前判断多个用例是否争用同一份数据，避免数据竞争导致的假失败。
 
 **冲突判定维度**（数据维度，非资源维度）：
@@ -3344,8 +3372,8 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M2.4 | **HTTP 下游通用接入**：出站 HTTP 调用点识别（配置/服务发现/代理注入点定位）+ 契约源优先级（OpenAPI > Spring MVC 注解）+ 稳定且唯一的 `dep_id`（C3.5.5） | 无 OpenAPI 的 Spring 项目也能建画像；下游 id 跨构建稳定；同路径跨下游不重名，多调用点不重复；无法识别的调用点进缺口清单 |
 | M2.5 | **transport 模型 + gRPC/Triple unary**：`transport/transport_class/transport_evidence`、端点标识、gRPC descriptor 加载、gRPC unary、Triple gRPC-compatible unary、`grpc_status/response_field/metadata` 断言、`unsupported` 清单 | gRPC 与 Triple-compatible unary 项目可执行；无 descriptor/streaming 显式 `unsupported`；报告保留 `protocol=tri` 与实际 adapter；无 HTTP 伪装 |
 | M2.6 | **Dubbo sidecar**：Dubbo 2.7+ 注解/XML 识别、接口源码校验、sidecar 直连泛化调用（Hessian2、精确 `param_types`）、Triple-native unary、`rpc_status/result_field/exception_type` 断言；测试目标不做注册中心发现 | Dubbo 2.7+ 标准场景可执行；Triple-native Java interface 与 protobuf gRPC-compatible 两条路径均可用；2.6/jar-only/动态查找显式 `unsupported`；目标未解析/歧义阻断；sidecar 启动自检与错误归一 |
-| M2.7 | **transport 回退（受限）**：仅 `transport_class=dubbo` 的 gRPC→sidecar，`--allow-transport-fallback` 显式开启、单次、报告 `transport_fallback + degraded` | 默认关闭；回退失败归 `adapter_error`；禁止跨形态回退 |
-| M2.8 | **多协议覆盖策略**：C2 provider-only + base/target 契约 diff + `change_kinds`；C3 `business_key`/`coverage_role`/`adapter_fingerprint`；C4 alias 冒烟 + `--transport-scope`；C7.4 `transport_coverage` | 纯契约变更分支可产出端点；每个 `business_key` 仅一个 primary；alias 冒烟可执行且不计入业务覆盖；`transport_alias_skipped` 可见 |
+| M2.7 | **transport 回退（受限，未实现、不排期）**：仅 `transport_class=dubbo` 的 gRPC→sidecar，`--allow-transport-fallback` 显式开启、单次、报告 `transport_fallback + degraded` | 设计保留，2026-11-19 明确不排期；当前没有回退参数与 `transport_fallback` 输出 |
+| M2.8 | **多协议覆盖策略（部分实现：仅字段占位，不排期）**：C2 provider-only + base/target 契约 diff + `change_kinds` 已实现；C3 `business_key`/`coverage_role`/`adapter_fingerprint` 仅字段，全部写 primary、fingerprint 为空；C4 alias 冒烟 + `--transport-scope`、C7.4 `transport_coverage` 未实现 | 设计保留，2026-11-19 明确不排期；单协议项目不受影响，多协议同业务会重复生成/执行 |
 | M2.9 | **Mock 用例级会话（方案 A）**：Mock 服务 admin session API、`mock_bindings` 导入期补全、C7.1 `mock:<namespace>` 独占、C7.2 mock lease 串行、C6 session fixture、C7.4 `mock_sessions` 证据 | 单命名空间单 active session；冲突/未命中/晚到调用全部显式报错；mock-bound 用例串行且证据可复核；无 session 证据的 Mock 用例标 `weak_oracle` |
 | M2.10 | **Dubbo 下游 Mock（agent + ByteBuddy + Filter）**：agent 加载（`-javaagent`）、Filter 拦截、会话分支、同步/异步/重载/泛化、心跳自检、`serialization_verified=false`、兼容矩阵 | agent 未激活整批阻断；绑定 dep 命中 0 次报 `mock_not_used`；`No provider available` 报 `env_error`；2.7/3.x + JDK 8/11/17/21 主组合可运行 |
 | M2.11 | **多 SUT 并发隔离（5.5，不排期）**：`--sut-id` 与 `namespace=sut_id`、端口 `bind(:0)` 原子分配 + `run_manifest`、心跳身份字段、每实例 token、DB `run_scope` 前缀、用例库 `flock`、报告 `instance` 块 | 设计保留，2026-11-19 明确不排期 |
@@ -3356,7 +3384,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full` + C2 召回率基准 | 20 个真实分支人工标注；replay 明确不实现 |
 
-> 本说明书实现基线为 **v4.94（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计保留，明确不排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书实现基线为 **v4.95（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地；v4.95 将四种契约源统一为 ContractModel，并明确“确定性 = 可复现 + 有证据”，不表示四源表达力相同。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计保留、不排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
 > Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo Hessian2 走 Java sidecar

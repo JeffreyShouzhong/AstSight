@@ -1,4 +1,4 @@
-"""C1 规则上下文：需求 section + 可选 OpenAPI operation 摘要。
+"""C1 规则上下文：需求 section + 可选 ContractModel。
 
 规则上下文不依赖用例上下文，也不调用模型；它只把不可信输入整理成稳定目录。
 每个 section 同时有稳定 `path` 与可读 `number`，导入时二者都可引用。
@@ -18,8 +18,14 @@ from ..cases.requirements import document_fingerprint, read_documents
 from ..inventory import discover_openapi
 from ..persistence import save_json_atomic
 from ..profile import load_spec, parse_operations
+from .contract_model import (
+    ContractGap,
+    build_contract_model,
+    context_contract_summary,
+)
 
-RULES_CONTEXT_SCHEMA_VERSION = 1
+RULES_CONTEXT_SCHEMA_VERSION = 2
+_SUPPORTED_RULES_CONTEXT_SCHEMAS = {1, RULES_CONTEXT_SCHEMA_VERSION}
 RULES_PROMPT_VERSION = "11"
 DEFAULT_RULES_OUT = ".astsight/rules"
 
@@ -31,6 +37,59 @@ def _now() -> str:
 def _sha(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _openapi_reference_gaps(
+    spec: dict[str, Any],
+    source: str,
+) -> list[ContractGap]:
+    """只报告无法解析的 `$ref`，不猜测被引用内容。"""
+    found: dict[tuple[str, str], ContractGap] = {}
+
+    def resolve(ref: str) -> bool:
+        if not ref.startswith("#/"):
+            return False
+        current: Any = spec
+        for part in ref[2:].split("/"):
+            part = part.replace("~1", "/").replace("~0", "~")
+            if not isinstance(current, dict) or part not in current:
+                return False
+            current = current[part]
+        return True
+
+    def walk(value: Any, path: tuple[str, ...]) -> None:
+        if isinstance(value, dict):
+            ref = value.get("$ref")
+            if isinstance(ref, str) and not resolve(ref):
+                code = (
+                    "openapi_external_ref_unresolved"
+                    if not ref.startswith("#/")
+                    else "openapi_local_ref_unresolved"
+                )
+                endpoint = (
+                    f"{path[2].upper()} {path[1]}"
+                    if len(path) >= 3 and path[0] == "paths"
+                    else "openapi:$ref"
+                )
+                found[(endpoint, ref)] = ContractGap(
+                    source_kind="openapi",
+                    endpoint=endpoint,
+                    code=code,
+                    detail=ref,
+                    field="/".join(path),
+                    path=source,
+                )
+            for key, child in value.items():
+                walk(child, (*path, str(key)))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, (*path, str(index)))
+
+    walk(spec, ())
+    return sorted(
+        found.values(),
+        key=lambda item: (item.endpoint, item.field, item.code, item.detail),
+    )
 
 
 def _resolve_local_source(source: str | None, project: Path) -> str | None:
@@ -242,6 +301,18 @@ def build_rules_context(
             "version": str((spec.get("info") or {}).get("version") or ""),
         }
 
+    contract_model = build_contract_model(
+        project_path,
+        openapi_operations=operations,
+        openapi_source=openapi_info.get("source", ""),
+        openapi_version=openapi_info.get("sha256", ""),
+        openapi_gaps=_openapi_reference_gaps(
+            spec,
+            openapi_info.get("source", ""),
+        ),
+    )
+    contract_summary = context_contract_summary(contract_model)
+
     document_payload = _documents_payload(documents)
     doc_versions = {document.doc: document.version for document in documents}
     prompt_info = {
@@ -255,10 +326,18 @@ def build_rules_context(
             # 文档 sha256 + section 切分/元数据判定结果；切分规则变了，id 必须变。
             "documents": document_fingerprint(documents),
             "openapi_sha256": openapi_info.get("sha256", ""),
+            "contract_model_sha256": contract_summary["model_hash"],
             "prompt_sha256": prompt_info["sha256"],
         }
     )
     warnings = [] if openapi_info else ["openapi_missing"]
+    if contract_model.gaps:
+        warnings.append(f"contract_gaps:{len(contract_model.gaps)}")
+    for item in contract_model.sources:
+        kind = str(item.get("kind") or "")
+        status = str(item.get("status") or "")
+        if status in {"partial", "missing"}:
+            warnings.append(f"contract_source_{status}:{kind}")
     for document in document_payload:
         if not document["sections"]:
             # 空文档不会报错，但也不该静默：没有 section 就没有可引用原文，
@@ -287,6 +366,8 @@ def build_rules_context(
         "documents": document_payload,
         "doc_versions": doc_versions,
         "openapi": openapi_info,
+        "contract_model": contract_model.as_dict(),
+        "contract_summary": contract_summary,
         "prompt": prompt_info,
         "operations": _operations_payload(operations),
         "warnings": warnings,
@@ -331,11 +412,23 @@ def _render_prompt(
 
 
 def _render_readme(context: dict[str, Any], context_dir: Path) -> str:
+    contract_counts = (context.get("contract_model") or {}).get("counts") or {}
+    source_rows = "\n".join(
+        f"  - `{item.get('kind')}`: {item.get('status')}"
+        for item in (context.get("contract_model") or {}).get("sources") or []
+    )
     return f"""# A1 规则上下文
 
 - context_id: `{context.get('context_id')}`
 - 文档: {", ".join(f"`{doc.get('doc')}`" for doc in context.get('documents') or [])}
 - OpenAPI: `{(context.get('openapi') or {}).get('source', '')}`
+- 契约模型: operations {contract_counts.get('operations', 0)} / gaps {contract_counts.get('gaps', 0)}
+
+## 契约源能力状态
+
+{source_rows or '  - 未发现可用契约源'}
+
+CR 只从 ContractModel 的可证明字段生成；`contract_gaps` 中的内容不得由模型补写为 A 级事实。
 
 ## 下一步（模型在框架外运行时）
 
@@ -414,7 +507,7 @@ def load_rules_context(path: str | Path) -> dict[str, Any]:
     data = json.loads(raw.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise ValueError(f"规则 context 不是 JSON object: {raw}")
-    if data.get("schema_version") != RULES_CONTEXT_SCHEMA_VERSION:
+    if data.get("schema_version") not in _SUPPORTED_RULES_CONTEXT_SCHEMAS:
         raise ValueError(f"不支持的规则 context schema_version: {data.get('schema_version')!r}")
     return data
 

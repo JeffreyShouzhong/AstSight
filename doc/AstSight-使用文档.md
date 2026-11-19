@@ -4,7 +4,7 @@
 |---|---|
 | 适用版本 | M1 确定性闭环 + 规则驱动用例 + SQLite/PostgreSQL/MySQL 造数 |
 | 命令入口 | `python -m astsight`（在 `engine/` 下运行） |
-| 主要输入 | 代码库、需求/设计文档、OpenAPI（可选）、DDL/seed（可选） |
+| 主要输入 | 代码库、需求/设计文档、HTTP/gRPC/Dubbo 契约源（可选）、DDL/seed（可选） |
 | 主要输出 | 规则库、用例库、造数计划、pytest 用例、执行报告与门禁结论 |
 | 运行环境 | Linux 为目标环境；Windows 可用于开发调试 |
 
@@ -36,7 +36,7 @@ AstSight 是一套**接口自动化测试引擎**，不是测试管理平台。�
 
 | 能力 | 作用 | 主要命令 |
 |---|---|---|
-| C1 / A1 | 需求 + 设计（可选）+ OpenAPI（可选）→ 业务规则 `BR` + 契约规则 `CR` | `rules c1` / `rules prepare` + `rules import` |
+| C1 / A1 | 需求 + 设计（可选）+ ContractModel（OpenAPI / Spring MVC / gRPC descriptor / Dubbo 2.7+）→ `BR` + 能力子集内 `CR` | `rules c1` / `rules prepare` + `rules import` |
 | C2 | Git 分支差异 → 变更文件、符号、受影响 API | `run --mode delta` |
 | C3 | 路由清单、接口画像、下游调用点 | `run`、`cases prepare`、`mock plan` |
 | C3.5.1 | 契约 `success` + 规则分支 → Mock 语义 | `mock semantics`；`agent run` 内部也会生成 |
@@ -325,8 +325,9 @@ PYTHONPATH=. python -m astsight rules c1 \
 
 - `--requirements`：必填，可重复；可以是文件或目录（目录递归读取 `.md/.markdown/.txt`）。
 - `--design`：可选，可重复；与需求一起作为 A1 输入。
-- `--openapi`：可选；不传时自动发现项目内常见 OpenAPI 路径。仍找不到时只生成 `BR`，
-  不生成 `CR`，并产生 `openapi_missing` warning。
+- `--openapi`：可选；不传时自动发现项目内常见 OpenAPI 路径。C1 同时扫描
+  Spring MVC、gRPC descriptor 与 Dubbo 2.7+ 接口，只从各源可证明的能力子集生成
+  `CR`；不可证明字段写 `contract_gaps`。
 - `rules c1` 是 `rules extract` 的别名。
 
 ### 7.2 只有需求文档
@@ -369,7 +370,7 @@ PYTHONPATH=. python -m astsight rules c1 \
 | `--project` | 是 | - | 项目根目录，规则库写到该目录下 |
 | `--requirements` | 是，至少一个 | - | 需求文档，可重复 |
 | `--design` | 否，可重复 | 空 | 设计文档，与需求一起作为 A1 输入 |
-| `--openapi` | 否 | 自动发现 | 契约文件；用于生成 `CR` |
+| `--openapi` | 否 | 自动发现 | OpenAPI 契约文件；其他契约源仍会自动扫描 |
 | `--out` | 否 | `.astsight/rules` | 上下文目录，相对 `--project` |
 | `--rule-base` | 否 | `ruleset.json` | 规则库路径，相对 `--project` |
 | `--max-rules` | 否 | `500` | 单次抽取上限，限制在 1–500 |
@@ -395,10 +396,14 @@ PYTHONPATH=. python -m astsight rules c1 \
 
 - `ruleset_id`、`version`：规则库标识与版本；
 - `rules[]`：业务规则 `BR`；
-- `contract_rules[]`：OpenAPI 契约规则 `CR`；
+- `contract_rules[]`：由 ContractModel 生成的 `CR`，带 `source_kind` 与跨源 `support[]`；
 - `conflicts[]`、`gaps[]`、`questions[]`：冲突、缺口、待确认问题；
 - `documents[]`：输入文档及哈希；
 - `prompt`：提示词版本与模型信息。
+
+`context.json` 额外包含 `contract_model`：四类契约源的 operation/field/source_ref、
+能力状态与 `gaps`。CR 只从其中可证明字段生成；跨源相同约束合并到 `support[]`，
+不同约束生成 framework conflict。
 
 每条规则带 `rule_key`（稳定键）、`rule_id`（展示编号）、`text`、`constraints`、
 `source`（文档/章节/原文引用）、`authority`（`A`/`B`）和 `fingerprint`。
@@ -1861,9 +1866,9 @@ python -m uvicorn app:app --host 127.0.0.1 --port 8030
 
 ### 18.2 出现 `openapi_missing`
 
-没有传入 `--openapi`，项目内也没有自动发现到 OpenAPI。业务规则和业务用例仍可生成，
-但不会生成 CR 契约规则，字段格式/必填类用例也会缺失。需要契约时补 `--openapi`，
-或把契约文件放到自动发现路径。
+没有传入 `--openapi`，项目内也没有自动发现到 OpenAPI。Spring MVC、gRPC descriptor
+与 Dubbo 接口仍会被扫描。若最终 CR 仍为空，查看 `context.json.contract_model.sources`
+和 `contract_model.gaps`；只有所有契约源都缺失或均无法静态证明字段时才会出现该情况。
 
 ### 18.3 规则校验报 `quote` 不匹配
 

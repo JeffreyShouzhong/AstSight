@@ -18,7 +18,8 @@
 
 ## 当前能力（已交付）
 
-- 需求/设计文档 + OpenAPI → 业务规则（BR）+ 契约规则（CR）
+- 需求/设计文档 + ContractModel（OpenAPI / Spring MVC / gRPC descriptor / Dubbo 2.7+）
+  → 业务规则（BR）+ 能力子集内契约规则（CR）；不可证明字段显式进入 `contract_gaps`
 - 规则 + 接口画像 + Mock 语义 + 数据目录 → 可校验的用例草案
 - 人工审核 + 版本化用例库（`TC-NNNN` 永不复用）
 - 多请求用例（`steps[]` 顺序请求与跨步骤引用）
@@ -124,6 +125,10 @@ README 首页现在直接对比“pytest + 一个 LLM”和 AstSight 在门禁�
 - confluent-kafka、aio-pika、kombu/Celery、Node/.NET MQ 拦截
 - RocketMQ 批量发送拦截；RabbitMQ/RocketMQ 连接级 Mock
 - 注册中心选 provider（Dubbo 只支持直连目标解析）
+- 多协议覆盖策略（M2.8）：仅有字段占位，alias 冒烟、`--transport-scope`、
+  `transport_coverage` 不排期
+- 跨 transport 回退（M2.7）：`transport_fallback` 不实现
+- C7.1 数据冲突检测与 C7.2 并行调度：当前全量串行执行，不做冲突图与并行分组
 
 ## 参与方式
 

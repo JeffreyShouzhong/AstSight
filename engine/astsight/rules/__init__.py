@@ -1,6 +1,11 @@
 """C1/A1 规则层：上下文、草案校验、规则库、diff 与覆盖。"""
 from .conflicts import detect_constraint_conflicts
 from .contract import build_contract_rules
+from .contract_model import (
+    ContractModel,
+    build_contract_model,
+    contract_rules_from_model,
+)
 from .context import (
     DEFAULT_RULES_OUT,
     RULES_CONTEXT_SCHEMA_VERSION,
@@ -53,6 +58,7 @@ __all__ = [
     "DraftQuestion",
     "DraftRule",
     "DraftRuleSource",
+    "ContractModel",
     "PreparedRulesContext",
     "RULES_CONTEXT_SCHEMA_VERSION",
     "RULES_PROMPT_VERSION",
@@ -65,10 +71,12 @@ __all__ = [
     "RuleStoreError",
     "RuleValidation",
     "build_contract_rules",
+    "build_contract_model",
     "build_rule_set",
     "build_rules_context",
     "context_sections",
     "contract_rule_key",
+    "contract_rules_from_model",
     "detect_constraint_conflicts",
     "diff_rules",
     "drift_summary",

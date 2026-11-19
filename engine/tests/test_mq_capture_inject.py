@@ -1,6 +1,7 @@
 """Python SUT 的 MQ 采集注入环境。"""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from astsight.agent.sut import _is_python_command, _mq_capture_env
@@ -31,7 +32,9 @@ def test_python_sut_gets_mq_capture_env() -> None:
     assert env["ASTSIGHT_MQ_ADMIN_URL"] == "http://127.0.0.1:9000"
     assert env["ASTSIGHT_MQ_TOKEN"] == "secret"
     assert env["ASTSIGHT_MQ_SUT_ID"] == "sut-py"
-    assert env["PYTHONPATH"].endswith("astsight" + str(Path("/mq/inject")))
+    injected = Path(env["PYTHONPATH"].split(os.pathsep, 1)[0])
+    assert injected.name == "inject"
+    assert injected.parent.name == "mq"
     assert "PYTHONPATH" in keys
 
 

@@ -231,6 +231,21 @@ def render_rule_set_markdown(ruleset: RuleSet, *, title: str | None = None) -> s
         ["隐含假设", str(len(assumptions))],
         ["待确认问题", str(len(ruleset.questions))],
     ]
+    for source_kind in sorted(
+        {rule.source_kind for rule in ruleset.contract_rules}
+    ):
+        stat_rows.append(
+            [
+                f"CR 来源 · {source_kind}",
+                str(
+                    sum(
+                        1
+                        for rule in ruleset.contract_rules
+                        if rule.source_kind == source_kind
+                    )
+                ),
+            ]
+        )
     lines.extend(_table(["项", "数量"], stat_rows))
     lines.append("")
 
@@ -289,6 +304,35 @@ def render_rule_set_markdown(ruleset: RuleSet, *, title: str | None = None) -> s
             ],
             relation_rows,
             empty_text="未抽取结构化关系。",
+        )
+    )
+    lines.append("")
+
+    contract_rows = [
+        [
+            rule.rule_id or rule.rule_key,
+            rule.source_kind,
+            _cell(rule.endpoint, 100),
+            _cell(rule.field, 100),
+            _cell(rule.constraint, 220),
+            str(len(rule.support)),
+            _cell(
+                ", ".join(
+                    f"{item.get('source_kind')}"
+                    for item in rule.support
+                ),
+                100,
+            ),
+        ]
+        for rule in ruleset.contract_rules
+    ]
+    lines.append("## 2.2 契约规则（CR）")
+    lines.append("")
+    lines.extend(
+        _table(
+            ["编号", "主来源", "端点", "字段", "约束", "证据数", "支持来源"],
+            contract_rows,
+            empty_text="未从可用契约源提取到 CR。",
         )
     )
     lines.append("")

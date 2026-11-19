@@ -64,7 +64,7 @@ def generate_rule_draft(
                 "questions 填 source 与 related_rule_ids",
                 "questions/gaps/conflicts 是本次抽取的完整结果，不沿用上一版",
                 "gaps 每项必须包含 reason",
-                "不要输出 ContractRule；CR 规则由框架从 OpenAPI 确定性生成",
+                "不要输出 ContractRule；CR 规则由框架从 ContractModel 的各源能力子集确定性生成",
             ],
         },
         ensure_ascii=False,

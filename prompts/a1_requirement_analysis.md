@@ -1,7 +1,7 @@
 # A1 需求规则分析 · 主提示词
 
 > v6（2026-11-04）。本提示词驱动 A1 中唯一的 LLM 节点：从需求/设计文档抽取业务规则，并做**单规则**层的文本可测性审查。  
-> 契约规则（CR）不在这里生成：框架会从 OpenAPI 确定性提取。  
+> 契约规则（CR）不在这里生成：框架会从 ContractModel 的各源能力子集确定性提取。
 > `output_mode` 只切换输出后端，判据、检查步骤与铁律在两种模式下完全一致。  
 > **全量跨规则扫描不在本提示词的职责内**：它由 `a1b_rule_consistency_scan.md` 在独立调用中完成。  
 > 原因：本提示词手里有原文，模型容易用原文把矛盾「解释掉」；全量两两扫描必须在没有原文的视角下做。  
@@ -35,7 +35,9 @@
     这些内容只用于理解上下文，**不得作为规则的 `source`**；框架会拒绝引用。
     其中**术语定义 / 枚举说明**（如「名词解释」「术语表」）必须先读并用于消歧；
     它们仍不能作为 `source`，但可以在 `reasoning` 中引用章节号。
-- `context.operations[]`：OpenAPI operation 摘要（仅供参考字段/接口定位）；
+- `context.contract_model.operations[]`：统一契约端点/字段/来源摘要；
+  `context.operations[]` 是兼容保留的 OpenAPI operation 摘要；
+  `contract_model.gaps` 表示静态源码无法证明的字段或运行时语义，不得自行补成事实；
 - `schema`：输出的 JSON Schema。以 schema 为准；
 - `output_mode`：`json`（默认，供框架消费）或 `md`（供人工评审）。
 
@@ -625,7 +627,8 @@ md 模式下，`source.quote` 的逐字校验没有框架兜底，所以每一�
 ## 铁律
 
 1. 只输出约定的格式：`json` 模式输出单个 JSON object，`md` 模式输出五段表格。
-2. 不输出 CR 规则；不引用 OpenAPI 之外的接口作为规则来源。
+2. 不输出 CR 规则；只引用 `contract_model.operations[]` 中已有证据的接口和字段，
+   不把 `contract_model.gaps` 自行补成事实。
 3. 不编造 section、quote、字段、错误码或数值。
 4. 规则中的值必须能在 `source.quote` 中逐字找到；找不到就放进 `questions`/`gaps`。
 5. 不把 `inferred` 冒充 `explicit`。

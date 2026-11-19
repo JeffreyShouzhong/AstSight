@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +80,9 @@ class LanguageRoute:
     framework: str
     confidence: str = "verified"
     note: str = ""
+    parameters: list[dict[str, Any]] = field(default_factory=list)
+    response_type: str = ""
+    contract_gaps: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +98,9 @@ class LanguageRoute:
             "confidence": self.confidence,
             "framework": self.framework,
             "note": self.note,
+            "parameters": [dict(item) for item in self.parameters],
+            "response_type": self.response_type,
+            "contract_gaps": [dict(item) for item in self.contract_gaps],
         }
 
 
@@ -340,6 +346,258 @@ def _spring_methods(annotation: str) -> list[str]:
     return []
 
 
+_JAVA_OPENAPI_TYPES = {
+    "String": "string",
+    "CharSequence": "string",
+    "boolean": "boolean",
+    "Boolean": "boolean",
+    "byte": "integer",
+    "Byte": "integer",
+    "short": "integer",
+    "Short": "integer",
+    "int": "integer",
+    "Integer": "integer",
+    "long": "integer",
+    "Long": "integer",
+    "BigInteger": "integer",
+    "float": "number",
+    "Float": "number",
+    "double": "number",
+    "Double": "number",
+    "BigDecimal": "number",
+    "List": "array",
+    "Set": "array",
+    "Collection": "array",
+    "Map": "object",
+}
+_SPRING_BINDING_ANNOTATIONS = {
+    "PathVariable": "path",
+    "RequestParam": "query",
+    "RequestBody": "body",
+    "RequestHeader": "header",
+    "CookieValue": "cookie",
+}
+_SPRING_REQUIRED_ANNOTATIONS = {
+    "NotNull",
+    "NotBlank",
+    "NotEmpty",
+    "Size",
+    "Min",
+    "Max",
+    "Positive",
+    "PositiveOrZero",
+    "Negative",
+    "NegativeOrZero",
+    "Pattern",
+    "Email",
+}
+
+
+def _strip_java_annotations(text: str) -> str:
+    return re.sub(r"@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?", " ", text)
+
+
+def _split_top_level(text: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(text):
+        if char in "<([{":
+            depth += 1
+        elif char in ">)]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    tail = text[start:]
+    if tail.strip():
+        parts.append(tail)
+    return parts
+
+
+def _java_openapi_type(type_text: str) -> str:
+    base = re.sub(r"<.*>", "", str(type_text or "")).strip()
+    base = base.rsplit(".", 1)[-1]
+    return _JAVA_OPENAPI_TYPES.get(base, "object")
+
+
+def _annotation_value(annotation: str) -> str:
+    match = re.search(r"(['\"])([^'\"]+)\1", annotation)
+    return match.group(2) if match else ""
+
+
+def _annotation_constraints(annotations: list[str]) -> tuple[dict[str, Any], bool]:
+    constraints: dict[str, Any] = {}
+    required = False
+    for annotation in annotations:
+        name_match = re.match(r"@(?:[\w.]+\.)?(\w+)", annotation)
+        if not name_match:
+            continue
+        name = name_match.group(1)
+        args = annotation[annotation.find("(") + 1 : annotation.rfind(")")] if "(" in annotation else ""
+        if name in {"NotNull", "NotBlank", "NotEmpty"}:
+            required = True
+        elif name == "Min":
+            value = _named_or_first(args, "value")
+            if value:
+                constraints["minimum"] = _numeric_literal(value)
+        elif name == "Max":
+            value = _named_or_first(args, "value")
+            if value:
+                constraints["maximum"] = _numeric_literal(value)
+        elif name == "Size":
+            low = _named_or_first(args, "min")
+            high = _named_or_first(args, "max")
+            if low and _numeric_literal(low) > 0:
+                constraints["minLength"] = _numeric_literal(low)
+            if high and _numeric_literal(high) >= 0:
+                constraints["maxLength"] = _numeric_literal(high)
+        elif name == "Pattern":
+            value = _named_or_first(args, "regexp")
+            if value:
+                constraints["pattern"] = value
+        elif name == "Email":
+            constraints["format"] = "email"
+        elif name in {"Positive", "PositiveOrZero", "Negative", "NegativeOrZero"}:
+            if name == "Positive":
+                constraints["exclusiveMinimum"] = 0
+            elif name == "PositiveOrZero":
+                constraints["minimum"] = 0
+            elif name == "Negative":
+                constraints["exclusiveMaximum"] = 0
+            else:
+                constraints["maximum"] = 0
+    return constraints, required
+
+
+def _named_or_first(args: str, name: str) -> str:
+    match = re.search(
+        rf"\b{re.escape(name)}\s*=\s*(['\"]?)([^,'\")]+)\1",
+        args,
+    )
+    if match:
+        return match.group(2).strip()
+    first = args.split(",", 1)[0].strip()
+    if "=" in first:
+        return ""
+    return first.strip("'\"")
+
+
+def _numeric_literal(value: str) -> int | float | str:
+    try:
+        number = float(value.rstrip("LlfFdD"))
+    except ValueError:
+        return value
+    return int(number) if number.is_integer() else number
+
+
+def _spring_parameter(segment: str) -> tuple[dict[str, Any] | None, str]:
+    annotations = re.findall(
+        r"@[\w.]+(?:\s*\((?:[^()]|\([^()]*\))*\))?",
+        segment,
+    )
+    cleaned = _strip_java_annotations(segment).strip()
+    parts = cleaned.rsplit(None, 1)
+    if len(parts) != 2:
+        return None, ""
+    type_text, name = parts
+    location = ""
+    binding_arg = ""
+    required: bool | None = None
+    for annotation in annotations:
+        match = re.match(r"@(?:[\w.]+\.)?(\w+)", annotation)
+        if not match:
+            continue
+        annotation_name = match.group(1)
+        if annotation_name in _SPRING_BINDING_ANNOTATIONS:
+            location = _SPRING_BINDING_ANNOTATIONS[annotation_name]
+            binding_arg = annotation
+            break
+    if not location:
+        return None, name if annotations else "spring_parameter_binding_unverified"
+    explicit_name = _named_or_first(
+        binding_arg[binding_arg.find("(") + 1 : binding_arg.rfind(")")]
+        if "(" in binding_arg
+        else "",
+        "value",
+    )
+    if not explicit_name:
+        explicit_name = _named_or_first(
+            binding_arg[binding_arg.find("(") + 1 : binding_arg.rfind(")")]
+            if "(" in binding_arg
+            else "",
+            "name",
+        )
+    required_match = re.search(r"\brequired\s*=\s*(true|false)\b", binding_arg)
+    if required_match:
+        required = required_match.group(1) == "true"
+    default_match = re.search(r"\bdefaultValue\s*=", binding_arg)
+    constraints, validation_required = _annotation_constraints(annotations)
+    if required is None:
+        required = location in {"path", "body"} or (
+            location == "query" and default_match is None
+        )
+    if validation_required:
+        required = True
+    return (
+        {
+            "name": explicit_name or name,
+            "in": location,
+            "type": _java_openapi_type(type_text),
+            "java_type": type_text.strip(),
+            "required": bool(required),
+            "constraints": constraints,
+        },
+        "",
+    )
+
+
+def _spring_signature(
+    region: str,
+    handler_match: re.Match[str],
+) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]]]:
+    signature = handler_match.group(0)
+    body = signature.find("{")
+    head = signature[:body] if body >= 0 else signature
+    open_paren = head.find("(")
+    if open_paren < 0:
+        return [], "", [{"code": "spring_signature_unparsed", "detail": head[:200]}]
+    depth = 0
+    close_paren = -1
+    for index in range(open_paren, len(head)):
+        if head[index] == "(":
+            depth += 1
+        elif head[index] == ")":
+            depth -= 1
+            if depth == 0:
+                close_paren = index
+                break
+    if close_paren < 0:
+        return [], "", [{"code": "spring_signature_unparsed", "detail": head[:200]}]
+    params_text = head[open_paren + 1 : close_paren]
+    params: list[dict[str, Any]] = []
+    gaps: list[dict[str, Any]] = []
+    for segment in _split_top_level(params_text):
+        if not segment.strip():
+            continue
+        parameter, gap = _spring_parameter(segment)
+        if parameter is not None:
+            params.append(parameter)
+        if gap:
+            if gap.startswith("spring_"):
+                gaps.append({"code": gap, "detail": segment.strip()[:300]})
+    before = _strip_java_annotations(head[:open_paren]).strip()
+    before = re.sub(
+        r"\b(?:public|protected|private|static|final|abstract|synchronized|default)\b",
+        " ",
+        before,
+    )
+    before = re.sub(r"\s+", " ", before).strip()
+    tokens = before.split()
+    response_type = " ".join(tokens[:-1]) if len(tokens) >= 2 else ""
+    return params, response_type, gaps
+
+
 def _java_routes(text: str, rel: str) -> list[LanguageRoute]:
     routes: list[LanguageRoute] = []
     for class_match in _JAVA_CLASS.finditer(text):
@@ -379,6 +637,10 @@ def _java_routes(text: str, rel: str) -> list[LanguageRoute]:
                 continue
             handler = handler_match.group(1)
             line = _line_of(text, body_start + method_start + handler_match.start())
+            parameters, response_type, contract_gaps = _spring_signature(
+                region,
+                handler_match,
+            )
             for method in methods.split("|"):
                 if method not in _HTTP_METHODS:
                     continue
@@ -393,6 +655,9 @@ def _java_routes(text: str, rel: str) -> list[LanguageRoute]:
                         framework="spring",
                         confidence="verified" if path or prefix else "inferred",
                         note="" if path else "class_prefix_only",
+                        parameters=parameters,
+                        response_type=response_type,
+                        contract_gaps=contract_gaps,
                     )
                 )
     return routes

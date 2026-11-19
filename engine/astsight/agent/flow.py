@@ -613,15 +613,15 @@ def run_flow(
     try:
         # ── 1. 路由 + 变更范围 ────────────────────────────────
         # 契约不是流程前置条件：需求先产出规则，接口事实从代码路由补；
-        # 有 OpenAPI 才额外获得字段/必填/枚举/错误码等契约事实。
+        # 有 OpenAPI 时额外获得其契约字段；C1 还会扫描 Spring/gRPC/Dubbo 契约源。
         openapi_source = discover_openapi(project, config.openapi, None)
         operations: list[Any] = []
         if openapi_source:
             operations = parse_operations(load_spec(openapi_source))
         else:
             result.warnings.append(
-                "openapi_missing: 未提供/未发现 OpenAPI；本轮只使用代码路由构建画像，"
-                "CR 契约规则为空，字段格式类用例无法生成"
+                "openapi_missing: 未提供/未发现 OpenAPI；画像只使用代码路由。"
+                "C1 仍会扫描 Spring/gRPC/Dubbo 契约源，无法证明的字段进入 contract_gaps"
             )
 
         routes, route_audit, graph_client, graph_notes = inventory_routes(

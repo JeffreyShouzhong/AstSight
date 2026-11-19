@@ -13,6 +13,7 @@ from contracts import (
     Rule,
     RuleAuthority,
     RuleConflict,
+    RuleGap,
     RuleSet,
     RuleStatus,
 )
@@ -30,6 +31,12 @@ SUPPORTED_RULESET_SCHEMA = 2
 MAX_RULESET_BYTES = 20 * 1024 * 1024
 _KEY_RE = re.compile(r"^RK-[0-9a-f]{12}$")
 _RULE_ID_RE = re.compile(r"^(BR|CR)-\d{2,}$")
+_CONTRACT_SOURCE_KINDS = {
+    "openapi",
+    "spring_mvc",
+    "grpc_descriptor",
+    "dubbo_interface",
+}
 
 
 class RuleStoreError(RuntimeError):
@@ -191,6 +198,37 @@ def validate_rule_set(ruleset: RuleSet) -> list[str]:
             errors.append(f"{where}: CR authority 必须是 A")
         if not rule.endpoint:
             errors.append(f"{where}: endpoint 为空")
+        if rule.source_kind not in _CONTRACT_SOURCE_KINDS:
+            errors.append(
+                f"{where}: 非法 source_kind {rule.source_kind!r}"
+            )
+        if rule.source is None:
+            errors.append(f"{where}: 缺少 source")
+        if not rule.support:
+            if rule.source is not None:
+                # 兼容 v4.94 及更早的规则库：旧 CR 只有一个 RuleSource。
+                rule.support = [
+                    {
+                        "source_kind": rule.source_kind,
+                        "source_refs": [
+                            {
+                                "path": rule.source.doc,
+                                "line": 0,
+                                "symbol": rule.endpoint,
+                                "version": rule.source.version or "",
+                            }
+                        ],
+                    }
+                ]
+            else:
+                errors.append(f"{where}: 缺少跨源 support 证据")
+        for support_index, support in enumerate(rule.support):
+            support_kind = str((support or {}).get("source_kind") or "")
+            if support_kind not in _CONTRACT_SOURCE_KINDS:
+                errors.append(
+                    f"{where}.support[{support_index}]: "
+                    f"非法 source_kind {support_kind!r}"
+                )
 
     known = {rule.rule_key for rule in ruleset.all_rules()}
     for index, conflict in enumerate(ruleset.conflicts):
@@ -274,6 +312,81 @@ def _merge_severity(first, second):
     ) else second
 
 
+def _contract_rule_gaps(context: dict[str, Any]) -> list[RuleGap]:
+    payload = (context.get("contract_model") or {}).get("gaps") or []
+    result: list[RuleGap] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "contract_gap")
+        endpoint = str(item.get("endpoint") or "")
+        field_name = str(item.get("field") or "")
+        detail = str(item.get("detail") or "")
+        source_kind = str(item.get("source_kind") or "")
+        path = str(item.get("path") or "")
+        line = int(item.get("line") or 0)
+        result.append(
+            RuleGap(
+                kind="contract",
+                desc=(
+                    f"{source_kind}:{code}"
+                    + (f" field={field_name}" if field_name else "")
+                    + (f" @ {path}:{line}" if path else "")
+                )[:1_000],
+                reason=(detail or "契约源无法静态证明该字段或运行时语义")[:1_000],
+                related_interfaces=[endpoint] if endpoint else [],
+            )
+        )
+    result.sort(
+        key=lambda item: (
+            item.kind,
+            item.desc,
+            item.reason,
+            tuple(item.related_interfaces),
+        )
+    )
+    return result
+
+
+def _contract_rule_conflicts(
+    contract_rules: Iterable[ContractRule],
+) -> list[RuleConflict]:
+    grouped: dict[tuple[str, str, str], list[ContractRule]] = {}
+    for rule in contract_rules:
+        key = (rule.transport.value, rule.endpoint, rule.field)
+        grouped.setdefault(key, []).append(rule)
+    result: list[RuleConflict] = []
+    for (transport, endpoint, field_name), rules in sorted(grouped.items()):
+        constraints = {rule.constraint for rule in rules}
+        if len(constraints) <= 1:
+            continue
+        docs = sorted(
+            {
+                rule.source.doc
+                for rule in rules
+                if rule.source is not None and rule.source.doc
+            }
+        )
+        support_text = "; ".join(
+            f"{rule.source_kind}={rule.constraint}" for rule in rules
+        )
+        result.append(
+            RuleConflict(
+                topic=f"{transport} {endpoint}#{field_name}",
+                kind="value",
+                severity="silent",
+                rule_keys=[rule.rule_key for rule in rules],
+                docs=docs,
+                origin="framework",
+                reason=(
+                    "跨契约源约束不一致，未自动择一："
+                    f"{support_text}"
+                )[:2_000],
+            )
+        )
+    return result
+
+
 def _merge_conflicts(
     incoming: list[RuleConflict],
     known_keys: set[str],
@@ -319,6 +432,12 @@ def import_rule_draft(
     allow_errors: bool = False,
 ) -> RuleImportResult:
     validation = validate_rule_draft(draft, context)
+    contract_gaps = _contract_rule_gaps(context)
+    if contract_gaps:
+        validation.gaps.extend(contract_gaps)
+        validation.warnings.append(
+            f"contract_gaps: {len(contract_gaps)} 个字段/运行时语义未进入 CR"
+        )
     if validation.errors and not allow_errors:
         ruleset = build_rule_set(
             project=project,
@@ -340,12 +459,19 @@ def import_rule_draft(
         source = str((context.get("openapi") or {}).get("source") or "openapi")
         version = str((context.get("openapi") or {}).get("sha256") or "") or None
         contract_rules = build_contract_rules(
-            context.get("operations") or [], source=source, source_version=version
+            context.get("operations") or [],
+            source=source,
+            source_version=version,
+            contract_model=context.get("contract_model"),
         )
     contract_list = list(contract_rules)
 
     merged_conflicts = _merge_conflicts(
-        [*validation.conflicts, *validation.framework_conflicts],
+        [
+            *validation.conflicts,
+            *validation.framework_conflicts,
+            *_contract_rule_conflicts(contract_list),
+        ],
         {rule.rule_key for rule in [*validation.rules, *contract_list]},
     )
     version = (previous.version if previous else 0) + 1

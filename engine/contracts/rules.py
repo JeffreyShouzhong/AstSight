@@ -1,7 +1,7 @@
 """规则库契约（C1/A1）。
 
 规则是设计期资产：A1 只抽取业务规则（BR），契约规则（CR）由框架从
-OpenAPI/画像确定性提取。`rule_key` 与 fingerprint 都由框架计算，不能信任模型。
+统一 ContractModel 确定性提取。`rule_key` 与 fingerprint 都由框架计算，不能信任模型。
 """
 from __future__ import annotations
 
@@ -196,17 +196,28 @@ class Rule(BaseModel):
 
 
 class ContractRule(BaseModel):
-    """一条契约规则（CR），由 OpenAPI/画像确定性提取。"""
+    """一条契约规则（CR），由统一 ContractModel 确定性提取。"""
 
     model_config = ConfigDict(extra="forbid")
 
     rule_key: str = Field(default="")
     rule_id: str = Field(default="")
     transport: Transport = Field(default=Transport.HTTP)
-    endpoint: str = Field(description="METHOD /path")
+    endpoint: str = Field(
+        description="HTTP: METHOD /path；gRPC: grpc:/service/method；Dubbo: dubbo:..."
+    )
     field: str = Field(default="", max_length=200)
     constraint: str = Field(min_length=1, max_length=1_000)
     source: RuleSource | None = Field(default=None)
+    source_kind: str = Field(
+        default="openapi",
+        description="openapi / spring_mvc / grpc_descriptor / dubbo_interface",
+    )
+    support: list[dict[str, Any]] = Field(
+        default_factory=list,
+        max_length=20,
+        description="跨源合并后的全部来源证据；source 保留主来源以兼容旧消费者",
+    )
     authority: RuleAuthority = Field(default=RuleAuthority.A)
     status: RuleStatus = Field(default=RuleStatus.ACTIVE)
 
