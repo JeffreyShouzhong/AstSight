@@ -64,6 +64,7 @@ from .mock.semantic import (
     validate_mock_semantic,
 )
 from .persistence import load_json, save_json_atomic
+from .feedback import collect_feedback, open_issue
 from .pipeline import RunConfig, run
 from .profile import build_plan_from_profiles, build_profiles, load_spec, parse_operations
 from .rules import (
@@ -718,6 +719,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="gRPC 下游 Mock 使用的 gripmock 可执行文件",
     )
     agent_run.add_argument("--json", action="store_true")
+
+    feedback_parser = sub.add_parser(
+        "feedback", help="本地诊断包与 GitHub Issue 反馈（默认脱敏、不自动上传）"
+    )
+    feedback_sub = feedback_parser.add_subparsers(
+        dest="feedback_command", required=True
+    )
+    feedback_collect = feedback_sub.add_parser(
+        "collect", help="从 run 目录生成脱敏诊断包 zip"
+    )
+    feedback_collect.add_argument("--run", required=True, help="run 目录")
+    feedback_collect.add_argument(
+        "--out", default=None, help="输出 zip 路径；默认 <run>/feedback.zip"
+    )
+    feedback_collect.add_argument(
+        "--no-case-code", action="store_true", help="不包含失败用例代码"
+    )
+    feedback_collect.add_argument(
+        "--max-bytes", type=int, default=10 * 1024 * 1024
+    )
+    feedback_collect.add_argument(
+        "--dry-run", action="store_true", help="只列出将包含的文件，不写 zip"
+    )
+    feedback_collect.add_argument("--json", action="store_true")
+
+    feedback_open = feedback_sub.add_parser(
+        "open", help="生成 issue.md 与 GitHub new-issue 链接"
+    )
+    feedback_open.add_argument("--run", required=True, help="run 目录")
+    feedback_open.add_argument(
+        "--repo", default=None, help="owner/repo；默认读 ASTSIGHT_REPO 或 git remote"
+    )
+    feedback_open.add_argument(
+        "--out", default=None, help="issue.md 路径；默认 <run>/issue.md"
+    )
+    feedback_open.add_argument(
+        "--bundle", default="feedback.zip", help="issue 中引用的附件名"
+    )
+    feedback_open.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -2174,8 +2215,69 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "agent":
         if args.agent_command == "run":
             return _agent_command(args)
+    if args.command == "feedback":
+        if args.feedback_command == "collect":
+            return _feedback_collect(args)
+        if args.feedback_command == "open":
+            return _feedback_open(args)
     parser.print_help()
     return 2
+
+
+def _feedback_collect(args) -> int:
+    try:
+        result = collect_feedback(
+            args.run,
+            args.out,
+            include_case_code=not args.no_case_code,
+            max_bytes=args.max_bytes,
+            dry_run=args.dry_run,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    if result.get("dry_run"):
+        print(
+            f"诊断包预览（未写文件）：{len(result['files'])} 个文件，"
+            f"约 {result['size']} 字节"
+        )
+        for item in result["files"]:
+            print(f"  - {item['name']} ({item['bytes']} bytes)")
+    else:
+        print(f"已生成诊断包: {result['path']}")
+        print(f"文件 {len(result['files'])} 个，约 {result['size']} 字节")
+    if result.get("truncated"):
+        print("因大小限制未包含: " + ", ".join(result["truncated"]))
+    if not result.get("dry_run"):
+        print("诊断包已在本地脱敏；提交前请自行检查。")
+        print(f"下一步: astsight feedback open --run {args.run}")
+    return 0
+
+
+def _feedback_open(args) -> int:
+    try:
+        result = open_issue(
+            args.run,
+            repo=args.repo,
+            out=args.out,
+            bundle=args.bundle,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    print(f"已生成 issue 草稿: {result['issue_md']}")
+    print(f"仓库: {result['repo']}")
+    print(f"提交页: {result['url']}")
+    if result.get("truncated_url"):
+        print("提示: URL 中的正文已截断，完整内容见 issue.md。")
+    print(f"请先执行 feedback collect，再把 {result['bundle']} 拖入 issue。")
+    return 0
 
 
 def _codegraph_install(args) -> int:

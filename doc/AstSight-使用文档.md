@@ -1817,6 +1817,31 @@ Mock 未命中的用例，`mock_sessions` 记录逐用例会话证据（详见
 
 ---
 
+## 16.1 本地诊断包与反馈
+
+遇到疑似框架自身的问题时，可以用反馈命令从本次运行产物生成脱敏诊断包：
+
+```bash
+# 预览将包含哪些文件，不写盘
+PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id> --dry-run
+
+# 生成 feedback.zip（默认输出到 run 目录）
+PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id>
+
+# 生成 issue 草稿与 GitHub 提交链接
+PYTHONPATH=. python -m astsight feedback open \
+  --run .astsight/runs/<run_id> --repo JeffreyShouzhong/AstSight
+```
+
+- 诊断包包含脱敏后的 `report.json`、`execution.json`、`mock_evidence.json`、
+  失败用例快照与代码（可用 `--no-case-code` 关闭），以及人读的 `summary.md`。
+- 默认脱敏：敏感键名、认证头、query 值、邮箱/手机号/身份证、绝对路径不会原样包含；
+  提交前仍建议自己检查一遍。
+- **不自动上传**，不依赖服务端。生成的 `feedback.zip` 由你自行附加到 GitHub Issue。
+- `feedback open` 会写 `issue.md` 并打印提交链接；可用 `ASTSIGHT_REPO` 或 `--repo`
+  指定仓库。
+- 只收集运行产物，不收集被测系统源码。
+
 ## 17. 示例项目
 
 | 目录 | 用途 |
@@ -1958,6 +1983,8 @@ Git Bash 会把以 `/` 开头的参数改写成 Windows 路径。建议传完整
 - C5 造数支持 SQLite/PostgreSQL/MySQL，但只覆盖用例级 fixture apply/teardown；
   不负责建库、迁移、连接池与跨库事务。
 - `replay` 模式明确不实现。
+- 历史缺陷案例库的自动入库与服务端汇聚未实现；当前使用 `feedback collect` 生成本地
+  诊断包，再由使用者自行提交 GitHub Issue。
 - HTTP / Dubbo / gRPC 下游 Mock 已统一到同一控制面；streaming、reflection、
   Triple streaming 明确不支持。
 - 多 SUT 并发隔离（设计保留）明确不排期。
@@ -2061,6 +2088,12 @@ PYTHONPATH=. python -m astsight agent run \
   --requirements $PROJECT/docs/requirements.md \
   --openapi $PROJECT/openapi.json \
   --mode full --approve-as <reviewer>
+
+# 反馈诊断包
+PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id> --dry-run
+PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id>
+PYTHONPATH=. python -m astsight feedback open --run .astsight/runs/<run_id> \
+  --repo JeffreyShouzhong/AstSight
 
 # 示例
 python examples/demo_delta.py
