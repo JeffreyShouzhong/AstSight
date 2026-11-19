@@ -51,15 +51,15 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、Open
 | 人工审核与版本化 | 提案逐条审批，`TC-NNNN` 编号永不复用，旧版本进入 history |
 | 多请求用例 | `steps[]` 顺序请求与跨步骤引用，覆盖频控、验证码、幂等重试 |
 | Mock 与造数 | 用例实体 `data` 驱动：本服务插表造数（含关联表），下游 Mock 返回同一实体；支持 HTTP/Dubbo/gRPC 下游，不调接口造数；Kafka 生产者侧消息拦截，不连 broker |
-| MQ 消息断言 | Java agent 截获 Kafka/RabbitMQ/RocketMQ 生产者消息；Python SUT 通过 sitecustomize 拦截 kafka-python/pika；不真正发送，断言 topic/key/headers/payload/条数 |
+| MQ 消息断言 | Java agent 截获 Kafka/RabbitMQ/RocketMQ 生产者消息；Python SUT 通过 sitecustomize 拦截 kafka-python/pika；不真正发送，断言 topic/key/headers/payload/条数；topic 支持字面量、常量与 Spring `@Value`/配置键解析 |
 | 多语言下游契约 | Java/Go/Node 出站调用点识别；Java 可读 pom/gradle 与本地 jar，提取 DTO 字段和泛型签名，识别 Feign 调用并解析响应契约 |
 | 三种运行范围 | `full` 建基线、`delta` 按代码变更重判、`cases` 只执行已批准用例 |
-| 变更感知 | 代码 diff、route-level 删除接口、HTTP/gRPC/Dubbo 契约 diff（参数/字段/方法/枚举/streaming） |
+| 变更感知 | 代码 diff、route-level 删除接口（对应用例自动逻辑删除）、HTTP/gRPC/Dubbo 契约 diff（参数/字段/方法/枚举/streaming） |
 | 证据化报告 | 通过/失败之外，未映射范围、未执行用例、待审提案、规则漂移单列 |
 
 ## 环境要求
 
-- Python 3.11 及以上（仓库最近在 3.13 验证）。
+- Python 3.11 及以上（CI 使用 3.12；本地最近在 3.13 验证）。
 - 目标运行环境为 Linux（服务器 / CI）；Windows 可用于本地调试。
 - 被测服务（SUT）需要可访问的 HTTP 地址；不提供时只生成、不执行。
 - 非 Python 项目需要 CodeGraph（Node >= 22.5，可选）。

@@ -29,9 +29,14 @@
 - A5/A6 合并诊断修复：默认最多 3 轮，可改用例请求/断言/绑定与实际使用的 Mock 分支，
   断言不得删除或降强，Mock 修复热更新到运行中的服务
 - 三种运行范围：`full` / `delta` / `cases`
+- SUT 生产者消息拦截：Java Kafka/RabbitMQ/RocketMQ、Python kafka-python/pika
+- delta 删除接口检测，并把指向该接口的已批准用例自动逻辑删除
+- Linux CI：默认套件、平台 wheel、真实后端 e2e 与 JDK/客户端矩阵
 - 证据化报告（未映射范围、未执行用例、待审提案、规则漂移单列）
 
-## 短期（近期迭代）
+## 能力现状与质量方向（当前不排期）
+
+> 待办已收敛，当前没有排期中的短期项；以下保留为能力说明与后续质量方向。
 
 ### 1. 断言强度：从“显式关系”到“规则自动推导”
 
@@ -43,8 +48,8 @@
 受控运算已扩展到 `avg/min/max/count_distinct/pluck`，并配有 20 条标注评估集与
 `tools/eval_relation_extraction.py`，覆盖条件公式、百分比、混合运算与跨步骤/请求
 混合；v10 基线 14/14 严格命中、P/R/expression_accuracy 均为 1.00。
-**下一步**：评估操作数顺序与更长的多条件公式，决定哪些公式值得进入规则层，
-哪些只能落成 gap；同时评估是否需要新增“上一个动作的请求字段”节点。
+**质量方向（不排期）**：评估操作数顺序与更长的多条件公式，决定哪些公式值得
+进入规则层，哪些只能落成 gap；同时评估是否需要新增“上一个动作的请求字段”节点。
 这是“AI 测试能顶事”最关键的一步——只有 L1 时，框架只能判断“接口有没有按契约返回”，判断不了“业务对不对”。
 
 ### 2. 造数深度：方言已通，下一步反射与跨库 schema
@@ -75,7 +80,7 @@ RocketMQ（消息不真正发送），并有真实客户端无 broker e2e；Pyth
 kafka-python 与 pika，confluent-kafka/aio-pika/kombu 和 Go/Node/.NET 暂不支持。
 生产启动阶段仍可能需要中间件连接。引擎只做单线程顺序执行，不测试 SUT 的
 多线程/并发行为。
-真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务判断仍回需求原文”。
+真实后端几乎不用 SQLite；当前口径仍是“结构自动、语义半自动、业务判断回需求原文”。
 
 ### 3. 文档差异化定位落到门面（已完成）
 
@@ -117,6 +122,8 @@ README 首页现在直接对比“pytest + 一个 LLM”和 AstSight 在门禁�
 - 变异测试
 - 异步多行/多表分组轮询；pika BlockingChannel 专项 e2e
 - confluent-kafka、aio-pika、kombu/Celery、Node/.NET MQ 拦截
+- RocketMQ 批量发送拦截；RabbitMQ/RocketMQ 连接级 Mock
+- 注册中心选 provider（Dubbo 只支持直连目标解析）
 
 ## 参与方式
 

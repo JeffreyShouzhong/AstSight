@@ -6,10 +6,10 @@
 
 | 项    | 内容                                                      |
 | ---- | ------------------------------------------------------- |
-| 定位   | 变更驱动 + 全量基线的接口自动化测试引擎（运行模式 `full` / `delta`，见 3.0）      |
+| 定位   | 变更驱动 + 全量基线的接口自动化测试引擎（运行模式 `full` / `delta` / `cases`，见 3.0）      |
 | 形态   | CLI 直驱（无交互层、无意图层）                                       |
 | 输入   | 需求文档、设计文档、代码库变更分支、数据库结构、接口契约（HTTP：OpenAPI / Spring MVC 注解；gRPC：proto/descriptor；Dubbo 2.7+：接口源码 + 标准注解/XML；每种 transport 至少一种）                |
-| 输出   | 变更接口列表、接口画像、业务规则集、业务级/代码级用例集、造数计划、pytest 用例代码、执行报告（含冲突检测/并行/重试/合并） |
+| 输出   | 变更接口列表、接口画像、业务规则集、业务级/代码级用例集、造数计划、pytest 用例代码、执行报告（含冲突检测/重试/合并；并行执行未实现） |
 | 运行环境 | **服务器 / CI 容器：Linux 为主**（Windows 仅开发机本地调试）；路径、子进程、信号、端口、文件锁按 POSIX 语义设计，不依赖 Windows 专有行为 |
 | 文档性质 | **纯设计文档，不含实现**。所有 JSON 为数据契约，非代码                        |
 
@@ -17,12 +17,12 @@
 
 **当前实现状态（2026-11-19，v4.94）**
 
-- **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`。
+- **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口与旧用例自动逻辑删除）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告（串行）；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`；MQ topic 的字面量、常量、Spring `@Value`/`@ConfigurationProperties` 与 properties/yml 解析。
 - **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
 - **明确不做（2026-11-19 范围收敛）**：多 SUT 并发隔离（5.5 设计保留，不排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider；MQ 消息先后/顺序断言；针对 SUT 多线程/并发行为的测试；pika BlockingChannel 专项 e2e；异步多行/多表分组轮询。
-- **验证基数**：本地默认套件 696 passed / 72 skipped；GitHub Actions Linux CI 默认套件 696 passed / 90 skipped（2026-11-19）。真实后端 core job 40 passed / 28 skipped；JDK 8/11/17/21 的 agent+Dubbo 矩阵各 18 passed；Kafka/RabbitMQ/RocketMQ 客户端矩阵 6 passed。开启全部真实后端的历史本地全量为 724 passed / 32 skipped。
+- **验证基数**：本地默认套件 701 passed / 72 skipped；GitHub Actions Linux CI 默认套件 696 passed / 90 skipped（2026-11-19）。真实后端 core job 40 passed / 28 skipped；JDK 8/11/17/21 的 agent+Dubbo 矩阵各 18 passed；Kafka/RabbitMQ/RocketMQ 客户端矩阵 6 passed。开启全部真实后端的历史本地全量为 724 passed / 32 skipped。
 > gRPC 下游 Mock 使用 gripmock 假服务器（unary、明文），落地约束见 **C3.5.4**；v4.3 报告口径不变。
-> 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5）：实例身份、端口原子分配、持久化作用域缺一不可。
+> 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5，设计保留、不排期）：实例身份、端口原子分配、持久化作用域缺一不可。
 > **v4.6 决策**：取消对 Feign 的特殊支持。Feign 不单独解析、不作契约源、不生成专用配置；
 > 只按普通 HTTP 客户端处理，由通用 HTTP 识别与注入点覆盖。通用机制覆盖不了时直接标
 > `mock="unsupported"` / `unidentified`，依赖它的用例显式排除或 `blocked`，不做 Feign 专用兜底。
@@ -31,7 +31,7 @@
 > `dep_id` 改为携带下游身份并做规范化合并，落地约束见 **C3.5.5**。
 > **v4.6.1 HTTP 注入承诺**：v1 只承诺下游专属 `url_override` 与显式 `http_proxy`（均为明文）；
 > `discovery_override`/透明代理为条件支持，共享 base URL、同 JVM bean mock、动态 URL、
-> h2c/WebSocket/流式仍不支持；HTTP 请求 query/header/body 子集匹配与同 dep 调用序列已在 v4.63
+> h2c/WebSocket/流式明确不支持；HTTP 请求 query/header/body 子集匹配与同 dep 调用序列已在 v4.63
 > 落地。完整矩阵见 C3.5.5。
 > **v4.15 Java HTTP agent 改写**：新增 `agent_rewrite` 注入策略，Java agent 在出站 HTTP
 > 客户端调用前把 URL 改写为 `http://<mock>/_dep/<route_key><原路径>`；配置注入仍优先，
@@ -215,20 +215,21 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 >
 > 每项能力按统一模板：职责 / 输入 / 输出契约 / 核心逻辑（步骤级）/ 关键设计决策 / 异常与边界 / 门禁指标
 
-### 3.0 运行模式（`full` / `delta`；`replay` 不实现）
+### 3.0 运行模式（`full` / `delta` / `cases`；`replay` 不实现）
 
-触发方式会持续扩张（变更、定时、事件、流量），**因此框架不能以"变更驱动"命名，也不能只为变更设计**。`full` 与 `delta` 共用同一条链路，差异只在"选哪个范围"；`replay` 明确不实现：
+触发方式会持续扩张（变更、定时、事件、流量），**因此框架不能以"变更驱动"命名，也不能只为变更设计**。`full`、`delta`、`cases` 共用同一条链路，差异只在"选哪个范围"；`replay` 明确不实现：
 
 | 模式 | 干什么 | 输入前提 | 何时用 | 核心约束 |
 | -- | -- | -- | -- | -- |
 | `full` | **建**基线：扫全量接口 → 画像 → 契约 → 生成 → 执行 | 代码库 + 文档即可，**不依赖 Git diff** | 首次接入、存量摸底、周期全回归 | **必须产出契约与画像基线**；只生成用例不建基线 = 负债 |
 | `delta` | **维护**基线：只重判受影响范围 | 需要 Git 变更集 + 已有基线 | 每次提交、每次发布 | 未命中的接口**不得视为通过**，只能标注为未覆盖 |
+| `cases` | **执行**已批准用例：不扫路由/画像，只跑 caseset 中 approved | 需要 `caseset.json` | 审核后回归、CI 定时执行 | 只使用已批准用例；deprecated 不进入运行 |
 | `replay`（不实现） | **复用**基线：用今天的用例库重判历史数据 / 影子流量 | 需要历史请求样本 + 已有契约 + 已批准用例 | 用例/契约更新后回刷、事故回溯 | 结论必须携带**规则库版本号 + 用例库版本号**，否则跨版本不可比 |
 
 **三条实现约束（不可妥协）**：
 
 1. **模式不是多条 pipeline。** 画像、契约、生成、执行、判定五组组件完全共用，差异收敛为一个 `scope` 参数。若拆成两套代码，必然各自漂移——修一个 bug 要改两遍。
-2. **CLI 契约统一**：`astsight run --mode full|delta --project <id> [--sut-id <id>]`。模式是参数，不是子命令分支；`sut_id` 缺省取 project 名。`replay` 与多 SUT 并发隔离（5.5 设计保留）均明确不实现。
+2. **CLI 契约统一**：`astsight run --mode full|delta|cases --project <路径>`。模式是参数，不是子命令分支。`replay` 与多 SUT 并发隔离（5.5 设计保留）均明确不实现，因此当前没有 `--sut-id` 参数。
 3. **每种模式都必须输出覆盖边界**：`unmapped`（没看到 / 没判到）必须单列进报告。**静默通过是最大风险**——尤其是 `full` 模式扫出的"我以为我全测了"。
 
 > 门禁口径随之收紧：C2 的「召回 ≥90%」只对 `verified` 路由成立，`unmapped` 必须独立计数并阻断放行，不得并入通过率分母。
@@ -1104,8 +1105,8 @@ adapter。streaming、reflection 和注册中心仍不做。
 - 第 3 步的 Spring 路由由 CodeGraph 原生 Java resolver 提供；AstSight 尚未实现
   Spring 路由插件第二来源，因此 Spring 路由证据为 `inferred`；
 - 类级/文件级/纯删除变更按 API 级兜底并标 `inferred`，不假装方法级精度；
-- **未完成**：`low` 置信度隔离、20 个真实分支的召回率/误报率基准、Spring
-  真实仓库路由覆盖分母。
+- **未完成（当前不排期）**：`low` 置信度隔离、20 个真实分支的召回率/误报率基准、
+  Spring 真实仓库路由覆盖分母。
 
 **关键设计决策**：
 
@@ -1345,9 +1346,9 @@ POST /orders → OrderService.create_order → OrderRepository.insert_order
 
 > 被测接口内部的对外调用（下游依赖）是接口测试最易失真的环节。**AstSight的测试数据由数据库直插构造，上下游并未打通**——下游服务里不存在与我们造数匹配的业务上下文（账号、余额、订单状态等），因此连下游和放行都不可行，**Mock 是唯一主策略**。
 >
-> **范围（v4.6.1，v4.15 扩展）**：Mock 覆盖 SUT → **HTTP** 与 SUT → **Dubbo 2.7+** 下游。HTTP 在出站 HTTP 边界（URL/服务发现/HTTP 代理/agent 改写 + 会话）。未启用 agent 时只处理明文：`https://` 目标及需要 TLS 的代理链路统一标 `mock="unsupported"`（`unsupported_reason="tls_not_supported"`），不降级、不 MITM。v4.15 起，配置覆盖不到且客户端栈有 adapter 时用 **`agent_rewrite`**：把出站 URL 改写为明文 Mock 地址，HTTPS 因此可用（不建 TLS、不装 CA）。Dubbo 用 **agent + ByteBuddy + Filter** 拦截（见 C3.5.3），与 HTTP 共用 agent 外壳。SUT → **gRPC** 下游在 C3.5.4 落地前仍标 `mock="unsupported"`，依赖它的用例必须显式排除或标 `blocked`，不允许静默透传。
+> **范围（v4.6.1，v4.15 扩展）**：Mock 覆盖 SUT → **HTTP**、**Dubbo 2.7+** 与 **gRPC（仅 unary）** 下游。HTTP 在出站 HTTP 边界（URL/服务发现/HTTP 代理/agent 改写 + 会话）。未启用 agent 时只处理明文：`https://` 目标及需要 TLS 的代理链路统一标 `mock="unsupported"`（`unsupported_reason="tls_not_supported"`），不降级、不 MITM。v4.15 起，配置覆盖不到且客户端栈有 adapter 时用 **`agent_rewrite`**：把出站 URL 改写为明文 Mock 地址，HTTPS 因此可用（不建 TLS、不装 CA）。Dubbo 用 **agent + ByteBuddy + Filter** 拦截（见 C3.5.3），与 HTTP 共用 agent 外壳。SUT → **gRPC（仅 unary、明文）** 下游走 C3.5.4 的 gripmock，按统一 session、证据与门禁接入；streaming 与 reflection 明确不支持。
 >
-> **HTTP 注入的承诺**：下游专属配置的 `url_override` 与显式 `http_proxy` 为无条件承诺（均为明文）；`discovery_override` 与透明代理仅条件支持，环境不具备时 `discovery_not_supported`，不计入承诺；`agent_rewrite` 是条件能力（Java SUT、agent 可加载、客户端栈有 adapter）。共享 base URL 与 HTTPS 在启用 `agent_rewrite` 时可覆盖，否则不支持；同 JVM bean mock、动态 URL、h2c/流式仍不支持；请求字段匹配与同 dep 调用序列已支持。完整矩阵见 **C3.5.5**。
+> **HTTP 注入的承诺**：下游专属配置的 `url_override` 与显式 `http_proxy` 为无条件承诺（均为明文）；`discovery_override` 与透明代理仅条件支持，环境不具备时 `discovery_not_supported`，不计入承诺；`agent_rewrite` 是条件能力（Java SUT、agent 可加载、客户端栈有 adapter）。共享 base URL 与 HTTPS 在启用 `agent_rewrite` 时可覆盖，否则不支持；同 JVM bean mock、动态 URL、h2c/流式明确不支持；请求字段匹配与同 dep 调用序列已支持。完整矩阵见 **C3.5.5**。
 
 **核心结论：Mock 唯一主策略**
 
@@ -2783,6 +2784,8 @@ Dubbo 草案片段：
 - 冲突检测是纯确定性逻辑（基于数据契约比对），不放 LLM
 
 #### C7.2 并行调度
+
+> **实现状态（2026-11-19）**：并行调度与 `--workers` 未实现，当前用例按顺序串行执行；mock lease 与并行分组属于未排期的设计。以下保留为后续参考。
 
 **调度模型**：
 

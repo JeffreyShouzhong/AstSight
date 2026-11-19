@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`2134d8b`（`新增：gRPC/Dubbo 契约 diff`）；
+> 最新代码提交：`a831676`（`新增：删除接口用例自动逻辑删除；待办范围收敛`）；
 > 当前存档已同步远端。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
@@ -44,8 +44,9 @@
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 默认全量为 **690 passed / 72 skipped**；开启 MQ、Java agent、Dubbo、Triple
-> 与 gripmock 的真实后端联调后为 **724 passed / 32 skipped**。
+> 本地默认全量为 **701 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
+> **696 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
+> Java agent、Dubbo、Triple 与 gripmock 的历史本地全量为 **724 passed / 32 skipped**。
 > A4 已用 DeepSeek 做真实验证：flash 的 MQ 场景能正确选 topic，chat 的实体场景
 > 能生成 data/mock_replies；flash 在实体场景会输出非法断言，已记录为模型差异。
 
@@ -60,6 +61,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 文档与代码对齐 | ✅ 2026-11-19 | 运行模式统一为 `full`/`delta`/`cases`（`replay` 明确不实现）；修正 gRPC 下游“仍 unsupported”的过期表述、C7.2 并行调度未实现标注、CLI 无 `--sut-id`；ROADMAP 非目标补全 RocketMQ 批量/连接级 Mock 与注册中心；README/设计文档能力表与测试计数同步 |
 | 删除接口旧用例自动废弃 | ✅ 2026-11-19 | 新增 `cases/deleted_cleanup.py`：delta 确认接口删除后，把 caseset 中指向该接口的 approved HTTP 用例标为 `deprecated`（逻辑删除），`approved_cases` 与执行流程不再包含；`review_log` 以 `astsight:deleted-api` 记录，落库前备份；报告单列被废弃用例；扫描未完成或没有用例库时不动；新增 5 条测试，全量 701 passed / 72 skipped |
 | 修复：心跳 adapter 分类 | ✅ 2026-11-19 | Linux CI 真实后端首跑暴露：Java agent 心跳把 `kafka/rabbitmq/rocketmq-producer` 也放进 `http_adapters`，Spring Boot e2e 的严格集合断言失败；`registerAdapter` 增加 kind，MQ 模块注册为 `mq`，心跳拆出 `mq_adapters`，`MockAgent` 契约同步；本地 Spring Boot 与 Java MQ e2e 均通过 |
 | Linux CI 最小版 | ✅ 2026-11-19 | 新增 `.github/workflows/ci.yml`：`default-suite` 在 ubuntu + Python 3.12 跑默认套件；`linux-wheels` 用 Temurin 17 + Maven 构建 Java agent/Dubbo sidecar wheel，构建 gripmock amd64/arm64 平台 wheel，安装后跑三个分发校验，并解析包内二进制在 Linux 实跑 `test_grpc_gripmock_e2e.py`；另加 nightly/手动 core 真实后端 job 与手动 matrix job（JDK 8/11/17/21、MQ 客户端版本）；2026-11-19 手动触发全绿：默认套件 696 passed / 90 skipped，真实后端 core 40 passed / 28 skipped，JDK 矩阵各 18 passed，MQ 矩阵 6 passed |
