@@ -615,6 +615,14 @@ Unsafe 分配未初始化 `ChannelN`，验证的是真实方法签名与拦截�
 路径。Agent shade 将 Jackson relocate 到 `io.astsight.agent.shaded.jackson`，
 避免应用自带旧版本覆盖；未使用的 ByteBuddy 已移除。
 
+**Python 生产者拦截（v4.79）**：`agent run` 对 Python SUT 自动注入
+`engine/astsight/mq/inject/sitecustomize.py`（设置 `PYTHONPATH` 与
+`ASTSIGHT_MQ_CAPTURE_*` 环境变量）。import hook patch `kafka-python` 的
+`KafkaProducer.send` 与 `pika` 的 `Channel/BlockingChannel.basic_publish`；
+命中计划内 topic 时直接返回成功，不连 broker。kafka-python 3.x 构造时会
+bootstrap，测试需显式给 `api_version` 或真实 broker。confluent-kafka、
+aio-pika、kombu/Celery 暂不支持。
+
 **异步断言优先级（v4.74）**：有消息边界时先断言消息——是否发出、topic/key、
 payload/headers、次数与顺序；不启动消费者，也不轮询数据库。只有 SUT 内部异步
 （线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用

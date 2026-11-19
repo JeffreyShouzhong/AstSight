@@ -31,6 +31,8 @@
 > （`ChannelN.basicPublish`，`topic=exchange/routingKey`）和 RocketMQ
 > （`DefaultMQProducer.send`）；真实客户端无 broker e2e 已通过，SUT 启动连接
 > 仍可能需要中间件。Agent 已把 Jackson relocate 到独立包，避免被应用旧版本覆盖。
+> Python SUT 也已支持：sitecustomize 注入，拦截 kafka-python 与 pika；confluent-kafka、
+> aio-pika、kombu 暂不支持。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
@@ -45,6 +47,7 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
+| Python MQ 生产者拦截 | ✅ 2026-11-19 | 新增 `astsight/mq/inject`（sitecustomize + import hook）：patch kafka-python `KafkaProducer.send` 与 pika `Channel/BlockingChannel.basic_publish`；`agent run` 对 Python SUT 自动注入 `PYTHONPATH` 与 `ASTSIGHT_MQ_CAPTURE_*`；真实 kafka-python 3.0 / pika 1.3 无 broker e2e 通过；confluent-kafka、aio-pika、kombu 不做 |
 | MQ 真实客户端 e2e | ✅ 2026-11-19 | 新增 `java/samples/mq-producer`（Kafka 3.7 / RabbitMQ 5.21 / RocketMQ 5.3.1）与 gated `test_java_mq_producer_e2e.py`：无 broker 下真实客户端消息被 Agent 拦截，Mock 收到完整内容；修复 MQ transformer 的 stackmap frame（VerifyError）；agent shade 将 Jackson relocate，移除未用 ByteBuddy；OkHttp/Dubbo consumer e2e 回归通过；默认全量 672 passed / 63 skipped |
 | MQ 生产者拦截 RocketMQ P0 | ✅ 2026-11-19 | 新增 `astsight-agent-rocketmq`：织入 `DefaultMQProducer` 同步/异步 send，计划内消息不真正发送；topic 为 RocketMQ topic，key 取 getKeys、headers 取 getProperties；同步返回反射构造的 SendResult（失败为 null），异步尽力回调 onSuccess；`client=rocketmq` 进入心跳按客户端校验；SUT 启动仍可能连接 NameServer/broker；Java agent 重新打包 |
 | MQ 生产者拦截 RabbitMQ P0 | ✅ 2026-11-19 | 新增 `astsight-agent-rabbitmq`：织入 `ChannelN.basicPublish` 4/5/6 参重载，计划内消息不真正 publish；`topic=exchange/routingKey`、`key=routingKey`、headers 取 BasicProperties，body 支持 JSON/文本/base64；Java agent 重新打包；SUT 启动阶段的 AMQP 连接/声明仍需环境或后续连接级 Mock；RocketMQ 待做 |

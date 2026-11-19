@@ -307,6 +307,66 @@ def _merge_discovery_env(
     return env, keys, warnings
 
 
+_PYTHON_COMMANDS = {
+    "python",
+    "python3",
+    "uvicorn",
+    "gunicorn",
+    "hypercorn",
+    "flask",
+    "fastapi",
+}
+
+
+def _is_python_command(argv: Sequence[str]) -> bool:
+    for token in list(argv)[:3]:
+        name = Path(str(token)).name.lower()
+        if name in _PYTHON_COMMANDS or name.startswith("python"):
+            return True
+    return False
+
+
+def _mq_capture_env(
+    env: dict[str, str],
+    keys: list[str],
+    *,
+    argv: Sequence[str],
+    document: dict[str, Any],
+    agent_token: str | None,
+    warnings: list[str],
+) -> None:
+    """给 Python SUT 注入 MQ 生产者拦截（只支持 kafka-python / pika）。"""
+    if not document.get("mq_deps"):
+        return
+    if not _is_python_command(argv):
+        return
+    if not agent_token:
+        warnings.append("mq_capture_token_missing")
+        return
+    inject_dir = Path(__file__).resolve().parents[1] / "mq" / "inject"
+    if not inject_dir.is_dir():
+        warnings.append("mq_capture_inject_missing")
+        return
+    existing = env.get("PYTHONPATH") or os.environ.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(inject_dir)
+        + ((os.pathsep + existing) if existing else "")
+    )
+    env["ASTSIGHT_MQ_CAPTURE"] = "1"
+    env["ASTSIGHT_MQ_ADMIN_URL"] = str(document.get("endpoint") or "")
+    env["ASTSIGHT_MQ_TOKEN"] = agent_token
+    env["ASTSIGHT_MQ_SUT_ID"] = str(document.get("sut_id") or "")
+    keys.extend(
+        [
+            "PYTHONPATH",
+            "ASTSIGHT_MQ_CAPTURE",
+            "ASTSIGHT_MQ_ADMIN_URL",
+            "ASTSIGHT_MQ_TOKEN",
+            "ASTSIGHT_MQ_SUT_ID",
+        ]
+    )
+
+
 def start_sut(
     argv: Sequence[str],
     *,
@@ -326,6 +386,14 @@ def start_sut(
         base_url=base_url,
         extra_env=extra_env,
         agent_token=agent_token,
+    )
+    _mq_capture_env(
+        env,
+        keys,
+        argv=argv,
+        document=injection_document,
+        agent_token=agent_token,
+        warnings=warnings,
     )
     full_env = {**os.environ, **env}
     path = Path(log_path)

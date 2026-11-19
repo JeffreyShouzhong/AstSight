@@ -1451,6 +1451,27 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
   声明 exchange/queue 或连接 NameServer；没有中间件时可能在连接/启动阶段就失败。
   要完全脱离中间件，还需要连接级 Mock，当前未做。
 
+### 11C.1 Python SUT
+
+`agent run` 的 SUT 命令是 Python（`python` / `uvicorn` / `gunicorn` 等）且 Mock
+计划含 MQ topic 时，会自动把 `engine/astsight/mq/inject` 放进 `PYTHONPATH`，并设置：
+
+```text
+ASTSIGHT_MQ_CAPTURE=1
+ASTSIGHT_MQ_ADMIN_URL=<Mock admin 地址>
+ASTSIGHT_MQ_TOKEN=<token>
+ASTSIGHT_MQ_SUT_ID=<sut_id>
+```
+
+`sitecustomize.py` 在解释器启动时挂 import hook，只 patch 两个纯 Python 客户端：
+
+- `kafka-python`：`KafkaProducer.send`，命中后返回已完成的 Future；
+- `pika`：`Channel.basic_publish` 与 `BlockingChannel.basic_publish`，同步/阻塞
+  连接都覆盖；命中后返回 `True`（阻塞）或 `None`（Channel）。
+
+手工启动 SUT 时，照上面的环境变量自己设置即可。当前不支持 confluent-kafka、
+aio-pika、kombu/Celery；Go/Node/.NET 也还没有生产者拦截。
+
 ---
 
 ## 12. 运行模式
