@@ -48,6 +48,7 @@ public final class AgentRuntime {
     private final AtomicLong mqPublished = new AtomicLong();
     private final AtomicLong mqSuppressed = new AtomicLong();
     private final AtomicLong mqErrors = new AtomicLong();
+    private final Set<String> mqClients = ConcurrentHashMap.newKeySet();
     private volatile boolean mqInstalled;
     private volatile boolean dubboInstalled;
     private volatile String dubboVersion;
@@ -216,8 +217,11 @@ public final class AgentRuntime {
 
     // ----------------------------------------------------------- MQ Producer
 
-    public void mqModuleInstalled() {
+    public void mqModuleInstalled(String client) {
         mqInstalled = true;
+        if (client != null && !client.isEmpty()) {
+            mqClients.add(client);
+        }
     }
 
     /**
@@ -401,6 +405,10 @@ public final class AgentRuntime {
         if (mqInstalled) {
             ObjectNode mq = node.putObject("mq");
             mq.put("installed", true);
+            ArrayNode clients = mq.putArray("clients");
+            for (String client : mqClients) {
+                clients.add(client);
+            }
             mq.put("published", mqPublished.get());
             mq.put("suppressed", mqSuppressed.get());
             mq.put("errors", mqErrors.get());

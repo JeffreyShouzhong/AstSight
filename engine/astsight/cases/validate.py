@@ -1679,6 +1679,18 @@ def _check_mq_assertions(
                 )
             )
         seen_topics.add(topic)
+        client = str(item.client or "").strip().lower()
+        if client not in {"kafka", "rabbitmq"}:
+            result.errors.append(
+                _issue(
+                    "error",
+                    "mq.client_unsupported",
+                    f"mq_assertions[{index}] 暂不支持 client={item.client!r}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
         dep_id = str(item.dep_id or "").strip()
         if dep_id and (
             not dep_id.startswith("mq:") or len(dep_id) > _MAX_DEP_ID_LENGTH

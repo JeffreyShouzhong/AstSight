@@ -340,6 +340,14 @@ def build_mock_plan(
                     f"topic {topic!r} 对应多个 dep_id: {existing!r} / {dep_id!r}",
                 )
             mq_topics[topic] = dep_id
+    mq_clients: dict[str, str] = {}
+    for case in getattr(draft, "cases", []) or []:
+        for item in getattr(case, "mq_assertions", []) or []:
+            topic = str(getattr(item, "topic", "") or "").strip()
+            if topic:
+                mq_clients[topic] = str(
+                    getattr(item, "client", "") or "kafka"
+                ).strip()
     if not bindings and not mq_topics:
         return None, ["mock_plan_skipped:no_case_bindings"]
 
@@ -452,7 +460,11 @@ def build_mock_plan(
         routes=routes,
         dubbo_routes=dubbo_routes,
         mq_routes=[
-            MockPlanMqRoute(dep_id=dep_id, topic=topic, client="producer")
+            MockPlanMqRoute(
+                dep_id=dep_id,
+                topic=topic,
+                client=mq_clients.get(topic, "kafka"),
+            )
             for topic, dep_id in sorted(mq_topics.items())
         ],
         deps=grpc_deps,

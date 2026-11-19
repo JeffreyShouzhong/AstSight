@@ -244,6 +244,11 @@ class MqAssertion(BaseModel):
 
     dep_id: str = Field(default="", max_length=512)
     topic: str = Field(min_length=1, max_length=512)
+    client: str = Field(
+        default="kafka",
+        max_length=32,
+        description="消息客户端：kafka / rabbitmq",
+    )
     key: Any = Field(default=None, description="消息 key；None 表示不约束")
     headers: dict[str, str] = Field(default_factory=dict, max_length=50)
     body: Any = Field(default=None, description="消息体 JSON 子集")

@@ -269,6 +269,19 @@ def build_report(
                 "计划内 MQ 下游已登记，但 agent 心跳未上报 MQ 生产者拦截"
                 "（mq_producer_not_installed：mq.installed=false）"
             )
+        else:
+            required_clients = {
+                str(item) for item in plan.get("mq_clients") or [] if item
+            }
+            installed_clients = {
+                str(item) for item in mq_agent.get("clients") or [] if item
+            }
+            missing = sorted(required_clients - installed_clients)
+            if missing:
+                blockers.append(
+                    "计划内 MQ 客户端缺少生产者拦截模块："
+                    f"{', '.join(missing)}（mq_producer_not_installed）"
+                )
 
     route_health = (route_audit or {}).get("health") or {}
     if route_health.get("status") == "degraded":
@@ -639,8 +652,9 @@ def render_markdown(report: dict) -> str:
                 f"- 生产者拦截未确认：`{agent_state.get('reason') or 'agent_heartbeat_missing'}`"
             )
         else:
+            clients = ", ".join(mq_agent.get("clients") or []) or "-"
             lines.append(
-                f"- 已上报 {mq_agent.get('published', 0)} 次 / "
+                f"- 客户端：{clients} / 已上报 {mq_agent.get('published', 0)} 次 / "
                 f"拦截 {mq_agent.get('suppressed', 0)} 次 / "
                 f"错误 {mq_agent.get('errors', 0)} 次"
             )

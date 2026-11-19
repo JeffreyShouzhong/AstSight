@@ -22,7 +22,7 @@ public final class AstSightKafkaModule implements AgentModule {
     public void install(Instrumentation instrumentation, AgentRuntime runtime) {
         instrumentation.addTransformer(new KafkaProducerTransformer(runtime), true);
         runtime.registerAdapter(id(), version());
-        runtime.mqModuleInstalled();
+        runtime.mqModuleInstalled("kafka");
     }
 
     private static String version() {

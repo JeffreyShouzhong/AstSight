@@ -530,3 +530,4 @@ def test_build_mock_plan_collects_mq_only_case() -> None:
     assert len(plan.mq_routes) == 1
     assert plan.mq_routes[0].topic == "orders-topic"
     assert plan.mq_routes[0].dep_id == "mq:orders-topic"
+    assert plan.mq_routes[0].client == "kafka"

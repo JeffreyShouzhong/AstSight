@@ -237,6 +237,7 @@ class MockMqAgent(BaseModel):
     """Agent 心跳里的 MQ 生产者拦截状态。"""
 
     installed: bool = False
+    clients: list[str] = Field(default_factory=list)
     published: int = Field(default=0, ge=0)
     suppressed: int = Field(default=0, ge=0)
     errors: int = Field(default=0, ge=0)

@@ -27,7 +27,9 @@
 > 3xx 重定向、pinning、HTTPS scheme guard、二次改写、计划内未命中与 Host/签名边界。
 > MQ 生产者拦截已落地 Kafka 首版：Agent 在 `KafkaProducer.send` 处截获，
 > 计划内 topic 不真正发送，用例断言 topic/key/headers/body 子集与条数；
-> 不连 broker、不验证分区与序列化。RabbitMQ、RocketMQ 按使用广泛度待做。
+> 不连 broker、不验证分区与序列化。RabbitMQ 也已接入生产者拦截
+> （`ChannelN.basicPublish`，`topic=exchange/routingKey`），但 SUT 启动阶段的
+> AMQP 连接/声明仍需环境；RocketMQ 待做。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
@@ -42,6 +44,7 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
+| MQ 生产者拦截 RabbitMQ P0 | ✅ 2026-11-19 | 新增 `astsight-agent-rabbitmq`：织入 `ChannelN.basicPublish` 4/5/6 参重载，计划内消息不真正 publish；`topic=exchange/routingKey`、`key=routingKey`、headers 取 BasicProperties，body 支持 JSON/文本/base64；Java agent 重新打包；SUT 启动阶段的 AMQP 连接/声明仍需环境或后续连接级 Mock；RocketMQ 待做 |
 | MQ 生产者拦截 Kafka P0 | ✅ 2026-11-18 | 新增 `astsight-agent-kafka`：织入 `KafkaProducer.send`，计划内 topic 上报后不真正发送；引擎新增 `MqAssertion`、`MockPlan.mq_routes`、`/_admin/mq/publish` 与 `/_admin/mq/messages`，生成 `mq_tools.expect`；证据 `transport=mq`；心跳缺 `mq.installed` 阻断；新增 8 条 Python + 1 条 Java 测试，全量 671 passed / 60 skipped；RabbitMQ/RocketMQ 待做 |
 | 异步断言优先消息边界 | 📌 2026-11-18 | 口径修正：MQ 等消息型异步断言消息本身（发出/topic/key/payload/headers/次数/顺序），不启动消费者、不轮询数据库；`wait_ms` 只用于没有消息边界的内部异步；MQ 消息捕获尚未实现，优先级高于多行异步轮询 |
 | 多行终态与状态不变断言 | ✅ 2026-11-18 | C5b 迁移后断言支持多表/多列/多行/复合主键，`state_path_*` 按终态行定位；新增 `db_row/unchanged`，请求前快照、请求后逐列比较，支持 `ignore_columns`；单请求与多步骤均覆盖；新增 6 条测试，全量 663 passed / 60 skipped |

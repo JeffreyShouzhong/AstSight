@@ -920,6 +920,13 @@ class MockPlanRuntime:
             "route_count": len(self.plan.routes),
             "dubbo_route_count": len(self.plan.dubbo_routes),
             "mq_route_count": len(self.plan.mq_routes),
+            "mq_clients": sorted(
+                {
+                    route.client
+                    for route in self.plan.mq_routes
+                    if route.client
+                }
+            ),
             "dep_count": len(self.plan.deps),
             "injection_count": len(self.injections),
             "unsupported_count": sum(
