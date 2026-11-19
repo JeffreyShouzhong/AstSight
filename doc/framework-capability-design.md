@@ -609,6 +609,12 @@ RecordMetadata 为 null；RocketMQ 同步返回合成 `SendResult`（构造失�
 `mq.clients` 列出实际安装的模块。计划含 MQ topic 但心跳缺 `mq.installed`，或缺少
 对应 client 的拦截模块时，门禁阻断 `mq_producer_not_installed`。
 
+真实客户端 e2e（v4.78）：Kafka 3.7、RabbitMQ 5.21、RocketMQ 5.3.1 在无 broker
+环境下由 Agent 拦截，Mock 服务收到完整 topic/key/headers/body。RabbitMQ 用
+Unsafe 分配未初始化 `ChannelN`，验证的是真实方法签名与拦截点，不代表生产启动
+路径。Agent shade 将 Jackson relocate 到 `io.astsight.agent.shaded.jackson`，
+避免应用自带旧版本覆盖；未使用的 ByteBuddy 已移除。
+
 **异步断言优先级（v4.74）**：有消息边界时先断言消息——是否发出、topic/key、
 payload/headers、次数与顺序；不启动消费者，也不轮询数据库。只有 SUT 内部异步
 （线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用

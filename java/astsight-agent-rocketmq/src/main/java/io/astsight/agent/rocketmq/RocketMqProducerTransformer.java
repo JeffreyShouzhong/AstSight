@@ -104,6 +104,12 @@ final class RocketMqProducerTransformer implements ClassFileTransformer {
                 visitTypeInsn(Opcodes.CHECKCAST, RESULT.substring(1, RESULT.length() - 1));
                 visitInsn(Opcodes.ARETURN);
                 visitLabel(original);
+                visitFrame(
+                        Opcodes.F_SAME1,
+                        0,
+                        null,
+                        1,
+                        new Object[]{"[Ljava/lang/Object;"});
                 visitInsn(Opcodes.POP);
             }
         };
@@ -126,6 +132,7 @@ final class RocketMqProducerTransformer implements ClassFileTransformer {
                 visitJumpInsn(Opcodes.IFEQ, original);
                 visitInsn(Opcodes.RETURN);
                 visitLabel(original);
+                visitFrame(Opcodes.F_SAME, 0, null, 0, null);
             }
         };
     }

@@ -78,6 +78,7 @@ final class RabbitMqChannelTransformer implements ClassFileTransformer {
                             visitJumpInsn(Opcodes.IFEQ, original);
                             visitInsn(Opcodes.RETURN);
                             visitLabel(original);
+                            visitFrame(Opcodes.F_SAME, 0, null, 0, null);
                         }
                     };
                 }

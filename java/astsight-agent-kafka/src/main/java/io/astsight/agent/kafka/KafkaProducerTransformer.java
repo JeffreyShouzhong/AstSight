@@ -81,6 +81,12 @@ final class KafkaProducerTransformer implements ClassFileTransformer {
                             visitJumpInsn(Opcodes.IFNULL, original);
                             visitInsn(Opcodes.ARETURN);
                             visitLabel(original);
+                            visitFrame(
+                                    Opcodes.F_SAME1,
+                                    0,
+                                    null,
+                                    1,
+                                    new Object[]{"java/util/concurrent/Future"});
                             visitInsn(Opcodes.POP);
                         }
                     };
