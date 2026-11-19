@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（实现基线 v4.88，2026-11-19）
+# AstSight — 能力设计规格说明书（实现基线 v4.91，2026-11-19）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -15,12 +15,12 @@
 
 > **当前口径**：本文只描述当前有效的能力规格、契约与约束。决策过程（候选对比、落选原因、被推翻的判断、版本变更历史）统一记录在 [`决策记录.md`](决策记录.md)，本文不复述“为什么”。
 
-**当前实现状态（2026-11-19，v4.88）**
+**当前实现状态（2026-11-19，v4.91）**
 
 - **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`。
-- **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；MQ 自动发现只解析常量和 `static final`；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
-- **未实现/明确不支持**：多 SUT 并发隔离（设计见 5.5，实现待排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider。
-- **验证基数**：默认套件 690 passed / 72 skipped；开启真实 MQ、Java agent、Dubbo、Triple、gripmock 后历史记录 724 passed / 32 skipped（本轮未重跑）。
+- **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
+- **未实现/明确不支持**：多 SUT 并发隔离（设计见 5.5，实现待排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider；MQ 消息先后/顺序断言；针对 SUT 多线程/并发行为的测试。
+- **验证基数**：默认套件 696 passed / 72 skipped，由 GitHub Actions Linux CI 执行（配置已落地，首次运行待确认）；开启真实 MQ、Java agent、Dubbo、Triple、gripmock 后历史记录 724 passed / 32 skipped（本轮未重跑）。
 > gRPC 下游 Mock 使用 gripmock 假服务器（unary、明文），落地约束见 **C3.5.4**；v4.3 报告口径不变。
 > 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5）：实例身份、端口原子分配、持久化作用域缺一不可。
 > **v4.6 决策**：取消对 Feign 的特殊支持。Feign 不单独解析、不作契约源、不生成专用配置；
@@ -622,12 +622,16 @@ Unsafe 分配未初始化 `ChannelN`，验证的是真实方法签名与拦截�
 路径。Agent shade 将 Jackson relocate 到 `io.astsight.agent.shaded.jackson`，
 避免应用自带旧版本覆盖；未使用的 ByteBuddy 已移除。
 
-**MQ 生产者候选扫描（v4.80）**：画像阶段只读源码扫描 MQ 生产调用，结果以
-`mq_producers[]` 附到每个 profile：Java 覆盖 `ProducerRecord`/`KafkaTemplate`、
+**MQ 生产者候选扫描（v4.80，v4.90 扩展配置解析）**：画像阶段只读源码扫描 MQ 生产调用，
+结果以 `mq_producers[]` 附到每个 profile：Java 覆盖 `ProducerRecord`/`KafkaTemplate`、
 `basicPublish`/`RabbitTemplate`、RocketMQ `Message`/`syncSend`；Python 覆盖
-kafka-python `send` 与 pika `basic_publish`。字符串常量和 `static final` 会解析，
-动态 topic 不猜，写入 `mq_warnings`。A4 只从候选生成 `mq_assertions`；校验在
-画像有候选但 topic 不在候选中时给 `mq.topic_not_in_profile` 告警。
+kafka-python `send` 与 pika `basic_publish`。topic 解析顺序：字面量 → 同文件
+`static final` 常量 → Spring `@Value`（含 `${key:default}`）/`@ConfigurationProperties`
+→ `application*.properties|yml|yaml` 与项目根 `.env`。`@ConfigurationProperties`
+字段做跨文件全局索引，调用点支持 `properties.field` 与 `getField()`。同键多值冲突、
+配置缺失、SpEL 与过深占位符、直接 `System.getenv(...)` 传参显式写入 `mq_warnings`，不猜。
+A4 只从候选生成
+`mq_assertions`；校验在画像有候选但 topic 不在候选中时给 `mq.topic_not_in_profile` 告警。
 
 **Python 生产者拦截（v4.79）**：`agent run` 对 Python SUT 自动注入
 `engine/astsight/mq/inject/sitecustomize.py`（设置 `PYTHONPATH` 与
@@ -641,8 +645,10 @@ RabbitMQ 4.9.0/5.21.0、RocketMQ 4.9.7/5.3.1 的真实客户端无 broker e2e �
 Python 当前验证 kafka-python 3.0 / pika 1.3。confluent-kafka、aio-pika、
 kombu/Celery 暂不支持。
 
-**异步断言优先级（v4.74）**：有消息边界时先断言消息——是否发出、topic/key、
-payload/headers、次数与顺序；不启动消费者，也不轮询数据库。只有 SUT 内部异步
+**异步断言优先级（v4.74，v4.89 明确边界）**：有消息边界时先断言消息——是否发出、
+topic/key、payload/headers 与条数；不启动消费者，也不轮询数据库；不校验多条消息
+的先后顺序（生产者侧同步截断，只有 SUT 调用先后，没有投递顺序），也不覆盖 SUT
+的多线程/并发行为。只有 SUT 内部异步
 （线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用
 `db_row.wait_ms` 等数据库最终状态。`wait_ms` 不能替代消息断言，否则会把
 “消息没发/发错”掩盖成“等一会儿数据库总算对了”。
@@ -3343,7 +3349,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full`/`replay` + C2 召回率基准 | 20 个真实分支人工标注；replay 可重放 |
 
-> 本说明书实现基线为 **v4.88（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书实现基线为 **v4.91（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
 > Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo Hessian2 走 Java sidecar

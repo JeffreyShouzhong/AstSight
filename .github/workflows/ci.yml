@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  default-suite:
+    name: Default suite (Linux, Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: engine/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r engine/requirements.txt
+
+      - name: Run default test suite
+        working-directory: engine
+        run: python -m pytest -q
+
+  linux-wheels:
+    name: Build and run Linux wheels
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: engine/requirements.txt
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: java/pom.xml
+
+      - name: Install dependencies
+        run: python -m pip install -r engine/requirements.txt
+
+      # 一次 reactor 构建同时产出 agent 与 sidecar 两个 shade jar。
+      - name: Build Java agent and Dubbo sidecar wheels
+        run: |
+          python tools/build_agent_wheel.py
+          python tools/build_sidecar_wheel.py --skip-build
+
+      # 两个架构都构建；arm64 只校验产物，不在 amd64 runner 上执行。
+      - name: Build gripmock Linux wheels (amd64 + arm64)
+        run: python tools/build_gripmock_wheels.py --arch all --download
+
+      - name: Install wheels
+        run: python -m pip install --force-reinstall dist/*.whl
+
+      - name: Verify wheel distribution
+        working-directory: engine
+        run: |
+          python -m pytest -q \
+            tests/test_agent_jar.py \
+            tests/test_sidecar_jar.py \
+            tests/test_gripmock_binary.py
+
+      # 关键一步：Linux 上解析装好的 wheel，真正执行 gripmock 二进制。
+      - name: Run real gripmock binary
+        working-directory: engine
+        run: |
+          GRIPMOCK_BIN="$(python -c 'from astsight.mock.gripmock_binary import resolve_gripmock_binary; print(resolve_gripmock_binary().path)')"
+          export GRIPMOCK_BIN
+          echo "GRIPMOCK_BIN=$GRIPMOCK_BIN"
+          test -x "$GRIPMOCK_BIN"
+          python -m pytest -q tests/integration/test_grpc_gripmock_e2e.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-wheels
+          path: dist/*.whl
+          if-no-files-found: error

@@ -32,7 +32,11 @@
 > （`DefaultMQProducer.send`）；真实客户端无 broker e2e 已通过，SUT 启动连接
 > 仍可能需要中间件。Agent 已把 Jackson relocate 到独立包，避免被应用旧版本覆盖。
 > Python SUT 也已支持：sitecustomize 注入，拦截 kafka-python 与 pika；confluent-kafka、
-> aio-pika、kombu 暂不支持。
+> aio-pika、kombu 暂不支持。MQ 断言只覆盖消息是否发出、topic/key/headers/body 子集
+> 与条数，不做先后顺序；引擎也不测试 SUT 的多线程/并发行为。MQ 自动发现已解析
+> Spring `@Value`/`@ConfigurationProperties` 与 properties/yml 配置键。
+> 默认套件与平台 wheel 冒烟已进入 GitHub Actions Linux CI；真实后端 e2e 和
+> JDK/客户端矩阵仍是本地验证。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
@@ -47,8 +51,7 @@
 
 | 优先级 | 事项 | 现状 | 下一步 |
 |---|---|---|---|
-| P2 | MQ 消息顺序/序列断言 | 只有 topic/key/headers/body 子集与条数 | 需要严格顺序的业务补 `sequence` 断言；不默认要求顺序 |
-| P2 | MQ 配置值扫描 | 只解析字符串常量和 `static final` | 支持 Spring `@Value`/properties 等配置键，解析不到继续写 warning |
+| P2 | Linux CI 真实后端 | 默认套件与平台 wheel 冒烟已进 CI；真实后端 e2e 与 JDK/客户端矩阵仍只本地跑 | 补 nightly + 手动触发 job，开 gated 环境变量跑 `tests/integration`；矩阵单独 job |
 | P2 | 删除接口的旧用例处置 | 只报告，不自动废弃旧用例 | 评估是否把指向已删除端点的已批准用例标 stale，仍由人审核 |
 | P2 | pika BlockingChannel e2e | 直接 Channel 已 e2e；BlockingChannel 只有 patch 逻辑 | 起一个最小阻塞连接调用（仍需 broker 或测试替身）验证返回 bool |
 | P2 | 时间窗口测试 | 用连续请求近似 | 时钟注入或专用测试接口，覆盖频控窗口/跨月零点 |
@@ -58,14 +61,14 @@
 | P3 | 多 SUT 并发隔离 | 设计 v4.5 已定，实现待排期 | 按平台化需求推进 |
 | P3 | 变异测试 | 设计目标 0% 存活率，未实现 | 先定义可执行变异算子与评估集 |
 | P3 | 其他语言 MQ | confluent-kafka、aio-pika、kombu/Celery、Node、.NET 未支持；Go 明确不支持 | 按实际项目栈选择，不做全语言铺开 |
-| P4 | 文档基线刷新 | 设计文档仍标 v4.15 基线；README 能力表落后于实现 | 统一版本号与能力表，避免文档滞后 |
 
-**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例。
+**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例、MQ 消息先后/顺序断言（消息在生产者侧被同步截断，只有 SUT 调用先后，没有投递顺序；并发发送时先后无业务意义）、针对 SUT 多线程/并发行为的测试（并发请求、竞态、并发发送；多 SUT 隔离是框架自身能力，另行排期）。
 
 ## 当前状态
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| Linux CI 最小版 | ✅ 2026-11-19 | 新增 `.github/workflows/ci.yml`：`default-suite` 在 ubuntu + Python 3.12 跑默认套件；`linux-wheels` 用 Temurin 17 + Maven 构建 Java agent/Dubbo sidecar wheel，构建 gripmock amd64/arm64 平台 wheel，安装后跑三个分发校验，并解析包内二进制在 Linux 实跑 `test_grpc_gripmock_e2e.py`；真实后端 e2e 与版本矩阵待补；首次运行结果待确认 |
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
 | gRPC/Dubbo 契约 diff | ✅ 2026-11-19 | 新增 `changes/transport_contracts.py`：gRPC 比较 method/request/response 类型、streaming、message 字段编号/类型/枚举；Dubbo 比较方法签名、group/version、DTO 字段；`contract_changes.json` 增加 grpc/dubbo 段，报告单列并统一 `contract_change` 告警；只报告不自动生成入口用例；新增 2 条测试，全量 690 passed / 72 skipped |
@@ -76,13 +79,14 @@
 | MQ 客户端版本矩阵 | ✅ 2026-11-19 | 新增 gated `test_mq_version_matrix_e2e.py`：Maven 按版本解析 classpath、javac 编译后运行，不构建 shade jar；Kafka 2.8.2/3.7.0、RabbitMQ 4.9.0/5.21.0、RocketMQ 4.9.7/5.3.1 共 6 组真实客户端无 broker e2e 全部通过；Python 当前验证 kafka-python 3.0 / pika 1.3 |
 | Python MQ 自动注入 e2e | ✅ 2026-11-19 | 新增 gated `test_agent_flow_python_mq_e2e.py`：真实 `agent run` + FastAPI SUT + KafkaProducer，自动注入生效、用例执行、`mq_tools` 断言与门禁通过；Python capture 启动上报 `mq.installed`/clients；默认全量 684 passed / 66 skipped |
 | 被删除接口变更感知 | ✅ 2026-11-19 | delta 用临时 `git worktree` 检出 merge-base，重扫路由并与当前对比；删除项写 `deleted_apis.json`、报告单列并给 `deleted_api` 告警；扫描失败显式 warning；只提示不自动废弃旧用例；新增 2 条 git 测试，全量 684 passed / 65 skipped |
+| MQ 配置值解析 | ✅ 2026-11-19 | `profile/mq.py` 支持 Spring `@Value`（含 `${key:default}`）、`@ConfigurationProperties`、`application*.properties/yml` 与项目根 `.env`；`@ConfigurationProperties` 字段跨文件全局索引，调用点支持 `properties.field`/`getField()`；同键多值冲突、缺失、SpEL 与过深占位符显式告警；所有未解析调用点写 `mq_topic_unresolved`；producer 增加可选 `topic_source`/`config_key`；新增 6 条测试，全量 696 passed / 72 skipped |
 | MQ 自动发现与 A4 生成 | ✅ 2026-11-19 | 新增 `profile/mq.py`：扫描 Java Kafka/Rabbit/Rocket 与 Python kafka-python/pika 生产者，解析字符串常量；画像附 `mq_producers[]`；A4 只从候选生成 `mq_assertions`；未知 topic 告警 `mq.topic_not_in_profile`；新增 8 条测试，全量 682 passed / 65 skipped |
 | Python MQ 生产者拦截 | ✅ 2026-11-19 | 新增 `astsight/mq/inject`（sitecustomize + import hook）：patch kafka-python `KafkaProducer.send` 与 pika `Channel/BlockingChannel.basic_publish`；`agent run` 对 Python SUT 自动注入 `PYTHONPATH` 与 `ASTSIGHT_MQ_CAPTURE_*`；真实 kafka-python 3.0 / pika 1.3 无 broker e2e 通过；confluent-kafka、aio-pika、kombu 不做 |
 | MQ 真实客户端 e2e | ✅ 2026-11-19 | 新增 `java/samples/mq-producer`（Kafka 3.7 / RabbitMQ 5.21 / RocketMQ 5.3.1）与 gated `test_java_mq_producer_e2e.py`：无 broker 下真实客户端消息被 Agent 拦截，Mock 收到完整内容；修复 MQ transformer 的 stackmap frame（VerifyError）；agent shade 将 Jackson relocate，移除未用 ByteBuddy；OkHttp/Dubbo consumer e2e 回归通过；默认全量 672 passed / 63 skipped |
 | MQ 生产者拦截 RocketMQ P0 | ✅ 2026-11-19 | 新增 `astsight-agent-rocketmq`：织入 `DefaultMQProducer` 同步/异步 send，计划内消息不真正发送；topic 为 RocketMQ topic，key 取 getKeys、headers 取 getProperties；同步返回反射构造的 SendResult（失败为 null），异步尽力回调 onSuccess；`client=rocketmq` 进入心跳按客户端校验；SUT 启动仍可能连接 NameServer/broker；Java agent 重新打包 |
 | MQ 生产者拦截 RabbitMQ P0 | ✅ 2026-11-19 | 新增 `astsight-agent-rabbitmq`：织入 `ChannelN.basicPublish` 4/5/6 参重载，计划内消息不真正 publish；`topic=exchange/routingKey`、`key=routingKey`、headers 取 BasicProperties，body 支持 JSON/文本/base64；Java agent 重新打包；SUT 启动阶段的 AMQP 连接/声明仍需环境或后续连接级 Mock；RocketMQ 待做 |
 | MQ 生产者拦截 Kafka P0 | ✅ 2026-11-18 | 新增 `astsight-agent-kafka`：织入 `KafkaProducer.send`，计划内 topic 上报后不真正发送；引擎新增 `MqAssertion`、`MockPlan.mq_routes`、`/_admin/mq/publish` 与 `/_admin/mq/messages`，生成 `mq_tools.expect`；证据 `transport=mq`；心跳缺 `mq.installed` 阻断；新增 8 条 Python + 1 条 Java 测试，全量 671 passed / 60 skipped；RabbitMQ/RocketMQ 待做 |
-| 异步断言优先消息边界 | 📌 2026-11-18 | 口径修正：MQ 等消息型异步断言消息本身（发出/topic/key/payload/headers/次数/顺序），不启动消费者、不轮询数据库；`wait_ms` 只用于没有消息边界的内部异步；MQ 消息捕获尚未实现，优先级高于多行异步轮询 |
+| 异步断言优先消息边界 | 📌 2026-11-18 | 口径修正：MQ 等消息型异步断言消息本身（发出/topic/key/payload/headers 与条数），不启动消费者、不轮询数据库，不校验先后顺序（v4.89）；`wait_ms` 只用于没有消息边界的内部异步；MQ 消息捕获已实现 Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika |
 | 多行终态与状态不变断言 | ✅ 2026-11-18 | C5b 迁移后断言支持多表/多列/多行/复合主键，`state_path_*` 按终态行定位；新增 `db_row/unchanged`，请求前快照、请求后逐列比较，支持 `ignore_columns`；单请求与多步骤均覆盖；新增 6 条测试，全量 663 passed / 60 skipped |
 | 实体 + 造数 + Mock 真实链路 e2e | ✅ 2026-11-18 | 新增 `test_case_entity_mock_e2e.py`：真实 HTTP SUT 从 SQLite 读订单/明细，调用下游；用例 `data` 同时用于插表、请求和 `mock_replies`；断言验证请求、Mock 与插入行同源；顺带修复生成 fixture 的 teardown 顺序错误（`plan.teardown` 已是逆拓扑，代码又反转一次导致外键删除失败） |
 | README 首页差异化 | ✅ 2026-11-18 | 首页第一屏增加“pytest + LLM vs AstSight”对比表，明确门禁、规则事实源、插表造数 + 下游 Mock、失败定位四点；能力表同步用例实体造数口径 |

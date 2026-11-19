@@ -681,9 +681,10 @@ PYTHONPATH=. python -m astsight cases prepare \
 - `db_row.wait_ms` 可设为 0–60000，0 表示只查询一次；异步落库场景可设置等待时间，
   框架会轮询到断言通过或超时。只有需求/设计明确最终一致时才应使用非零值。
 - **异步优先断言消息**：如果异步边界是 MQ/消息，应断言消息是否发出及
-  topic/key/payload/headers/次数/顺序，不要改成轮询数据库；只有 SUT 内部异步
-  （线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用
-  `wait_ms` 等数据库最终状态。MQ 消息捕获尚未实现。
+  topic/key/payload/headers 与条数（不校验先后顺序），不要改成轮询数据库；只有
+  SUT 内部异步（线程池、after-commit hook、定时任务、CDC）没有消息可观测时，
+  才用 `wait_ms` 等数据库最终状态。MQ 生产者拦截已支持 Kafka/RabbitMQ/RocketMQ
+  与 Python 的 kafka-python/pika；引擎不测试 SUT 的多线程/并发行为。
 - 生成用例运行时若未设置 `ASTSIGHT_DB_URL`，`db_row` 断言会 skip 为
   `data_unavailable`，不会伪装成通过。
 - 失败场景可加 `db_row` 断言验证“没有副作用”，例如创建失败后
@@ -1453,6 +1454,8 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 - 消息不会真正发到 broker；报告里 `transport=mq`、`mode=producer_intercept`。
 - 只验证“SUT 准备发什么”，不验证 broker 接收、分区路由和序列化字节；
   Agent 返回的 `RecordMetadata` 为 null，依赖元数据的回调需要自行容错。
+- 不校验多条消息的先后顺序，也不覆盖 SUT 的多线程并发发送行为：消息在调用
+  线程里被同步截断，只存在调用先后，没有投递顺序。
 - 计划含 MQ topic 但 Agent 心跳没有 `mq.installed`，或缺少对应 client
   （`kafka` / `rabbitmq`）的拦截模块时，门禁阻断为
   `mq_producer_not_installed`，不会静默当作已拦截。
@@ -1483,7 +1486,10 @@ ASTSIGHT_MQ_SUT_ID=<sut_id>
 
 A4 的输入会带画像扫描出的 `mq_producers[]`：Java 的 ProducerRecord/KafkaTemplate、
 RabbitMQ basicPublish/RabbitTemplate、RocketMQ Message/syncSend，以及 Python 的
-kafka-python send、pika basic_publish；常量会解析，动态 topic 写进 `mq_warnings`。
+kafka-python send、pika basic_publish。topic 会依次解析字面量、同文件
+`static final`、Spring `@Value`/`@ConfigurationProperties`，以及
+`application*.properties|yml` 与项目根 `.env`；`${key:default}` 的默认值可用。
+解析不到或同键多值冲突时写进 `mq_warnings`，不猜动态值。
 A4 只从这些候选生成 `mq_assertions`，找不到候选就写未覆盖，不编 topic。
 
 `sitecustomize.py` 在解释器启动时挂 import hook，只 patch 两个纯 Python 客户端：

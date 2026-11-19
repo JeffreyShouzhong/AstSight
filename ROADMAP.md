@@ -68,12 +68,13 @@ DBML `Enum` note、`CHECK IN`/`ENUM`、规则 `eq/in` 常量、Java/Python/Go/TS
 请求前快照、请求后逐列比较，`ignore_columns` 可排除 `updated_at` 等允许变化的列。
 
 **异步断言的优先级**：如果异步边界是消息，应该断言消息本身（是否发出、topic/key、
-payload/headers、次数与顺序），不启动消费者、也不去轮询数据库；只有 SUT 内部
-异步（线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用
+payload/headers 与条数，不校验先后顺序），不启动消费者、也不去轮询数据库；只有
+SUT 内部异步（线程池、after-commit hook、定时任务、CDC）没有消息可观测时，才用
 `db_row.wait_ms` 等数据库最终状态。MQ 生产者拦截已落地 Kafka、RabbitMQ、
 RocketMQ（消息不真正发送），并有真实客户端无 broker e2e；Python SUT 支持
 kafka-python 与 pika，confluent-kafka/aio-pika/kombu 和 Go/Node/.NET 暂不支持。
-生产启动阶段仍可能需要中间件连接。
+生产启动阶段仍可能需要中间件连接。引擎只做单线程顺序执行，不测试 SUT 的
+多线程/并发行为。
 真实后端几乎不用 SQLite，下一步重点是“结构自动、语义半自动、业务判断仍回需求原文”。
 
 ### 3. 文档差异化定位落到门面（已完成）
@@ -104,6 +105,10 @@ README 首页现在直接对比“pytest + 一个 LLM”和 AstSight 在门禁�
 - 用户管理、用例管理 UI、任务调度——AstSight 是引擎，这些交给上层平台
 - 自动批准初始用例——入库仍由人审核，不会因为“AI 觉得对”就绕过人；
   仅运行期失败的用例/Mock 修复由 Agent 在硬性护栏内自动执行并留痕
+- MQ 消息先后/顺序断言——消息在生产者侧被同步截断，只存在 SUT 调用 `send`
+  的先后，没有投递顺序；并发发送时先后本身没有业务含义
+- 针对 SUT 多线程/并发行为的测试——并发请求、竞态、并发发送等不在引擎范围；
+  “多 SUT 隔离”是框架自身的运行隔离，不是测试 SUT 的并发行为
 
 ## 参与方式
 
