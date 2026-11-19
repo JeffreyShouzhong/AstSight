@@ -38,7 +38,7 @@
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 默认全量为 **671 passed / 60 skipped**；真实后端联调的历史记录为
+> 默认全量为 **684 passed / 66 skipped**；真实后端联调的历史记录为
 > 654 passed / 28 skipped（本轮未重跑）。
 
 ## 待办盘点（2026-11-19）
@@ -46,6 +46,13 @@
 | 优先级 | 事项 | 现状 | 下一步 |
 |---|---|---|---|
 | P1 | MQ 客户端版本矩阵 | 每类只验证一个版本：Kafka 3.7、Rabbit 5.21、Rocket 5.3.1；Python kafka-python 3.0 / pika 1.3 | 补 Kafka 2.x/3.x、Rabbit 4/5、Rocket 4/5 与 Python 客户端版本的 gated e2e |
+| P1 | A4 真实模型验证 | A4 的 MQ/实体生成只用脚本化 LLM 验证过 | 用真实模型跑一组需求，检查 `mq_assertions`/`data`/`mock_replies` 是否稳定、是否会编 topic |
+| P1 | 真实后端全量回归 | 默认 684/66；真实 Java/gripmock/Dubbo 联调记录 654/28 已过时 | 开启集成环境重跑全量，确认 MQ/数据链改动没有回归 |
+| P2 | MQ 消息顺序/序列断言 | 只有 topic/key/headers/body 子集与条数 | 需要严格顺序的业务补 `sequence` 断言；不默认要求顺序 |
+| P2 | OpenAPI 字段级契约 diff | 删除接口只做 route-level；参数/字段删除未覆盖 | 解析 base/target OpenAPI，按端点比较字段与必填性，输出 `contract_change` |
+| P2 | MQ 配置值扫描 | 只解析字符串常量和 `static final` | 支持 Spring `@Value`/properties 等配置键，解析不到继续写 warning |
+| P2 | 删除接口的旧用例处置 | 只报告，不自动废弃旧用例 | 评估是否把指向已删除端点的已批准用例标 stale，仍由人审核 |
+| P2 | pika BlockingChannel e2e | 直接 Channel 已 e2e；BlockingChannel 只有 patch 逻辑 | 起一个最小阻塞连接调用（仍需 broker 或测试替身）验证返回 bool |
 | P2 | 时间窗口测试 | 用连续请求近似 | 时钟注入或专用测试接口，覆盖频控窗口/跨月零点 |
 | P2 | 异步多行/多表轮询 | 单条 `db_row.wait_ms` 已有 | 按需做分组截止时间；没有消息边界时才用 |
 | P3 | gRPC/Dubbo streaming/reflection | unary 已支持 | 按真实业务需求再排期 |
