@@ -137,6 +137,7 @@ def build_report(
         first_ok = bool(attempts) and attempts[0].get("status") == "pass"
         final_ok = record.get("outcome") == "passed"
         is_blocked = record.get("outcome") == "blocked"
+        is_skipped = record.get("outcome") == "skipped"
 
         transport_value = getattr(case, "transport", None) if case is not None else None
         transport = (
@@ -146,10 +147,15 @@ def build_report(
         by_endpoint[endpoint]["total"] += 1
         by_category[category]["total"] += 1
         by_transport[transport]["total"] += 1
-        bucket = "passed" if final_ok else ("blocked" if is_blocked else "failed")
+        bucket = "passed" if final_ok else (
+            "blocked" if (is_blocked or is_skipped) else "failed"
+        )
         by_endpoint[endpoint][bucket] += 1
         by_category[category][bucket] += 1
         by_transport[transport][bucket] += 1
+        if is_skipped:
+            # skip 只是没有执行，不是失败，也不进入通过率分母。
+            continue
         first_pass += int(first_ok)
         final_pass += int(final_ok)
         if is_blocked:
@@ -189,15 +195,37 @@ def build_report(
                 }
             )
 
-    unexecuted = [
-        {"case_id": c.id, "endpoint": c.endpoint, "reason": "not_executed"}
-        for c in cases
-        if c.id not in executed_ids
-    ]
+    skipped_ids = {
+        record.get("case_id")
+        for record in records
+        if record.get("outcome") == "skipped" and record.get("case_id")
+    }
+    unexecuted = []
+    for case in cases:
+        if case.id not in executed_ids:
+            unexecuted.append(
+                {
+                    "case_id": case.id,
+                    "endpoint": case.endpoint,
+                    "reason": "not_executed",
+                }
+            )
+        elif case.id in skipped_ids:
+            unexecuted.append(
+                {
+                    "case_id": case.id,
+                    "endpoint": case.endpoint,
+                    "reason": "skipped",
+                }
+            )
 
     total = len(cases)
-    executed = len(records)
-    runnable = executed - blocked
+    # skipped 不是执行结果：既不算失败，也不进入通过率分母。
+    runnable = sum(
+        1 for record in records
+        if record.get("outcome") in {"passed", "failed"}
+    )
+    executed = runnable
     pass_rate = _rate(final_pass, runnable)
 
     contract_incomplete = [
@@ -223,6 +251,10 @@ def build_report(
     )
     if has_unmapped and not gate_config.get("allow_unmapped"):
         blockers.append("存在未映射范围（unmapped）：变更符号/路由/契约缺口未闭合")
+    if unexecuted:
+        warnings.append(
+            f"{len(unexecuted)} 条用例未执行（unexecuted），不计入通过率分母"
+        )
     if executed == 0:
         warnings.append("未执行用例：未提供 base_url 或执行被跳过")
     if blocked:
@@ -253,15 +285,16 @@ def build_report(
         if record.get("case_id")
     }
     weak_oracle: list[str] = []
+    mock_bound = [
+        case
+        for case in cases
+        if case.id in executed_case_ids
+        and getattr(case, "mock_bindings", None)
+        and getattr(case, "assert_strength", None) == AssertStrength.L1
+    ]
     if mock.get("checked"):
         mock_by_case = mock.get("by_case") or {}
-        for case in cases:
-            if case.id not in executed_case_ids:
-                continue
-            if not getattr(case, "mock_bindings", None):
-                continue
-            if getattr(case, "assert_strength", None) != AssertStrength.L1:
-                continue
+        for case in mock_bound:
             calls = int((mock_by_case.get(case.id) or {}).get("calls") or 0)
             if calls == 0:
                 weak_oracle.append(case.id)
@@ -270,6 +303,13 @@ def build_report(
                 f"{len(weak_oracle)} 条用例只有状态码断言且 Mock 未命中"
                 "（weak_oracle）"
             )
+    elif mock_bound:
+        # 没有 Mock 证据时，mock-bound 用例的命中无法证明，按弱断言处理。
+        weak_oracle = [case.id for case in mock_bound]
+        warnings.append(
+            f"Mock 证据未配置：{len(weak_oracle)} 条 mock-bound 用例"
+            "无法验证 Mock 命中（weak_oracle）"
+        )
     if mock.get("checked"):
         blocking = int(mock.get("blocking_errors") or 0)
         if blocking:
