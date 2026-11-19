@@ -88,7 +88,9 @@ README 首页现在直接对比“pytest + 一个 LLM”和 AstSight 在门禁�
 - **Dubbo 被测入口（sidecar / Triple）**：下游 Mock 已由 agent + Filter 覆盖；Hessian2 sidecar 与 Triple unary（protobuf descriptor 或 Java interface）均已打通，包含 wheel 分发、常驻 provider 样例、提供方画像、DTO/proto 采样、A4 草案、多步骤、诊断/修复、codegen 与执行。目标定位采用直连解析（来源校验 + 代码地址 + 服务级映射 + IP 字面量），已在 Apache Online Boutique 多服务试点验证；不做注册中心选 provider。仍不支持：streaming、reflection、异步/oneway。
 - **时间窗口测试**：通过时钟注入或专用测试接口，覆盖频控窗口、跨月零点、超时等真实时间场景（当前以“连续请求立即命中”近似，报告显式标注）。
 - **replay 模式**：流量回放生成用例。
-- **被删除接口的变更感知**：从 base 分支/OpenAPI 建第二份路由清单，覆盖“接口被删”。
+- **被删除接口的变更感知**：已完成 route-level 检测（base worktree 重扫路由，
+  `deleted_apis.json` + 报告单列 + `deleted_api` 告警）；OpenAPI 字段级删除仍走
+  契约 diff。
 
 ## 长期 / 待讨论
 

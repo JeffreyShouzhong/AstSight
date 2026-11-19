@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .downstream import DownstreamScanner
+from .mq import scan_mq_producers
 from .openapi import EndpointSpec, normalize_path
 
 
@@ -106,6 +107,7 @@ def build_profiles(
         )
     dubbo_scan = scanner.scan_dubbo() if scanner is not None else None
     grpc_scan = scanner.scan_grpc() if scanner is not None else None
+    mq_scan = scan_mq_producers(project_root) if project_root is not None else None
 
     for route in routes:
         method = str(route.get("method") or "").upper()
@@ -266,6 +268,15 @@ def build_profiles(
             ]
 
         profiles.append(profile)
+
+    if mq_scan is not None:
+        for profile in profiles:
+            profile["mq_producers"] = [
+                dict(item) for item in mq_scan.producers
+            ]
+            profile["mq_producers_checked"] = mq_scan.checked
+            if mq_scan.warnings:
+                profile["mq_warnings"] = list(mq_scan.warnings)
 
     if dubbo_scan is not None:
         for provider in dubbo_scan.providers:

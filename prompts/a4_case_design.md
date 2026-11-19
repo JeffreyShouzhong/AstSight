@@ -32,7 +32,9 @@
     `service` / `method` / `parameter_types` / `parameter_schemas`
     （DTO 字段、必填标记、`constraints`、集合 `element`、枚举值、时间格式）
     / `result_schema` / `group` / `version`。
-  - 两种都带 `coverage_role` 与 `downstream_deps`。
+  - 两种都带 `coverage_role`、`downstream_deps` 与 `mq_producers`
+    （源码扫描到的 Kafka/RabbitMQ/RocketMQ 生产者候选：`client`/`topic`/
+    `dep_id`/`file`/`line`）；`mq_warnings` 是动态 topic 等无法解析的证据。
 - `ruleset.rules[]`：A1 业务规则与 CR 契约规则；只可引用其中的 `rule_key`。
 - `mock_semantics[]`：每个 `dep_id` 的可用 `branches[]`，每个分支带
   `body`（该分支实际返回的响应体，可能被截断）、`outcome` 和 `semantics`；
@@ -121,6 +123,7 @@
 | `data` | 用例级业务实体，`{实体名: {字段: 值}}`，实体名匹配 `[a-z][a-z0-9_]{0,63}`。请求、断言和 `mock_replies` 用 `{"$data": "实体.字段"}` 引用；不要从环境里“找一条真实数据”，ID 自己造 |
 | `mock_bindings` | `{dep_id: branch}`；dep 必须属于该画像，branch 必须存在于 `mock_semantics`。无下游写 `{}` |
 | `mock_replies` | `{dep_id: 部分响应体}`；在该 dep 的 default 分支响应体上递归合并。只能用 `mock_semantics[].branches[].body` 里已有的字段；必须同时有该 dep 的 `mock_bindings`；仅 HTTP/Dubbo 下游 |
+| `mq_assertions` | MQ 生产者消息断言：`[{client, topic, key?, headers?, body?, count?}]`。`client/topic` 只能来自画像 `mq_producers`；`body`/`headers` 子集匹配；规则没有消息语义时不要填 |
 | `mock_rules` | 仅 HTTP：`[{dep_id, branch, match}]`。`match` 支持 `query` / `headers` / `body` 子集匹配；规则优先于 sequence，同一请求命中多条会在运行期失败关闭。只有需求明确要求按参数返回不同结果时才填 |
 | `mock_sequences` | 仅 HTTP：`{dep_id: [branch, ...]}`。规则未命中时按调用次数取分支，序列耗尽后回退 `mock_bindings` 的 default branch；只有需求明确描述连续调用差异时使用 |
 | `path_params` / `query` / `headers` / `body` | 仅 HTTP。字段名必须来自画像；除被测点外，基线值必须满足画像约束；body 嵌套不超过 20 层。`contract_incomplete=true` 时画像没有字段事实，只允许使用需求原文或规则中明确出现的字段名；无法确定就跳过并写入 `uncovered_requirements` |
@@ -224,6 +227,33 @@ ID**。用例自己造实体，请求和下游 Mock 引用同一份数据：
 - 下游是 gRPC 时不要写 `mock_replies`。
 - 实体没被任何请求、断言或 Mock 引用会被告警；引用不存在的字段会阻断导入。
 
+### MQ 消息断言（`mq_assertions`）
+
+规则明确要求“发出事件/消息”时，从画像 `mq_producers[]` 选择候选，不要自己编
+topic。只断言 SUT 准备发出的内容，不连 broker。
+
+```json
+"mq_assertions": [
+  {
+    "client": "kafka",
+    "topic": "orders-topic",
+    "key": "O-1001",
+    "headers": {"trace": "t1"},
+    "body": {"order_id": "O-1001", "status": "paid"},
+    "count": 1
+  }
+]
+```
+
+- `client` / `topic` 必须逐字来自 `mq_producers[]`；RabbitMQ 的 topic 是
+  `exchange/routingKey`。
+- `key`、`headers`、`body` 都是子集匹配；规则或事件契约没有明确字段时，
+  只断言 topic 和条数，不要猜 payload。
+- 同一 topic 的多次发送用 `count` 表达。
+- `mq_producers` 为空但规则明确要求发消息时，写入
+  `uncovered_requirements[].reason`，不要编 topic。
+- 动态 topic 会在 `mq_warnings` 里；无法确定时按未覆盖处理。
+
 ### 多请求用例（`steps`）
 
 当一条规则依赖**连续请求**（频控、幂等重试、状态流转、先创建后查询）且无法用
@@ -324,6 +354,8 @@ ID**。用例自己造实体，请求和下游 Mock 引用同一份数据：
 7. **业务实体一致性**：规则依赖实体的具体属性（品类、状态、库存）时，用 `data`
    声明实体并让请求与下游 Mock 引用同一份数据；不要写“先查列表拿真实 ID”的用例，
    也不要把实体 ID 在请求和 Mock 里各写一遍。
+8. **消息语义**：规则要求发事件/消息时，`mq_assertions` 的 topic 必须来自
+   `mq_producers[]`；能确认的 key/headers/body 才写，确认不了就只断言 topic 与条数。
 7. **契约 CR**：缺 Content-Type、非法 JSON、未知/多余字段、缺 required header/path
    param、成功响应结构、错误响应结构；只引用 CR 规则给出的期望，不猜错误码。
 

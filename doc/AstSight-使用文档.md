@@ -1463,6 +1463,11 @@ ASTSIGHT_MQ_TOKEN=<token>
 ASTSIGHT_MQ_SUT_ID=<sut_id>
 ```
 
+A4 的输入会带画像扫描出的 `mq_producers[]`：Java 的 ProducerRecord/KafkaTemplate、
+RabbitMQ basicPublish/RabbitTemplate、RocketMQ Message/syncSend，以及 Python 的
+kafka-python send、pika basic_publish；常量会解析，动态 topic 写进 `mq_warnings`。
+A4 只从这些候选生成 `mq_assertions`，找不到候选就写未覆盖，不编 topic。
+
 `sitecustomize.py` 在解释器启动时挂 import hook，只 patch 两个纯 Python 客户端：
 
 - `kafka-python`：`KafkaProducer.send`，命中后返回已完成的 Future；
@@ -1508,7 +1513,10 @@ PYTHONPATH=. python -m astsight run \
 - `--project` 必须是 git 仓库根；
 - `--target` 必须是当前检出的工作树，不能是任意 git 引用；
 - 只生成、不执行时加 `--skip-execute`；
-- 重点看 `changed_apis.json` 的 `evidence`、`unresolved_symbols` 和 `unsupported_files`。
+- 重点看 `changed_apis.json` 的 `evidence`、`unresolved_symbols` 和 `unsupported_files`；
+- delta 会用临时 `git worktree` 检出 merge-base，重扫 base 路由并与当前对比；
+  被删除的接口写入 `deleted_apis.json`，报告单列“被删除的接口”并给
+  `deleted_api` 告警。旧用例不会自动废弃，只提示人工处理。
 
 ### 12.3 cases：只执行已批准用例
 

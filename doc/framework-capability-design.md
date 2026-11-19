@@ -615,6 +615,13 @@ Unsafe 分配未初始化 `ChannelN`，验证的是真实方法签名与拦截�
 路径。Agent shade 将 Jackson relocate 到 `io.astsight.agent.shaded.jackson`，
 避免应用自带旧版本覆盖；未使用的 ByteBuddy 已移除。
 
+**MQ 生产者候选扫描（v4.80）**：画像阶段只读源码扫描 MQ 生产调用，结果以
+`mq_producers[]` 附到每个 profile：Java 覆盖 `ProducerRecord`/`KafkaTemplate`、
+`basicPublish`/`RabbitTemplate`、RocketMQ `Message`/`syncSend`；Python 覆盖
+kafka-python `send` 与 pika `basic_publish`。字符串常量和 `static final` 会解析，
+动态 topic 不猜，写入 `mq_warnings`。A4 只从候选生成 `mq_assertions`；校验在
+画像有候选但 topic 不在候选中时给 `mq.topic_not_in_profile` 告警。
+
 **Python 生产者拦截（v4.79）**：`agent run` 对 Python SUT 自动注入
 `engine/astsight/mq/inject/sitecustomize.py`（设置 `PYTHONPATH` 与
 `ASTSIGHT_MQ_CAPTURE_*` 环境变量）。import hook patch `kafka-python` 的
@@ -1050,6 +1057,12 @@ adapter。streaming、reflection 和注册中心仍不做。
    - 分别解析 base 与 target 的契约源（HTTP：OpenAPI/Spring MVC 注解；gRPC：`.proto`/descriptor；Dubbo：接口源码 + 标准注解/XML）
    - 按端点身份对齐后比较：新增/删除端点、方法/路径、参数名与类型、必填性、请求/响应字段、状态码/错误定义
    - 差异命中某端点 → `change_kinds` 追加 `contract`；端点被删除 → `contract_change.status=removed`，只报告不生成用例
+   - **实现状态（v4.81）**：route-level 删除检测已落地（`changes/deleted.py`）。
+     delta 用临时 `git worktree` 检出 merge-base，重跑路由发现，按
+     `(method, normalized_path)` 与当前路由对比；结果写入 `deleted_apis.json`
+     与报告“被删除的接口”，门禁给 `deleted_api` 告警。worktree/扫描失败显式
+     写 warning，不伪装成“没有删除”；旧用例只提示、不自动废弃。OpenAPI/契约
+     字段级删除仍按原有 contract diff 规则处理。
    - 契约新增端点但仓库内**没有对应提供方实现**（只有 stub/接口声明）→ `unsupported_reason=implementation_missing`，只报告不生成用例，不把消费方 stub 当实现
    - base 契约缺失/解析失败 → `status=unavailable`，报告 `contract_diff_unavailable` 警告，退回纯代码 diff，不假装“契约未变”
 7. 置信度判定：

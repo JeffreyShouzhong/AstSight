@@ -45,10 +45,8 @@
 
 | 优先级 | 事项 | 现状 | 下一步 |
 |---|---|---|---|
-| P1 | MQ 自动发现与 A4 生成 | `mq_assertions` 只能手写；画像不扫描生产者，A4 提示词也没有 MQ 规则 | 扫描 Java/Python 生产者 topic（常量/配置键）；A4 只从扫描结果生成 `mq_assertions`，找不到写 gap |
 | P1 | MQ 客户端版本矩阵 | 每类只验证一个版本：Kafka 3.7、Rabbit 5.21、Rocket 5.3.1；Python kafka-python 3.0 / pika 1.3 | 补 Kafka 2.x/3.x、Rabbit 4/5、Rocket 4/5 与 Python 客户端版本的 gated e2e |
 | P1 | Python MQ 自动注入 e2e | 只有手工设置环境变量的 e2e；`agent run` 自动注入只有单测 | 用 Python SUT + `agent run` + MQ plan 跑完整闭环 |
-| P2 | 被删除接口的变更感知 | delta 只比新增/修改 | 从 base 分支/旧 OpenAPI 建第二份路由清单，显式列删除接口 |
 | P2 | 时间窗口测试 | 用连续请求近似 | 时钟注入或专用测试接口，覆盖频控窗口/跨月零点 |
 | P2 | 异步多行/多表轮询 | 单条 `db_row.wait_ms` 已有 | 按需做分组截止时间；没有消息边界时才用 |
 | P3 | gRPC/Dubbo streaming/reflection | unary 已支持 | 按真实业务需求再排期 |
@@ -66,6 +64,8 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
+| 被删除接口变更感知 | ✅ 2026-11-19 | delta 用临时 `git worktree` 检出 merge-base，重扫路由并与当前对比；删除项写 `deleted_apis.json`、报告单列并给 `deleted_api` 告警；扫描失败显式 warning；只提示不自动废弃旧用例；新增 2 条 git 测试，全量 684 passed / 65 skipped |
+| MQ 自动发现与 A4 生成 | ✅ 2026-11-19 | 新增 `profile/mq.py`：扫描 Java Kafka/Rabbit/Rocket 与 Python kafka-python/pika 生产者，解析字符串常量；画像附 `mq_producers[]`；A4 只从候选生成 `mq_assertions`；未知 topic 告警 `mq.topic_not_in_profile`；新增 8 条测试，全量 682 passed / 65 skipped |
 | Python MQ 生产者拦截 | ✅ 2026-11-19 | 新增 `astsight/mq/inject`（sitecustomize + import hook）：patch kafka-python `KafkaProducer.send` 与 pika `Channel/BlockingChannel.basic_publish`；`agent run` 对 Python SUT 自动注入 `PYTHONPATH` 与 `ASTSIGHT_MQ_CAPTURE_*`；真实 kafka-python 3.0 / pika 1.3 无 broker e2e 通过；confluent-kafka、aio-pika、kombu 不做 |
 | MQ 真实客户端 e2e | ✅ 2026-11-19 | 新增 `java/samples/mq-producer`（Kafka 3.7 / RabbitMQ 5.21 / RocketMQ 5.3.1）与 gated `test_java_mq_producer_e2e.py`：无 broker 下真实客户端消息被 Agent 拦截，Mock 收到完整内容；修复 MQ transformer 的 stackmap frame（VerifyError）；agent shade 将 Jackson relocate，移除未用 ByteBuddy；OkHttp/Dubbo consumer e2e 回归通过；默认全量 672 passed / 63 skipped |
 | MQ 生产者拦截 RocketMQ P0 | ✅ 2026-11-19 | 新增 `astsight-agent-rocketmq`：织入 `DefaultMQProducer` 同步/异步 send，计划内消息不真正发送；topic 为 RocketMQ topic，key 取 getKeys、headers 取 getProperties；同步返回反射构造的 SendResult（失败为 null），异步尽力回调 onSuccess；`client=rocketmq` 进入心跳按客户端校验；SUT 启动仍可能连接 NameServer/broker；Java agent 重新打包 |

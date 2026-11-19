@@ -1636,6 +1636,7 @@ def _check_case_data(
 def _check_mq_assertions(
     draft_case: DraftCase,
     *,
+    known_producers: set[tuple[str, str]],
     case_key: str,
     endpoint: str,
     path: str,
@@ -1680,6 +1681,22 @@ def _check_mq_assertions(
             )
         seen_topics.add(topic)
         client = str(item.client or "").strip().lower()
+        if (
+            known_producers
+            and client in {"kafka", "rabbitmq", "rocketmq"}
+            and (client, topic) not in known_producers
+        ):
+            result.warnings.append(
+                _issue(
+                    "warning",
+                    "mq.topic_not_in_profile",
+                    f"mq_assertions[{index}] 的 topic 未在画像生产者中扫描到: "
+                    f"{client}/{topic}",
+                    case_key=case_key,
+                    endpoint=endpoint,
+                    path=path,
+                )
+            )
         if client not in {"kafka", "rabbitmq", "rocketmq"}:
             result.errors.append(
                 _issue(
@@ -2935,6 +2952,12 @@ def validate_draft(
     scope_docs = set(explicit_scope)
     seen_anchors: dict[tuple[str, str], int] = {}
 
+    known_mq_producers = {
+        (str(item.get("client") or ""), str(item.get("topic") or ""))
+        for profile in context.get("profiles") or []
+        for item in profile.get("mq_producers") or []
+        if item.get("client") and item.get("topic")
+    }
     for index, draft_case in enumerate(draft.cases):
         pseudo_path = f"cases[{index}]"
         key = draft_case.case_key
@@ -2964,6 +2987,7 @@ def validate_draft(
             )
         _check_mq_assertions(
             draft_case,
+            known_producers=known_mq_producers,
             case_key=key,
             endpoint=endpoint_raw,
             path=pseudo_path,

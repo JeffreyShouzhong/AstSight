@@ -283,6 +283,15 @@ def build_report(
                     f"{', '.join(missing)}（mq_producer_not_installed）"
                 )
 
+    deleted_state = impact.get("deleted_apis") or {}
+    if deleted_state.get("deleted"):
+        warnings.append(
+            f"本次变更删除了 {len(deleted_state['deleted'])} 个接口，"
+            "旧用例可能已失效（deleted_api）"
+        )
+    for item in deleted_state.get("warnings") or []:
+        warnings.append(f"删除接口扫描未完成：{item}")
+
     route_health = (route_audit or {}).get("health") or {}
     if route_health.get("status") == "degraded":
         reasons = "，".join(route_health.get("reasons") or [])
@@ -424,6 +433,28 @@ def render_markdown(report: dict) -> str:
                 f"{', '.join(api.get('changed_symbols', [])[:4])} |"
             )
     lines.append("")
+
+    deleted_state = impact.get("deleted_apis") or {}
+    if deleted_state.get("checked"):
+        deleted = deleted_state.get("deleted") or []
+        lines.append("## 被删除的接口")
+        lines.append("")
+        if not deleted:
+            lines.append("_无_")
+        else:
+            lines.append("| 接口 | handler | 文件 |")
+            lines.append("|---|---|---|")
+            for item in deleted:
+                lines.append(
+                    f"| `{item['endpoint']}` | {item.get('handler') or '-'} | "
+                    f"{item.get('file') or '-'}:{item.get('line') or 0} |"
+                )
+        lines.append("")
+    elif deleted_state.get("warnings"):
+        lines.append("## 被删除的接口")
+        lines.append("")
+        lines.append("_扫描未完成_：" + "；".join(deleted_state["warnings"][:5]))
+        lines.append("")
 
     if report.get("case_store"):
         store = report["case_store"]

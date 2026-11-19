@@ -34,6 +34,7 @@ from .cases.store import (
     store_hash,
 )
 from .changes.git_diff import GitDiffError, diff_files, repo_root, resolve_range
+from .changes.deleted import deleted_apis
 from .changes.impact import analyze_impact
 from .changes.symbol_diff import symbols_for_changes
 from .codegen import generate_pytest
@@ -1454,6 +1455,20 @@ def run(config: RunConfig) -> dict:
         impact_dict = summary.as_dict()
         impact_dict["changed_symbols"] = [s.as_dict() for s in changed_symbols]
         impact_dict["unsupported_files"] = unsupported_files
+        deleted_state = deleted_apis(
+            project,
+            base=config.base,
+            current_routes=routes,
+            codegraph=config.codegraph,
+            codegraph_module_root=config.codegraph_module_root,
+            openapi_source=config.openapi,
+        )
+        impact_dict["deleted_apis"] = deleted_state
+        run_dir.write_json("deleted_apis.json", deleted_state)
+        if deleted_state.get("deleted"):
+            run_meta["deleted_api_count"] = len(deleted_state["deleted"])
+        for warning in deleted_state.get("warnings") or []:
+            run_meta.setdefault("warnings", []).append(warning)
     else:
         run_meta["comparison"] = "full"
         changed_apis, changes_meta = _changed_scope_full(routes)

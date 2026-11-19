@@ -572,3 +572,81 @@ def test_rocketmq_client_is_supported(tmp_path: Path) -> None:
     result = validate_draft(draft, context, project=tmp_path)
     codes = {item.code for item in result.errors}
     assert "mq.client_unsupported" not in codes
+
+
+def test_mq_topic_must_come_from_scanned_producers(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context["profiles"][0]["mq_producers"] = [
+        {
+            "dep_id": "mq:kafka:orders-topic",
+            "client": "kafka",
+            "topic": "orders-topic",
+        }
+    ]
+    draft = _with_case_data(
+        _draft(context),
+        mq_assertions=[MqAssertion(topic="ghost-topic")],
+    )
+    result = validate_draft(draft, context, project=tmp_path)
+    warnings = [
+        item for item in result.warnings
+        if item.code == "mq.topic_not_in_profile"
+    ]
+    assert len(warnings) == 1
+    assert "ghost-topic" in warnings[0].message
+
+
+def test_a4_prompt_exposes_scanned_mq_producers(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context["profiles"][0]["mq_producers"] = [
+        {
+            "dep_id": "mq:kafka:orders-topic",
+            "client": "kafka",
+            "topic": "orders-topic",
+            "file": "src/main/java/OrderController.java",
+            "line": 10,
+        }
+    ]
+    prompt_input = _prompt_input(
+        context,
+        ruleset=_ruleset(),
+        mode="full",
+        changed_apis=None,
+        mock_semantic=None,
+        data_catalog=None,
+    )
+    assert prompt_input["profiles"][0]["mq_producers"][0]["topic"] == (
+        "orders-topic"
+    )
+
+
+def test_a4_generates_mq_assertion_from_profile_candidate(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context["profiles"][0]["mq_producers"] = [
+        {
+            "dep_id": "mq:kafka:orders-topic",
+            "client": "kafka",
+            "topic": "orders-topic",
+        }
+    ]
+    payload = _a4_payload(context, binding={})
+    payload["cases"][0]["mock_replies"] = {}
+    payload["cases"][0]["mq_assertions"] = [
+        {
+            "client": "kafka",
+            "topic": "orders-topic",
+            "key": "O-1001",
+            "body": {"order_id": "O-1001"},
+            "count": 1,
+        }
+    ]
+    result = generate_case_design(
+        context,
+        ruleset=_ruleset(),
+        llm=_ScriptedLLM([payload]),
+        project=tmp_path,
+    )
+    assertion = result.draft.cases[0].mq_assertions[0]
+    assert assertion.client == "kafka"
+    assert assertion.topic == "orders-topic"
+    assert assertion.count == 1

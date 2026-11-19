@@ -208,6 +208,8 @@ def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
         "direct_url": profile.get("direct_url"),
         "protocol_port": profile.get("protocol_port"),
         "url_source": profile.get("url_source"),
+        "mq_producers": profile.get("mq_producers") or [],
+        "mq_warnings": profile.get("mq_warnings") or [],
     }
 
 
