@@ -182,7 +182,10 @@ def _operations_payload(operations: list[Any]) -> list[dict[str, Any]]:
                 "method": operation.method,
                 "path": operation.path,
                 "endpoint": f"{operation.method} {operation.path}",
-                "params": operation.params,
+                "params": [
+                    param.as_dict() if hasattr(param, "as_dict") else param
+                    for param in operation.params
+                ],
                 "body_required": list(operation.body_required),
                 "body_schema": operation.body_schema,
                 "success_codes": list(operation.success_codes),

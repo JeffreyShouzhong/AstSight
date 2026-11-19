@@ -120,6 +120,22 @@ cp llm.example.json llm.json     # llm.json 已 gitignore
 密钥不要写进命令、脚本、报告或仓库：建议保持 `api_key` 为空，用 `api_key_env`
 指向环境变量（如 `ASTSIGHT_LLM_API_KEY`）。环境变量始终覆盖文件值。
 
+DeepSeek 的 Anthropic 兼容端点示例：
+
+```json
+{
+  "provider": "anthropic",
+  "model": "deepseek-chat",
+  "base_url": "https://api.deepseek.com/anthropic",
+  "auth_style": "bearer",
+  "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+  "max_tokens": 32768
+}
+```
+
+`deepseek-flash` 也能用，但真实验证里它在实体场景生成过非法断言；生成质量要求高时优先
+`deepseek-chat`。
+
 | 用途 | 优先变量 | 兼容变量 |
 |---|---|---|
 | API Key | `ASTSIGHT_LLM_API_KEY` | `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` |
