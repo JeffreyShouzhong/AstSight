@@ -129,6 +129,8 @@ README 首页现在直接对比“pytest + 一个 LLM”和 AstSight 在门禁�
   `transport_coverage` 不排期
 - 跨 transport 回退（M2.7）：`transport_fallback` 不实现
 - C7.1 数据冲突检测与 C7.2 并行调度：当前全量串行执行，不做冲突图与并行分组
+- LangGraph 编排接线：`orchestration/` 骨架保留，不排期；当前是线性流程 +
+  `case_error`/`mock_error` 最多 3 轮的受限修复回环
 
 ## 参与方式
 

@@ -424,6 +424,12 @@ diff、生成待审 proposal；**不生成用例，不调用 LLM**。
 
 ## 四、Orchestrator（编排器）架构
 
+> **实现状态（2026-11-19，v4.99）**：LangGraph 编排未接线。`orchestration/` 只有
+> StateGraph 骨架（入口分流 + A4.5 审核门 + stub 节点），运行时 `pipeline.run` 与
+> `agent.flow.run_flow` 走各自的手写线性流程。实际控制流是“线性阶段 + 一个受限回环”：
+> 仅 `case_error` / `mock_error` 进入诊断修复，默认最多 3 轮后退出，其他根因直接结束并
+> 产出报告；没有并行、跨阶段回环或暂停恢复。接线明确不排期。
+
 **职责**：用 LangGraph StateGraph 串起 A1 需求分析、S2/S3、A4/A4.5、C5、C6/C7 与 A5 诊断，管理全局状态与流转。
 
 ```

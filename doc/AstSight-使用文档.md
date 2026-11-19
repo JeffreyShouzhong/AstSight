@@ -1991,6 +1991,8 @@ Git Bash 会把以 `/` 开头的参数改写成 Windows 路径。建议传完整
 - HTTP / Dubbo / gRPC 下游 Mock 已统一到同一控制面；streaming、reflection、
   Triple streaming 明确不支持。
 - 多 SUT 并发隔离（设计保留）明确不排期。
+- LangGraph 编排未接线：`orchestration/` 只有 StateGraph 骨架；当前流程是线性阶段 +
+  仅 `case_error` / `mock_error` 最多 3 轮的修复回环，其他根因直接结束并产出报告。
 - 用例入库/更新必须人工审核。唯一的自动废弃是接口删除时把对应用例标为
   `deprecated`，以 `astsight:deleted-api` 身份写入 `review_log`；`deprecate`
   提案仍不能自动批准。
