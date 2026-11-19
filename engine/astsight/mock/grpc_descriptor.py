@@ -26,6 +26,8 @@ class GrpcMethod:
     method: str
     request_type: str
     response_type: str
+    client_streaming: bool = False
+    server_streaming: bool = False
 
 
 def _descriptor_bytes_from_proto(path: Path, include_dirs: Iterable[Path]) -> bytes:
@@ -160,7 +162,7 @@ class GrpcDescriptorIndex:
             response_type=method.output_type.full_name,
         )
 
-    def unary_methods(self) -> list[GrpcMethod]:
+    def all_methods(self) -> list[GrpcMethod]:
         methods: list[GrpcMethod] = []
         for file_proto in self._files:
             package = file_proto.package.strip(".")
@@ -169,8 +171,6 @@ class GrpcDescriptorIndex:
                     f"{package}.{service.name}" if package else service.name
                 )
                 for method in service.method:
-                    if method.client_streaming or method.server_streaming:
-                        continue
                     methods.append(
                         GrpcMethod(
                             grpc_path=f"/{full_service}/{method.name}",
@@ -178,9 +178,17 @@ class GrpcDescriptorIndex:
                             method=method.name,
                             request_type=method.input_type.lstrip("."),
                             response_type=method.output_type.lstrip("."),
+                            client_streaming=bool(method.client_streaming),
+                            server_streaming=bool(method.server_streaming),
                         )
                     )
         return sorted(methods, key=lambda item: item.grpc_path)
+
+    def unary_methods(self) -> list[GrpcMethod]:
+        return [
+            item for item in self.all_methods()
+            if not item.client_streaming and not item.server_streaming
+        ]
 
     def validate_response(self, grpc_path: str, body: Any) -> None:
         method = self.method(grpc_path)

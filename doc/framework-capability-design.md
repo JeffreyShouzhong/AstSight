@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（实现基线 v4.87，2026-11-19）
+# AstSight — 能力设计规格说明书（实现基线 v4.88，2026-11-19）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -15,12 +15,12 @@
 
 > **当前口径**：本文只描述当前有效的能力规格、契约与约束。决策过程（候选对比、落选原因、被推翻的判断、版本变更历史）统一记录在 [`决策记录.md`](决策记录.md)，本文不复述“为什么”。
 
-**当前实现状态（2026-11-19，v4.87）**
+**当前实现状态（2026-11-19，v4.88）**
 
 - **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`。
-- **部分实现**：OpenAPI 字段级契约 diff（参数/字段/状态码已落地，gRPC/Dubbo 契约 diff 未做）；MQ 自动发现只解析常量和 `static final`；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
+- **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；MQ 自动发现只解析常量和 `static final`；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
 - **未实现/明确不支持**：多 SUT 并发隔离（设计见 5.5，实现待排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider。
-- **验证基数**：默认套件 685 passed / 72 skipped；开启真实 MQ、Java agent、Dubbo、Triple、gripmock 后 724 passed / 32 skipped（后续新增契约 diff 测试后默认套件为 688）。
+- **验证基数**：默认套件 690 passed / 72 skipped；开启真实 MQ、Java agent、Dubbo、Triple、gripmock 后历史记录 724 passed / 32 skipped（本轮未重跑）。
 > gRPC 下游 Mock 使用 gripmock 假服务器（unary、明文），落地约束见 **C3.5.4**；v4.3 报告口径不变。
 > 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5）：实例身份、端口原子分配、持久化作用域缺一不可。
 > **v4.6 决策**：取消对 Feign 的特殊支持。Feign 不单独解析、不作契约源、不生成专用配置；
@@ -1069,8 +1069,11 @@ adapter。streaming、reflection 和注册中心仍不做。
    - 按端点身份对齐后比较：新增/删除端点、方法/路径、参数名与类型、必填性、请求/响应字段、状态码/错误定义
    - 差异命中某端点 → `change_kinds` 追加 `contract`；端点被删除 → `contract_change.status=removed`，只报告不生成用例
    - **实现状态（v4.81/v4.87）**：route-level 删除检测已落地（`changes/deleted.py`）；
-     OpenAPI 字段级 diff 已落地（`changes/contract_diff.py`），覆盖参数、请求体、
-     响应状态码与响应字段，变化端点并入 `changed_apis`。gRPC/Dubbo 契约 diff 未做。
+     契约字段 diff 已落地（`changes/contract_diff.py` + `transport_contracts.py`）：
+     HTTP OpenAPI 覆盖参数、请求体、响应状态码与字段，变化端点并入 `changed_apis`；
+     gRPC 覆盖 method、request/response message 字段编号/类型/枚举/streaming；
+     Dubbo 覆盖方法签名、group/version、参数与返回 DTO 字段。gRPC/Dubbo 只报告，
+     不自动生成入口用例。
      delta 用临时 `git worktree` 检出 merge-base，重跑路由发现，按
      `(method, normalized_path)` 与当前路由对比；结果写入 `deleted_apis.json`
      与报告“被删除的接口”，门禁给 `deleted_api` 告警。worktree/扫描失败显式
@@ -3340,7 +3343,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full`/`replay` + C2 召回率基准 | 20 个真实分支人工标注；replay 可重放 |
 
-> 本说明书实现基线为 **v4.87（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书实现基线为 **v4.88（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
 > Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo Hessian2 走 Java sidecar

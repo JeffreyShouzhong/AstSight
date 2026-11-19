@@ -1,7 +1,8 @@
 """OpenAPI 字段级契约 diff：base 与当前契约按端点比较。
 
-P0 覆盖 HTTP OpenAPI：参数新增/删除/必填/类型，请求体字段与必填，
-响应状态码与响应字段。只报告契约事实，不替模型猜业务影响。
+覆盖 HTTP OpenAPI（参数、请求体、响应状态码与字段）、gRPC proto/descriptor
+（service/method、message 字段编号/类型/枚举/streaming）与 Dubbo 接口
+（方法签名、group/version、DTO 字段）。只报告契约事实，不替模型猜业务影响。
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from typing import Any, Iterable
 
 from ..inventory import discover_openapi
 from ..profile.openapi import EndpointSpec, load_spec, normalize_path, parse_operations
+from .transport_contracts import dubbo_diff, grpc_diff
 
 
 def contract_diff(
@@ -36,12 +38,11 @@ def contract_diff(
         state["warnings"].append("contract_diff_base_missing")
         return state
     current_source = discover_openapi(root, current_openapi, base_url)
+    if current_source and _is_remote(current_source):
+        state["warnings"].append("contract_diff_remote_openapi_unsupported")
+        current_source = None
     if not current_source:
         state["warnings"].append("contract_diff_openapi_missing")
-        return state
-    if _is_remote(current_source):
-        state["warnings"].append("contract_diff_remote_openapi_unsupported")
-        return state
     revision = _merge_base(root, base)
     if revision is None:
         state["warnings"].append("contract_diff_base_unresolved")
@@ -58,29 +59,15 @@ def contract_diff(
             )
             return state
         created = True
-        base_source = _base_source(root, worktree, current_source)
-        if base_source is None:
-            state["warnings"].append("contract_diff_base_openapi_missing")
-            return state
-        state["current_openapi"] = _portable(root, current_source)
-        state["base_openapi"] = _portable(root, base_source)
-        current_ops = _index(parse_operations(load_spec(current_source)))
-        try:
-            base_ops = _index(parse_operations(load_spec(base_source)))
-        except Exception as exc:
-            state["warnings"].append(
-                f"contract_diff_base_parse_failed:{type(exc).__name__}:{exc}"[:500]
-            )
-            return state
-        state["added_endpoints"] = sorted(set(current_ops) - set(base_ops))
-        state["removed_endpoints"] = sorted(set(base_ops) - set(current_ops))
-        changes = []
-        for key in sorted(set(base_ops) & set(current_ops)):
-            diff = _compare(base_ops[key], current_ops[key])
-            if diff is not None:
-                changes.append(diff)
-        state["changes"] = changes
-        state["checked"] = True
+        if current_source:
+            _openapi_diff(root, worktree, current_source, state)
+        grpc_diff(root, worktree, state)
+        dubbo_diff(root, worktree, state)
+        state["checked"] = bool(
+            state.get("openapi_checked")
+            or state.get("grpc", {}).get("checked")
+            or state.get("dubbo", {}).get("checked")
+        )
         return state
     except Exception as exc:
         state["warnings"].append(
@@ -91,6 +78,34 @@ def contract_diff(
         if created:
             _git(root, "worktree", "remove", "--force", str(worktree))
         shutil.rmtree(worktree, ignore_errors=True)
+
+
+def _openapi_diff(
+    root: Path, worktree: Path, current_source: str, state: dict[str, Any]
+) -> None:
+    base_source = _base_source(root, worktree, current_source)
+    if base_source is None:
+        state["warnings"].append("contract_diff_base_openapi_missing")
+        return
+    state["current_openapi"] = _portable(root, current_source)
+    state["base_openapi"] = _portable(root, base_source)
+    try:
+        current_ops = _index(parse_operations(load_spec(current_source)))
+        base_ops = _index(parse_operations(load_spec(base_source)))
+    except Exception as exc:
+        state["warnings"].append(
+            f"contract_diff_base_parse_failed:{type(exc).__name__}:{exc}"[:500]
+        )
+        return
+    state["openapi_checked"] = True
+    state["added_endpoints"] = sorted(set(current_ops) - set(base_ops))
+    state["removed_endpoints"] = sorted(set(base_ops) - set(current_ops))
+    changes = []
+    for key in sorted(set(base_ops) & set(current_ops)):
+        diff = _compare(base_ops[key], current_ops[key])
+        if diff is not None:
+            changes.append(diff)
+    state["changes"] = changes
 
 
 def _index(operations: Iterable[EndpointSpec]) -> dict[str, EndpointSpec]:

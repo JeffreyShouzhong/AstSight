@@ -44,6 +44,44 @@ def _contract_parts(diff: dict) -> str:
     return "，".join(parts)
 
 
+def _transport_contract_parts(item: dict) -> list[str]:
+    parts = ["变化 " + ", ".join(item.get("change_kinds") or [])]
+    for label in ("request", "response"):
+        diff = item.get(label) or {}
+        bits = []
+        if diff.get("added"):
+            bits.append(f"新增 {len(diff['added'])}")
+        if diff.get("removed"):
+            bits.append(f"删除 {len(diff['removed'])}")
+        if diff.get("changed"):
+            bits.append(f"变更 {len(diff['changed'])}")
+        if bits:
+            parts.append(f"{label}字段 " + "，".join(bits))
+    if item.get("return_type"):
+        diff = item["return_type"]
+        parts.append(
+            f"返回类型 {diff['before']} → {diff['after']}"
+        )
+    if item.get("parameter_types"):
+        diff = item["parameter_types"]
+        parts.append(
+            "参数类型 "
+            + f"{diff['before']} → {diff['after']}"
+        )
+    for label in ("parameter_schema", "result_schema"):
+        diff = item.get(label) or {}
+        bits = []
+        if diff.get("added"):
+            bits.append(f"新增 {len(diff['added'])}")
+        if diff.get("removed"):
+            bits.append(f"删除 {len(diff['removed'])}")
+        if diff.get("changed"):
+            bits.append(f"变更 {len(diff['changed'])}")
+        if bits:
+            parts.append(f"{label} " + "，".join(bits))
+    return parts
+
+
 def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4) if denominator else 0.0
 
@@ -317,9 +355,14 @@ def build_report(
                 )
 
     contract_state = impact.get("contract_changes") or {}
-    if contract_state.get("changes"):
+    contract_count = (
+        len(contract_state.get("changes") or [])
+        + len((contract_state.get("grpc") or {}).get("changes") or [])
+        + len((contract_state.get("dubbo") or {}).get("changes") or [])
+    )
+    if contract_count:
         warnings.append(
-            f"本次变更涉及 {len(contract_state['changes'])} 个接口的契约字段变化"
+            f"本次变更涉及 {contract_count} 个接口的契约字段变化"
             "（contract_change）"
         )
     for item in contract_state.get("warnings") or []:
@@ -498,6 +541,22 @@ def render_markdown(report: dict) -> str:
                 lines.append(
                     f"- `{item.get('endpoint')}`："
                     + "；".join(part for part in parts if part)
+                )
+        for transport, label in (("grpc", "gRPC"), ("dubbo", "Dubbo")):
+            section = contract_state.get(transport) or {}
+            for item in section.get("changes") or []:
+                parts = _transport_contract_parts(item)
+                lines.append(
+                    f"- `{label}` `{item.get('endpoint')}`："
+                    + "；".join(parts)
+                )
+            if section.get("added_methods"):
+                lines.append(
+                    f"- `{label}` 新增：{', '.join(section['added_methods'])}"
+                )
+            if section.get("removed_methods"):
+                lines.append(
+                    f"- `{label}` 删除：{', '.join(section['removed_methods'])}"
                 )
         lines.append("")
 

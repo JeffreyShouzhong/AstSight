@@ -1537,9 +1537,14 @@ PYTHONPATH=. python -m astsight run \
 - delta 会用临时 `git worktree` 检出 merge-base，重扫 base 路由并与当前对比；
   被删除的接口写入 `deleted_apis.json`，报告单列“被删除的接口”并给
   `deleted_api` 告警。旧用例不会自动废弃，只提示人工处理。
-- OpenAPI 字段级变化写入 `contract_changes.json`，覆盖参数新增/删除/必填/类型、
-  请求体字段与必填、响应状态码与响应字段；变化端点会并入 `changed_apis`，
-  报告单列“契约字段变化”。gRPC/Dubbo 契约 diff 尚未实现。
+- 契约字段变化写入 `contract_changes.json`，报告单列“契约字段变化”：
+  - HTTP OpenAPI：参数新增/删除/必填/类型、请求体字段与必填、响应状态码与字段，
+    变化端点会并入 `changed_apis`；
+  - gRPC：method 新增/删除、request/response 类型、streaming、message 字段
+    编号/名称/类型/必填/枚举值；
+  - Dubbo：method 签名、group/version、参数与返回 DTO 字段。
+- gRPC/Dubbo 变化目前只报告和告警，不自动生成对应入口用例；接口在依赖 jar、
+  动态代理仍按既有边界标 unsupported。
 
 ### 12.3 cases：只执行已批准用例
 

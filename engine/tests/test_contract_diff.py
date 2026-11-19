@@ -149,3 +149,104 @@ def test_contract_changes_merge_into_changed_apis() -> None:
     assert record["handler"] == "POST /orders"
     assert record["attribution"] == "contract_diff"
     assert record["change_kinds"] == ["request_body"]
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _commit(project: Path, message: str) -> None:
+    _git(project, "add", ".")
+    _git(project, "commit", "-m", message)
+
+
+def test_grpc_contract_diff(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    _git(project, "init")
+    _git(project, "config", "user.email", "test@example.com")
+    _git(project, "config", "user.name", "test")
+    proto = project / "src/main/proto/demo.proto"
+    _write(proto, """
+syntax = "proto3";
+package demo;
+message Req { string sku = 1; int32 qty = 2; }
+message Res { string id = 1; }
+service OrderService {
+  rpc Create(Req) returns (Res);
+  rpc Removed(Req) returns (Res);
+}
+""")
+    _commit(project, "base")
+    _write(proto, """
+syntax = "proto3";
+package demo;
+message Req { string sku = 1; string qty = 2; }
+message Res { string id = 1; }
+service OrderService {
+  rpc Create(Req) returns (Res);
+  rpc Added(Req) returns (Res);
+}
+""")
+    _commit(project, "change")
+
+    state = contract_diff(project, base="HEAD~1")
+    grpc = state["grpc"]
+    assert grpc["checked"] is True, grpc
+    assert "/demo.OrderService/Removed" in grpc["removed_methods"]
+    assert "/demo.OrderService/Added" in grpc["added_methods"]
+    change = next(
+        item for item in grpc["changes"]
+        if item["endpoint"] == "/demo.OrderService/Create"
+    )
+    assert "request_field" in change["change_kinds"]
+    assert change["request"]["changed"][0]["number"] == 2
+
+
+def test_dubbo_contract_diff(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    _git(project, "init")
+    _git(project, "config", "user.email", "test@example.com")
+    _git(project, "config", "user.name", "test")
+    interface = project / "src/main/java/com/acme/OrderService.java"
+    view = project / "src/main/java/com/acme/OrderView.java"
+    impl = project / "src/main/java/com/acme/OrderServiceImpl.java"
+    _write(interface, """
+package com.acme;
+public interface OrderService { OrderView byId(String id); }
+""")
+    _write(view, """
+package com.acme;
+public class OrderView {
+    private String orderId;
+    private String status;
+}
+""")
+    _write(impl, """
+package com.acme;
+import org.apache.dubbo.config.annotation.DubboService;
+@DubboService(group = "order", version = "1.0.0")
+public class OrderServiceImpl implements OrderService {
+    public OrderView byId(String id) { return null; }
+}
+""")
+    _commit(project, "base")
+    _write(view, """
+package com.acme;
+public class OrderView {
+    private String orderId;
+}
+""")
+    _commit(project, "change")
+
+    state = contract_diff(project, base="HEAD~1")
+    dubbo = state["dubbo"]
+    assert dubbo["checked"] is True, dubbo
+    change = next(
+        item for item in dubbo["changes"]
+        if "byId" in item["endpoint"]
+    )
+    assert "result_schema" in change["change_kinds"]
+    assert "status" in change["result_schema"].get("removed", [])

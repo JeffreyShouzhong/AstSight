@@ -38,7 +38,7 @@
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 默认全量为 **688 passed / 72 skipped**；开启 MQ、Java agent、Dubbo、Triple
+> 默认全量为 **690 passed / 72 skipped**；开启 MQ、Java agent、Dubbo、Triple
 > 与 gripmock 的真实后端联调后为 **724 passed / 32 skipped**。
 > A4 已用 DeepSeek 做真实验证：flash 的 MQ 场景能正确选 topic，chat 的实体场景
 > 能生成 data/mock_replies；flash 在实体场景会输出非法断言，已记录为模型差异。
@@ -68,8 +68,9 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
-| OpenAPI 字段级契约 diff | ✅ 2026-11-19 | 新增 `changes/contract_diff.py`：delta 用 worktree 读取 base/current OpenAPI，比较参数、请求体字段/必填、响应状态码/字段；变化端点并入 `changed_apis`；写 `contract_changes.json`，报告单列并给 `contract_change` 告警；gRPC/Dubbo 契约 diff 暂不做；新增 3 条测试 |
-| 设计文档基线刷新 | ✅ 2026-11-19 | 标题/文末基线更新到 v4.86；新增“当前实现状态”摘要，区分已实现/部分实现/未实现；修正 gRPC 下游过期表述 |
+| gRPC/Dubbo 契约 diff | ✅ 2026-11-19 | 新增 `changes/transport_contracts.py`：gRPC 比较 method/request/response 类型、streaming、message 字段编号/类型/枚举；Dubbo 比较方法签名、group/version、DTO 字段；`contract_changes.json` 增加 grpc/dubbo 段，报告单列并统一 `contract_change` 告警；只报告不自动生成入口用例；新增 2 条测试，全量 690 passed / 72 skipped |
+| OpenAPI 字段级契约 diff | ✅ 2026-11-19 | 新增 `changes/contract_diff.py`：delta 用 worktree 读取 base/current OpenAPI，比较参数、请求体字段/必填、响应状态码/字段；变化端点并入 `changed_apis`；写 `contract_changes.json`，报告单列并给 `contract_change` 告警；新增 3 条测试 |
+| 设计文档基线刷新 | ✅ 2026-11-19 | 标题/文末基线更新到 v4.88；新增“当前实现状态”摘要，区分已实现/部分实现/未实现；修正 gRPC 下游过期表述 |
 | A4 真实模型验证（DeepSeek） | ✅ 2026-11-19 | `deepseek-flash` + DeepSeek Anthropic 兼容端点：MQ 场景正确从 `mq_producers` 选 `orders-topic`、生成 `mq_assertions` 且不编 key/body；`deepseek-chat` 在实体场景生成 `data.product`、`query $data`、`mock_bindings`/`mock_replies` 与回显断言；`deepseek-flash` 在该实体场景生成了非法 `body_field op=absent`，暴露模型差异；顺手修复 A1 规则上下文把 `ParamSpec` 对象写进 JSON 的序列化 bug |
 | 真实后端全量回归 | ✅ 2026-11-19 | 开启 MQ、Java agent、Dubbo sidecar/provider、Java agent flow、Triple、gripmock 后全量为 **724 passed / 32 skipped**；默认套件 684 passed / 72 skipped；未发现 MQ/数据链回归 |
 | MQ 客户端版本矩阵 | ✅ 2026-11-19 | 新增 gated `test_mq_version_matrix_e2e.py`：Maven 按版本解析 classpath、javac 编译后运行，不构建 shade jar；Kafka 2.8.2/3.7.0、RabbitMQ 4.9.0/5.21.0、RocketMQ 4.9.7/5.3.1 共 6 组真实客户端无 broker e2e 全部通过；Python 当前验证 kafka-python 3.0 / pika 1.3 |

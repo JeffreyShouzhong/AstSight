@@ -54,7 +54,7 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、Open
 | MQ 消息断言 | Java agent 截获 Kafka/RabbitMQ/RocketMQ 生产者消息；Python SUT 通过 sitecustomize 拦截 kafka-python/pika；不真正发送，断言 topic/key/headers/payload/条数 |
 | 多语言下游契约 | Java/Go/Node 出站调用点识别；Java 可读 pom/gradle 与本地 jar，提取 DTO 字段和泛型签名，识别 Feign 调用并解析响应契约 |
 | 三种运行范围 | `full` 建基线、`delta` 按代码变更重判、`cases` 只执行已批准用例 |
-| 变更感知 | 代码 diff、route-level 删除接口、OpenAPI 参数/字段/状态码字段级契约 diff |
+| 变更感知 | 代码 diff、route-level 删除接口、HTTP/gRPC/Dubbo 契约 diff（参数/字段/方法/枚举/streaming） |
 | 证据化报告 | 通过/失败之外，未映射范围、未执行用例、待审提案、规则漂移单列 |
 
 ## 环境要求
