@@ -624,7 +624,8 @@ HTTPS 在改写后走明文，不建 TLS、不装 CA。所有 adapter 都用裸 
 实现，避免 Spring Boot fat jar 的 `LaunchedURLClassLoader` 下 ByteBuddy 解析
 `okhttp3.Request` / `feign.Request` 失败。计划内请求若改写失败（bridge 异常、
 签名不兼容等），adapter 抛出 `AgentRewriteException` 让本次调用失败，绝不返回
-原始请求透传到真实下游。心跳字段：`http_adapters`、`http_hooked`、
+原始请求透传到真实下游。心跳字段：`http_adapters`（只含 HTTP adapter）、
+`mq_adapters`（Kafka/RabbitMQ/RocketMQ 生产者 adapter）、`http_hooked`、
 `http_rewrites`、`http_errors`、`http_stack_unsupported`、`http_passthrough`、
 `passthrough_hosts`。
 

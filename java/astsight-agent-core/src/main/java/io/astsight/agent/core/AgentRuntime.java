@@ -70,14 +70,25 @@ public final class AgentRuntime {
     }
 
     public void registerAdapter(String id, String version) {
-        adapters.put(id, new AdapterState(id, version, true));
+        registerAdapter(id, version, "http");
+    }
+
+    /**
+     * 注册 adapter；`kind` 区分 HTTP 与 MQ，心跳按类别分别上报，
+     * 避免 MQ producer 名称混进 `http_adapters`。
+     */
+    public void registerAdapter(String id, String version, String kind) {
+        adapters.put(id, new AdapterState(id, version, true, kind));
     }
 
     void markStackUnsupported(String id) {
         unsupported.add(id);
         AdapterState current = adapters.get(id);
         if (current != null) {
-            adapters.put(id, new AdapterState(current.id, current.version, false));
+            adapters.put(
+                    id,
+                    new AdapterState(
+                            current.id, current.version, false, current.kind));
         }
     }
 
@@ -384,8 +395,10 @@ public final class AgentRuntime {
         node.put("pid", currentPid());
         node.put("jvm_start_time_ms", ManagementFactory.getRuntimeMXBean().getStartTime());
         ArrayNode adapterNodes = node.putArray("http_adapters");
+        ArrayNode mqAdapterNodes = node.putArray("mq_adapters");
         for (AdapterState state : adapters.values()) {
-            ObjectNode item = adapterNodes.addObject();
+            ObjectNode item = ("mq".equals(state.kind) ? mqAdapterNodes : adapterNodes)
+                    .addObject();
             item.put("id", state.id);
             item.put("version", state.version);
             item.put("active", state.active);
@@ -487,11 +500,13 @@ public final class AgentRuntime {
         private final String id;
         private final String version;
         private final boolean active;
+        private final String kind;
 
-        private AdapterState(String id, String version, boolean active) {
+        private AdapterState(String id, String version, boolean active, String kind) {
             this.id = id;
             this.version = version;
             this.active = active;
+            this.kind = kind;
         }
     }
 

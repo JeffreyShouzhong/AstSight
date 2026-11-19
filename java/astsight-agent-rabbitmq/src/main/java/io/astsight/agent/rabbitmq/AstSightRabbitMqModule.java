@@ -21,7 +21,7 @@ public final class AstSightRabbitMqModule implements AgentModule {
     @Override
     public void install(Instrumentation instrumentation, AgentRuntime runtime) {
         instrumentation.addTransformer(new RabbitMqChannelTransformer(runtime), true);
-        runtime.registerAdapter(id(), version());
+        runtime.registerAdapter(id(), version(), "mq");
         if (available()) {
             runtime.mqModuleInstalled("rabbitmq");
         }

@@ -68,6 +68,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 修复：心跳 adapter 分类 | ✅ 2026-11-19 | Linux CI 真实后端首跑暴露：Java agent 心跳把 `kafka/rabbitmq/rocketmq-producer` 也放进 `http_adapters`，Spring Boot e2e 的严格集合断言失败；`registerAdapter` 增加 kind，MQ 模块注册为 `mq`，心跳拆出 `mq_adapters`，`MockAgent` 契约同步；本地 Spring Boot 与 Java MQ e2e 均通过 |
 | Linux CI 最小版 | ✅ 2026-11-19 | 新增 `.github/workflows/ci.yml`：`default-suite` 在 ubuntu + Python 3.12 跑默认套件；`linux-wheels` 用 Temurin 17 + Maven 构建 Java agent/Dubbo sidecar wheel，构建 gripmock amd64/arm64 平台 wheel，安装后跑三个分发校验，并解析包内二进制在 Linux 实跑 `test_grpc_gripmock_e2e.py`；2026-11-19 首次运行通过（默认套件 77s、wheel 流水线 64s）；真实后端 e2e 与版本矩阵待补 |
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |

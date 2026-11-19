@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（实现基线 v4.91，2026-11-19）
+# AstSight — 能力设计规格说明书（实现基线 v4.92，2026-11-19）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -15,7 +15,7 @@
 
 > **当前口径**：本文只描述当前有效的能力规格、契约与约束。决策过程（候选对比、落选原因、被推翻的判断、版本变更历史）统一记录在 [`决策记录.md`](决策记录.md)，本文不复述“为什么”。
 
-**当前实现状态（2026-11-19，v4.91）**
+**当前实现状态（2026-11-19，v4.92）**
 
 - **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`。
 - **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
@@ -3107,7 +3107,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | TestFile     | C6     | C7/人     | 保护段、transport、溯源头                                                  |
 | ConflictSet  | C7.1   | C7.2     | resources, group, parallel_group                              |
 | MockSemantic | C3.5.1 | C4       | http/dubbo 下游：dep_id（HTTP 为 `http:{downstream_key} {METHOD} {path}`，见 C3.5.5）, semantic_branches[], mock.strategy/property, 用例绑定；grpc 下游 v4.3 为 `mock=unsupported`，v4.4 起为 `mock.strategy="grpc_server"`（见 C3.5.4） |
-| MockAgent    | C3.5.3 | C6/C7    | mode(javaagent), version, active, sut_id, namespace, admin_endpoint, token_fingerprint, heartbeat_path, pid, jvm_start_time, filter_heartbeat, filter_instantiated, dubbo_version, supported_matrix, serialization_verified；v4.15 增加 http_adapters[](id/version/active), http_hooked, http_rewrites, http_errors, http_stack_unsupported[] |
+| MockAgent    | C3.5.3 | C6/C7    | mode(javaagent), version, active, sut_id, namespace, admin_endpoint, token_fingerprint, heartbeat_path, pid, jvm_start_time, filter_heartbeat, filter_instantiated, dubbo_version, supported_matrix, serialization_verified；v4.15 增加 http_adapters[](id/version/active), http_hooked, http_rewrites, http_errors, http_stack_unsupported[]；v4.92 增加 mq_adapters[](id/version/active)，http_adapters 只含 HTTP adapter |
 | MockServer   | C3.5.4/C3.5.5 | C6/C7 | transport(http/grpc), mode(embedded/gripmock), version, sut_id, namespace, endpoint(host:port), admin_endpoint, token_fingerprint, route_modes[](path_prefix/host_group/method_path), route_count, routes[], health, history_path, started_at, pid/container_id；gRPC 另有 binary{version,sha256,platform,source}, descriptor_sha256, stub_count, serialization_verified=wire_roundtrip；HTTP 另有 injection 证据、`tls_not_supported` 清单与 agent 改写证据 |
 | MockRoute    | C3.5.5 | C6/C7    | route_key, dep_id, method, path_key, host, target, strategy(url_override/discovery_override/http_proxy/agent_rewrite/unsupported), route_match, source |
 | MockCall     | C3.5.5 | C7/报告   | call_id, session_id, case_id, route_key, dep_id, route_match, adapter, mode(agent_rewrite/…), original_host, method, original_path, query_keys, request_headers(脱敏), body_sha256, body_bytes, branch, response_status, delay_ms, drop_mode, result(ok/unknown/ambiguous/unbound/branch_missing/late), at |
@@ -3349,7 +3349,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full`/`replay` + C2 召回率基准 | 20 个真实分支人工标注；replay 可重放 |
 
-> 本说明书实现基线为 **v4.91（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书实现基线为 **v4.92（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
 > Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo Hessian2 走 Java sidecar

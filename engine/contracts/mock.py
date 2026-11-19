@@ -271,6 +271,7 @@ class MockAgent(BaseModel):
     pid: int = Field(ge=0)
     jvm_start_time_ms: int = Field(ge=0)
     http_adapters: list[MockHttpAdapter] = Field(default_factory=list)
+    mq_adapters: list[MockHttpAdapter] = Field(default_factory=list)
     http_hooked: int = Field(default=0, ge=0)
     http_rewrites: int = Field(default=0, ge=0)
     http_errors: int = Field(default=0, ge=0)

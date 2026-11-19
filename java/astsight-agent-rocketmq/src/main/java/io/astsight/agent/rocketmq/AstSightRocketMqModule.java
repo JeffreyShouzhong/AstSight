@@ -22,7 +22,7 @@ public final class AstSightRocketMqModule implements AgentModule {
     public void install(Instrumentation instrumentation, AgentRuntime runtime) {
         instrumentation.addTransformer(
                 new RocketMqProducerTransformer(runtime), true);
-        runtime.registerAdapter(id(), version());
+        runtime.registerAdapter(id(), version(), "mq");
         if (available()) {
             runtime.mqModuleInstalled("rocketmq");
         }

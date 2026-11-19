@@ -21,7 +21,7 @@ public final class AstSightKafkaModule implements AgentModule {
     @Override
     public void install(Instrumentation instrumentation, AgentRuntime runtime) {
         instrumentation.addTransformer(new KafkaProducerTransformer(runtime), true);
-        runtime.registerAdapter(id(), version());
+        runtime.registerAdapter(id(), version(), "mq");
         if (available()) {
             runtime.mqModuleInstalled("kafka");
         }
