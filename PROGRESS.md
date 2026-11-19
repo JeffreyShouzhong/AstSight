@@ -55,7 +55,7 @@
 **当前没有计划中的待办项。** 删除接口的旧用例处置已落地（见“当前状态”）；
 其余原待办项按 2026-11-19 的决定统一移入下方“明确不做”。
 
-**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例、MQ 消息先后/顺序断言（消息在生产者侧被同步截断，只有 SUT 调用先后，没有投递顺序；并发发送时先后无业务意义）、针对 SUT 多线程/并发行为的测试（并发请求、竞态、并发发送）、pika BlockingChannel 真实调用 e2e（patch 已覆盖，不再补专项验证）、时间窗口测试（不做时钟注入或专用测试接口）、异步多行/多表分组轮询、gRPC/Dubbo streaming 与 reflection、replay 模式、多 SUT 并发隔离（5.5 设计保留但不排期）、变异测试、confluent-kafka/aio-pika/kombu/Celery 与 Node/.NET MQ 拦截、多协议覆盖策略（M2.8，仅字段占位，alias 冒烟/`--transport-scope`/`transport_coverage` 不排期）、跨 transport 回退（M2.7，`transport_fallback` 不实现）、C7.1 数据冲突检测与 C7.2 并行调度（当前全量串行执行）、LangGraph 编排接线（`orchestration/` 骨架保留，不排期；当前为线性流程 + `case_error`/`mock_error` 最多 3 轮修复回环）。
+**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例、MQ 消息先后/顺序断言（消息在生产者侧被同步截断，只有 SUT 调用先后，没有投递顺序；并发发送时先后无业务意义）、针对 SUT 多线程/并发行为的测试（并发请求、竞态、并发发送）、pika BlockingChannel 真实调用 e2e（patch 已覆盖，不再补专项验证）、时间窗口测试（不做时钟注入或专用测试接口）、异步多行/多表分组轮询、gRPC/Dubbo streaming 与 reflection、replay 模式、多 SUT 并发隔离（5.5 设计保留但不排期）、变异测试、confluent-kafka/aio-pika/kombu/Celery 与 Node/.NET MQ 拦截、多协议覆盖策略（M2.8，仅字段占位，alias 冒烟/`--transport-scope`/`transport_coverage` 不排期）、跨 transport 回退（M2.7，`transport_fallback` 不实现）、C7.1 数据冲突检测与 C7.2 并行调度（当前全量串行执行）、LangGraph 编排接线（`orchestration/` 骨架保留，不排期；当前为线性流程 + `case_error`/`mock_error` 最多 3 轮修复回环）、统一扩展插件机制（设计方向，当前无插件接口/注册表，不排期）。
 
 ## 当前状态
 
