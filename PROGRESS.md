@@ -36,7 +36,9 @@
 > 与条数，不做先后顺序；引擎也不测试 SUT 的多线程/并发行为。MQ 自动发现已解析
 > Spring `@Value`/`@ConfigurationProperties` 与 properties/yml 配置键。
 > 默认套件、平台 wheel 冒烟、真实后端 e2e 与 JDK/客户端矩阵均已进入 GitHub
-> Actions Linux CI（真实后端 nightly + 手动触发）。
+> Actions Linux CI（真实后端 nightly + 手动触发）。delta 检测到接口删除后，
+> 会直接把用例库中指向它的已批准 HTTP 用例标为 deprecated（逻辑删除），
+> 不进入运行；报告单列。其余原待办项已明确不做。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
@@ -49,24 +51,16 @@
 
 ## 待办盘点（2026-11-19）
 
-| 优先级 | 事项 | 现状 | 下一步 |
-|---|---|---|---|
-| P2 | 删除接口的旧用例处置 | 只报告，不自动废弃旧用例 | 评估是否把指向已删除端点的已批准用例标 stale，仍由人审核 |
-| P2 | pika BlockingChannel e2e | 直接 Channel 已 e2e；BlockingChannel 只有 patch 逻辑 | 起一个最小阻塞连接调用（仍需 broker 或测试替身）验证返回 bool |
-| P2 | 时间窗口测试 | 用连续请求近似 | 时钟注入或专用测试接口，覆盖频控窗口/跨月零点 |
-| P2 | 异步多行/多表轮询 | 单条 `db_row.wait_ms` 已有 | 按需做分组截止时间；没有消息边界时才用 |
-| P3 | gRPC/Dubbo streaming/reflection | unary 已支持 | 按真实业务需求再排期 |
-| P3 | replay 模式 | 未实现 | 流量回放生成用例 |
-| P3 | 多 SUT 并发隔离 | 设计 v4.5 已定，实现待排期 | 按平台化需求推进 |
-| P3 | 变异测试 | 设计目标 0% 存活率，未实现 | 先定义可执行变异算子与评估集 |
-| P3 | 其他语言 MQ | confluent-kafka、aio-pika、kombu/Celery、Node、.NET 未支持；Go 明确不支持 | 按实际项目栈选择，不做全语言铺开 |
+**当前没有计划中的待办项。** 删除接口的旧用例处置已落地（见“当前状态”）；
+其余原待办项按 2026-11-19 的决定统一移入下方“明确不做”。
 
-**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例、MQ 消息先后/顺序断言（消息在生产者侧被同步截断，只有 SUT 调用先后，没有投递顺序；并发发送时先后无业务意义）、针对 SUT 多线程/并发行为的测试（并发请求、竞态、并发发送；多 SUT 隔离是框架自身能力，另行排期）。
+**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例、MQ 消息先后/顺序断言（消息在生产者侧被同步截断，只有 SUT 调用先后，没有投递顺序；并发发送时先后无业务意义）、针对 SUT 多线程/并发行为的测试（并发请求、竞态、并发发送）、pika BlockingChannel 真实调用 e2e（patch 已覆盖，不再补专项验证）、时间窗口测试（不做时钟注入或专用测试接口）、异步多行/多表分组轮询、gRPC/Dubbo streaming 与 reflection、replay 模式、多 SUT 并发隔离（5.5 设计保留但不排期）、变异测试、confluent-kafka/aio-pika/kombu/Celery 与 Node/.NET MQ 拦截。
 
 ## 当前状态
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 删除接口旧用例自动废弃 | ✅ 2026-11-19 | 新增 `cases/deleted_cleanup.py`：delta 确认接口删除后，把 caseset 中指向该接口的 approved HTTP 用例标为 `deprecated`（逻辑删除），`approved_cases` 与执行流程不再包含；`review_log` 以 `astsight:deleted-api` 记录，落库前备份；报告单列被废弃用例；扫描未完成或没有用例库时不动；新增 5 条测试，全量 701 passed / 72 skipped |
 | 修复：心跳 adapter 分类 | ✅ 2026-11-19 | Linux CI 真实后端首跑暴露：Java agent 心跳把 `kafka/rabbitmq/rocketmq-producer` 也放进 `http_adapters`，Spring Boot e2e 的严格集合断言失败；`registerAdapter` 增加 kind，MQ 模块注册为 `mq`，心跳拆出 `mq_adapters`，`MockAgent` 契约同步；本地 Spring Boot 与 Java MQ e2e 均通过 |
 | Linux CI 最小版 | ✅ 2026-11-19 | 新增 `.github/workflows/ci.yml`：`default-suite` 在 ubuntu + Python 3.12 跑默认套件；`linux-wheels` 用 Temurin 17 + Maven 构建 Java agent/Dubbo sidecar wheel，构建 gripmock amd64/arm64 平台 wheel，安装后跑三个分发校验，并解析包内二进制在 Linux 实跑 `test_grpc_gripmock_e2e.py`；另加 nightly/手动 core 真实后端 job 与手动 matrix job（JDK 8/11/17/21、MQ 客户端版本）；2026-11-19 手动触发全绿：默认套件 696 passed / 90 skipped，真实后端 core 40 passed / 28 skipped，JDK 矩阵各 18 passed，MQ 矩阵 6 passed |
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
@@ -78,7 +72,7 @@
 | 真实后端全量回归 | ✅ 2026-11-19 | 开启 MQ、Java agent、Dubbo sidecar/provider、Java agent flow、Triple、gripmock 后全量为 **724 passed / 32 skipped**；默认套件 684 passed / 72 skipped；未发现 MQ/数据链回归 |
 | MQ 客户端版本矩阵 | ✅ 2026-11-19 | 新增 gated `test_mq_version_matrix_e2e.py`：Maven 按版本解析 classpath、javac 编译后运行，不构建 shade jar；Kafka 2.8.2/3.7.0、RabbitMQ 4.9.0/5.21.0、RocketMQ 4.9.7/5.3.1 共 6 组真实客户端无 broker e2e 全部通过；Python 当前验证 kafka-python 3.0 / pika 1.3 |
 | Python MQ 自动注入 e2e | ✅ 2026-11-19 | 新增 gated `test_agent_flow_python_mq_e2e.py`：真实 `agent run` + FastAPI SUT + KafkaProducer，自动注入生效、用例执行、`mq_tools` 断言与门禁通过；Python capture 启动上报 `mq.installed`/clients；默认全量 684 passed / 66 skipped |
-| 被删除接口变更感知 | ✅ 2026-11-19 | delta 用临时 `git worktree` 检出 merge-base，重扫路由并与当前对比；删除项写 `deleted_apis.json`、报告单列并给 `deleted_api` 告警；扫描失败显式 warning；只提示不自动废弃旧用例；新增 2 条 git 测试，全量 684 passed / 65 skipped |
+| 被删除接口变更感知 | ✅ 2026-11-19 | delta 用临时 `git worktree` 检出 merge-base，重扫路由并与当前对比；删除项写 `deleted_apis.json`、报告单列并给 `deleted_api` 告警；扫描失败显式 warning；当时只提示不自动废弃旧用例（v4.94 起自动逻辑删除）；新增 2 条 git 测试，全量 684 passed / 65 skipped |
 | MQ 配置值解析 | ✅ 2026-11-19 | `profile/mq.py` 支持 Spring `@Value`（含 `${key:default}`）、`@ConfigurationProperties`、`application*.properties/yml` 与项目根 `.env`；`@ConfigurationProperties` 字段跨文件全局索引，调用点支持 `properties.field`/`getField()`；同键多值冲突、缺失、SpEL 与过深占位符显式告警；所有未解析调用点写 `mq_topic_unresolved`；producer 增加可选 `topic_source`/`config_key`；新增 6 条测试，全量 696 passed / 72 skipped |
 | MQ 自动发现与 A4 生成 | ✅ 2026-11-19 | 新增 `profile/mq.py`：扫描 Java Kafka/Rabbit/Rocket 与 Python kafka-python/pika 生产者，解析字符串常量；画像附 `mq_producers[]`；A4 只从候选生成 `mq_assertions`；未知 topic 告警 `mq.topic_not_in_profile`；新增 8 条测试，全量 682 passed / 65 skipped |
 | Python MQ 生产者拦截 | ✅ 2026-11-19 | 新增 `astsight/mq/inject`（sitecustomize + import hook）：patch kafka-python `KafkaProducer.send` 与 pika `Channel/BlockingChannel.basic_publish`；`agent run` 对 Python SUT 自动注入 `PYTHONPATH` 与 `ASTSIGHT_MQ_CAPTURE_*`；真实 kafka-python 3.0 / pika 1.3 无 broker e2e 通过；confluent-kafka、aio-pika、kombu 不做 |

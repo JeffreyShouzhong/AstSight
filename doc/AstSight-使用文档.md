@@ -1542,7 +1542,8 @@ PYTHONPATH=. python -m astsight run \
 - 重点看 `changed_apis.json` 的 `evidence`、`unresolved_symbols` 和 `unsupported_files`；
 - delta 会用临时 `git worktree` 检出 merge-base，重扫 base 路由并与当前对比；
   被删除的接口写入 `deleted_apis.json`，报告单列“被删除的接口”并给
-  `deleted_api` 告警。旧用例不会自动废弃，只提示人工处理。
+  `deleted_api` 告警。用例库中指向该接口的已批准 HTTP 用例会自动标为
+  `deprecated`（逻辑删除），不再进入运行；报告列出被废弃的用例。
 - 契约字段变化写入 `contract_changes.json`，报告单列“契约字段变化”：
   - HTTP OpenAPI：参数新增/删除/必填/类型、请求体字段与必填、响应状态码与字段，
     变化端点会并入 `changed_apis`；
@@ -1941,17 +1942,20 @@ Git Bash 会把以 `/` 开头的参数改写成 Windows 路径。建议传完整
 
 ## 19. 边界与未实现
 
-- `db_row` 单条断言支持 `wait_ms` 轮询；多行/多表共享截止时间的异步一致性尚未支持。
+- `db_row` 单条断言支持 `wait_ms` 轮询；多行/多表共享截止时间的异步一致性明确不做。
 - 不生成跨用例捕获或鉴权链路；多请求仅限单条用例内的 `steps`。
 - C5 造数支持 SQLite/PostgreSQL/MySQL，但只覆盖用例级 fixture apply/teardown；
   不负责建库、迁移、连接池与跨库事务。
-- `replay` 模式未实现。
-- HTTP / Dubbo / gRPC 下游 Mock 已统一到同一控制面；三者的 streaming/reflection、
-  Triple streaming 等仍未支持。
-- 多 SUT 并发隔离尚未实现。
-- 审核必须人工完成；`deprecate` 永远不能自动批准。
+- `replay` 模式明确不实现。
+- HTTP / Dubbo / gRPC 下游 Mock 已统一到同一控制面；streaming、reflection、
+  Triple streaming 明确不支持。
+- 多 SUT 并发隔离（设计保留）明确不排期。
+- 用例入库/更新必须人工审核。唯一的自动废弃是接口删除时把对应用例标为
+  `deprecated`，以 `astsight:deleted-api` 身份写入 `review_log`；`deprecate`
+  提案仍不能自动批准。
 - 非 Python 符号映射依赖 CodeGraph；关闭后不会用正则兜底。
-- 被删除的接口不会自动出现在 `changed_apis`，需要额外比对 base 分支或 OpenAPI。
+- 被删除的接口不会列为 `changed_apis`；delta 会从 base 分支重扫路由，
+  写入 `deleted_apis.json` 并自动逻辑删除对应用例。
 - 分析阶段 SUT 尚未启动，不能从 `--base-url` 拉取契约。
 
 ---

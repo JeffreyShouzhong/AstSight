@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（实现基线 v4.93，2026-11-19）
+# AstSight — 能力设计规格说明书（实现基线 v4.94，2026-11-19）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -6,7 +6,7 @@
 
 | 项    | 内容                                                      |
 | ---- | ------------------------------------------------------- |
-| 定位   | 变更驱动 + 全量基线 + 历史回放的接口自动化测试引擎（运行模式三分，见 3.0）      |
+| 定位   | 变更驱动 + 全量基线的接口自动化测试引擎（运行模式 `full` / `delta`，见 3.0）      |
 | 形态   | CLI 直驱（无交互层、无意图层）                                       |
 | 输入   | 需求文档、设计文档、代码库变更分支、数据库结构、接口契约（HTTP：OpenAPI / Spring MVC 注解；gRPC：proto/descriptor；Dubbo 2.7+：接口源码 + 标准注解/XML；每种 transport 至少一种）                |
 | 输出   | 变更接口列表、接口画像、业务规则集、业务级/代码级用例集、造数计划、pytest 用例代码、执行报告（含冲突检测/并行/重试/合并） |
@@ -15,11 +15,11 @@
 
 > **当前口径**：本文只描述当前有效的能力规格、契约与约束。决策过程（候选对比、落选原因、被推翻的判断、版本变更历史）统一记录在 [`决策记录.md`](决策记录.md)，本文不复述“为什么”。
 
-**当前实现状态（2026-11-19，v4.93）**
+**当前实现状态（2026-11-19，v4.94）**
 
 - **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`。
 - **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归。
-- **未实现/明确不支持**：多 SUT 并发隔离（设计见 5.5，实现待排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider；MQ 消息先后/顺序断言；针对 SUT 多线程/并发行为的测试。
+- **明确不做（2026-11-19 范围收敛）**：多 SUT 并发隔离（5.5 设计保留，不排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider；MQ 消息先后/顺序断言；针对 SUT 多线程/并发行为的测试；pika BlockingChannel 专项 e2e；异步多行/多表分组轮询。
 - **验证基数**：本地默认套件 696 passed / 72 skipped；GitHub Actions Linux CI 默认套件 696 passed / 90 skipped（2026-11-19）。真实后端 core job 40 passed / 28 skipped；JDK 8/11/17/21 的 agent+Dubbo 矩阵各 18 passed；Kafka/RabbitMQ/RocketMQ 客户端矩阵 6 passed。开启全部真实后端的历史本地全量为 724 passed / 32 skipped。
 > gRPC 下游 Mock 使用 gripmock 假服务器（unary、明文），落地约束见 **C3.5.4**；v4.3 报告口径不变。
 > 多 SUT 同环境并发的隔离规则见 **5.5**（v4.5）：实例身份、端口原子分配、持久化作用域缺一不可。
@@ -215,21 +215,21 @@ C7 的 oracle 是**审核通过的用例断言**与接口契约（HTTP 的 OpenA
 >
 > 每项能力按统一模板：职责 / 输入 / 输出契约 / 核心逻辑（步骤级）/ 关键设计决策 / 异常与边界 / 门禁指标
 
-### 3.0 运行模式（scope 三分）
+### 3.0 运行模式（`full` / `delta`；`replay` 不实现）
 
-触发方式会持续扩张（变更、定时、事件、流量），**因此框架不能以"变更驱动"命名，也不能只为变更设计**。三种模式共用同一条链路，差异只在"选哪个范围"：
+触发方式会持续扩张（变更、定时、事件、流量），**因此框架不能以"变更驱动"命名，也不能只为变更设计**。`full` 与 `delta` 共用同一条链路，差异只在"选哪个范围"；`replay` 明确不实现：
 
 | 模式 | 干什么 | 输入前提 | 何时用 | 核心约束 |
 | -- | -- | -- | -- | -- |
 | `full` | **建**基线：扫全量接口 → 画像 → 契约 → 生成 → 执行 | 代码库 + 文档即可，**不依赖 Git diff** | 首次接入、存量摸底、周期全回归 | **必须产出契约与画像基线**；只生成用例不建基线 = 负债 |
 | `delta` | **维护**基线：只重判受影响范围 | 需要 Git 变更集 + 已有基线 | 每次提交、每次发布 | 未命中的接口**不得视为通过**，只能标注为未覆盖 |
-| `replay` | **复用**基线：用今天的用例库重判历史数据 / 影子流量 | 需要历史请求样本 + 已有契约 + 已批准用例 | 用例/契约更新后回刷、事故回溯 | 结论必须携带**规则库版本号 + 用例库版本号**，否则跨版本不可比 |
+| `replay`（不实现） | **复用**基线：用今天的用例库重判历史数据 / 影子流量 | 需要历史请求样本 + 已有契约 + 已批准用例 | 用例/契约更新后回刷、事故回溯 | 结论必须携带**规则库版本号 + 用例库版本号**，否则跨版本不可比 |
 
 **三条实现约束（不可妥协）**：
 
-1. **三种模式不是三条 pipeline。** 画像、契约、生成、执行、判定五组组件完全共用，差异收敛为一个 `scope` 参数。若拆成两套代码，必然各自漂移——修一个 bug 要改两遍。
-2. **CLI 契约统一**：`astsight run --mode full|delta|replay --project <id> [--sut-id <id>]`。模式是参数，不是子命令分支；`sut_id` 缺省取 project 名，多 SUT 并发隔离见 5.5。
-3. **三种模式都必须输出覆盖边界**：`unmapped`（没看到 / 没判到）必须单列进报告。**静默通过是最大风险**——尤其是 `full` 模式扫出的"我以为我全测了"。
+1. **模式不是多条 pipeline。** 画像、契约、生成、执行、判定五组组件完全共用，差异收敛为一个 `scope` 参数。若拆成两套代码，必然各自漂移——修一个 bug 要改两遍。
+2. **CLI 契约统一**：`astsight run --mode full|delta --project <id> [--sut-id <id>]`。模式是参数，不是子命令分支；`sut_id` 缺省取 project 名。`replay` 与多 SUT 并发隔离（5.5 设计保留）均明确不实现。
+3. **每种模式都必须输出覆盖边界**：`unmapped`（没看到 / 没判到）必须单列进报告。**静默通过是最大风险**——尤其是 `full` 模式扫出的"我以为我全测了"。
 
 > 门禁口径随之收紧：C2 的「召回 ≥90%」只对 `verified` 路由成立，`unmapped` 必须独立计数并阻断放行，不得并入通过率分母。
 
@@ -687,7 +687,7 @@ C5b `post_assertions` 按主键逐行生成（见 C5b）。
 | 变更覆盖 | `delta` 未命中接口与 `change_without_oracle` 单列 | 不得视为通过 |
 | 契约/需求漂移 | endpoint 缺失 blocker；doc hash 变化 warning | `--allow-stale-cases` 可降级并标 `degraded` |
 | 断言保真 | 不得把 L3/L4 需求降级成 L1/L2 而不声明 | 逐条列出（设计目标） |
-| 变异存活率（`delta`） | 0% | 设计目标，尚未实现 |
+| 变异存活率（`delta`） | 0% | 设计目标，明确不实现 |
 
 ---
 
@@ -1083,8 +1083,10 @@ adapter。streaming、reflection 和注册中心仍不做。
      delta 用临时 `git worktree` 检出 merge-base，重跑路由发现，按
      `(method, normalized_path)` 与当前路由对比；结果写入 `deleted_apis.json`
      与报告“被删除的接口”，门禁给 `deleted_api` 告警。worktree/扫描失败显式
-     写 warning，不伪装成“没有删除”；旧用例只提示、不自动废弃。OpenAPI/契约
-     字段级删除仍按原有 contract diff 规则处理。
+     写 warning，不伪装成“没有删除”。确认删除的接口会把 caseset 中匹配的
+     approved HTTP 用例标为 `deprecated`（逻辑删除，`review_log` 身份
+     `astsight:deleted-api`），`approved_cases` 与执行流程不再包含；扫描未完成
+     或没有用例库时不动。OpenAPI/契约字段级删除仍按原有 contract diff 规则处理。
    - 契约新增端点但仓库内**没有对应提供方实现**（只有 stub/接口声明）→ `unsupported_reason=implementation_missing`，只报告不生成用例，不把消费方 stub 当实现
    - base 契约缺失/解析失败 → `status=unavailable`，报告 `contract_diff_unavailable` 警告，退回纯代码 diff，不假装“契约未变”
 7. 置信度判定：
@@ -3174,8 +3176,10 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | LLM 模型接入        | LLM 网关适配器（不同 provider 的 usage 字段差异归一）   |
 | 模型单价表           | C7.4.1 成本估算配置（prompt/completion 单价，可热更） |
 
-### 5.5 多 SUT 并发隔离（v4.5）
+### 5.5 多 SUT 并发隔离（v4.5，设计保留、不排期）
 
+> **排期状态（2026-11-19）**：以下设计保留作参考，实现明确不排期。
+>
 > 同一测试环境允许同时运行多个 `astsight run` 进程，每个进程服务一个 SUT 实例。进程之间不共享内存、全局单例或调度器；**测试引擎之间本身不会互相干扰，干扰只来自外部资源**——端口、文件、命名空间、数据库、用例库。因此把一次 run 外部可见的一切都收敛到实例身份与实例作用域，默认不共享。
 
 **隔离单元：`sut_id`**
@@ -3244,7 +3248,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | 3.2 用例库 | 无可执行用例（`cases` 模式）阻断；待审 proposal 可见并标 `degraded`；approve 无 pending、乐观锁匹配；两级 `rule_refs`/`change_refs` 完整 | caseset / proposal 审计 |
 | 3.2 断言保真 | 无 L3/L4 → L1/L2 降级（逐条列出） | C6 断言扫描 |
 | 3.2 需求/变更覆盖 | 未覆盖 section/变更接口必须给出 reason；`change_without_oracle` 单列 | coverage 统计 |
-| 3.2 变异测试 | **变异存活率 0%（`delta` 模式）** | 设计目标，尚未实现 |
+| 3.2 变异测试 | **变异存活率 0%（`delta` 模式）** | 设计目标，明确不实现 |
 | C1     | context/ruleset 可确定性重建；过期 context 拒绝导入；`questions/gaps` 不混入 rules；契约源至少一种 | 文档/契约源/prompt hash 对照 |
 | C2     | 召回率 ≥90%，误报率 ≤30%；HTTP/gRPC/Dubbo 分形态统计；纯契约变更分支必须产出端点；`unsupported`、`removed`、`external_dependency_change` 显式列出且不计入覆盖；`contract_diff_unavailable` 必须告警 | 20 个真实变更分支人工标注 |
 | C3     | 契约源至少一种且可定位；约束提取准确率 100%；HTTP 下游识别召回率单列，`unidentified` 进缺口清单；gRPC/Dubbo 画像字段必须来自 proto/接口源码；`unsupported` 不得产出画像；每个 `business_key` 只有一个 `primary`，alias 必须带 `alias_of` 与 `adapter_fingerprint`（或 `fingerprint_unavailable`） | 自动化比对 + 画像审计 |
@@ -3341,15 +3345,15 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M2.8 | **多协议覆盖策略**：C2 provider-only + base/target 契约 diff + `change_kinds`；C3 `business_key`/`coverage_role`/`adapter_fingerprint`；C4 alias 冒烟 + `--transport-scope`；C7.4 `transport_coverage` | 纯契约变更分支可产出端点；每个 `business_key` 仅一个 primary；alias 冒烟可执行且不计入业务覆盖；`transport_alias_skipped` 可见 |
 | M2.9 | **Mock 用例级会话（方案 A）**：Mock 服务 admin session API、`mock_bindings` 导入期补全、C7.1 `mock:<namespace>` 独占、C7.2 mock lease 串行、C6 session fixture、C7.4 `mock_sessions` 证据 | 单命名空间单 active session；冲突/未命中/晚到调用全部显式报错；mock-bound 用例串行且证据可复核；无 session 证据的 Mock 用例标 `weak_oracle` |
 | M2.10 | **Dubbo 下游 Mock（agent + ByteBuddy + Filter）**：agent 加载（`-javaagent`）、Filter 拦截、会话分支、同步/异步/重载/泛化、心跳自检、`serialization_verified=false`、兼容矩阵 | agent 未激活整批阻断；绑定 dep 命中 0 次报 `mock_not_used`；`No provider available` 报 `env_error`；2.7/3.x + JDK 8/11/17/21 主组合可运行 |
-| M2.11 | **多 SUT 并发隔离（5.5）**：`--sut-id` 与 `namespace=sut_id`、端口 `bind(:0)` 原子分配 + `run_manifest`、心跳身份字段、每实例 token、DB `run_scope` 前缀、用例库 `flock`、报告 `instance` 块 | 同环境并发 ≥2 个 SUT 时无端口/命名空间冲突；心跳与 manifest 身份一致；DB 清理只影响本 run；并发 approve 不会丢更新 |
+| M2.11 | **多 SUT 并发隔离（5.5，不排期）**：`--sut-id` 与 `namespace=sut_id`、端口 `bind(:0)` 原子分配 + `run_manifest`、心跳身份字段、每实例 token、DB `run_scope` 前缀、用例库 `flock`、报告 `instance` 块 | 设计保留，2026-11-19 明确不排期 |
 | M2.12 | **gRPC 下游 Mock（C3.5.4）**：gripmock 随包二进制（平台专用 wheel，`linux/amd64` + `linux/arm64`）、每命名空间进程、stub API、history 取证、target 改写、已知缺陷规避、失败子码 | 安装 `astsight[grpc-mock]` 即用，不要求用户单独下载；版本/sha256 校验通过；矩阵外显式 `mock_binary_missing`；绑定桩命中 ≥1 次 |
 | M2.13 | **HTTP 下游 Mock（C3.5.5，仅明文）**：内嵌 FastAPI/uvicorn、每 `sut_id` 实例、`bind(:0)` + manifest、`dep_id` 唯一性算法、`route_key`、v1 承诺的下游专属 `url_override` 与显式 `http_proxy`（`discovery_override`/透明代理条件支持）、会话分支、`mock_calls.jsonl` 证据、HTTPS `tls_not_supported` | 两个服务同路径不撞 `dep_id`；同端点多调用点只生成一个 dep；未知/歧义路由阻断；共享 base URL 报 `mock_config_ambiguous`；绑定 route 命中 ≥1；HTTPS 显式 `unsupported` 且用例 `blocked` |
 | M2.14 | **HTTP agent 改写（C3.5.5 v4.15，v4.17 扩 HC）**：`agent_rewrite` 策略、`astsight-agent` 共用外壳、OkHttp/Feign/RestTemplate/Apache HC4/HC5 等 adapter、URL 改写与零透传、HTTPS 条件放开、心跳与能力矩阵、独立 wheel 分发 | P0 真实 Spring Boot 样例跑通；配置能覆盖的 dep 仍走配置；计划内未命中不透传；HTTPS 仅在 agent 时可用；adapter 缺失/改写失败显式出报；未实测栈不写入矩阵 |
 | M3 | C5 数据准备（外键闭包 + SQL 造数） | 订单场景 3 表闭包造数成功 |
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
-| M5 | `full`/`replay` + C2 召回率基准 | 20 个真实分支人工标注；replay 可重放 |
+| M5 | `full` + C2 召回率基准 | 20 个真实分支人工标注；replay 明确不实现 |
 
-> 本说明书实现基线为 **v4.93（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计已定，实现待排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书实现基线为 **v4.94（2026-11-19）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计保留，明确不排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
 > Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo Hessian2 走 Java sidecar

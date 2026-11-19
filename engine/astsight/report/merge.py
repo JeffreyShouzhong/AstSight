@@ -370,10 +370,18 @@ def build_report(
 
     deleted_state = impact.get("deleted_apis") or {}
     if deleted_state.get("deleted"):
-        warnings.append(
-            f"本次变更删除了 {len(deleted_state['deleted'])} 个接口，"
-            "旧用例可能已失效（deleted_api）"
-        )
+        cleanup = deleted_state.get("case_cleanup") or {}
+        deprecated = cleanup.get("deprecated") or []
+        if deprecated:
+            warnings.append(
+                f"本次变更删除了 {len(deleted_state['deleted'])} 个接口，"
+                f"已自动逻辑删除 {len(deprecated)} 条旧用例（deleted_api）"
+            )
+        else:
+            warnings.append(
+                f"本次变更删除了 {len(deleted_state['deleted'])} 个接口，"
+                "旧用例可能已失效（deleted_api）"
+            )
     for item in deleted_state.get("warnings") or []:
         warnings.append(f"删除接口扫描未完成：{item}")
 
@@ -574,6 +582,23 @@ def render_markdown(report: dict) -> str:
                 lines.append(
                     f"| `{item['endpoint']}` | {item.get('handler') or '-'} | "
                     f"{item.get('file') or '-'}:{item.get('line') or 0} |"
+                )
+        deprecated = (
+            (deleted_state.get("case_cleanup") or {}).get("deprecated") or []
+        )
+        if deprecated:
+            lines.append("")
+            lines.append(
+                f"已自动逻辑删除 {len(deprecated)} 条指向已删除接口的用例"
+                "（deprecated，不进入运行）："
+            )
+            lines.append("")
+            lines.append("| 用例 | 端点 | case_key |")
+            lines.append("|---|---|---|")
+            for item in deprecated:
+                lines.append(
+                    f"| `{item['id']}` | `{item['endpoint']}` | "
+                    f"{item['case_key']} |"
                 )
         lines.append("")
     elif deleted_state.get("warnings"):

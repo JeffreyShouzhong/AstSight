@@ -158,9 +158,11 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
   `unsupported/unresolved`，不会被算作已覆盖。
 - **非 Python 符号映射依赖 CodeGraph**：`--codegraph off` 时 `.java/.kt/.ts` 等文件进
   `unsupported_files`，框架不会用正则猜符号边界。
-- **被删除的接口不会被列为 changed_api**：路由清单来自当前工作树，纯删除只能文件级
-  兜底影响同文件现存路由；要覆盖“接口被删”需从 base 分支/OpenAPI 建第二份路由清单。
-- **replay 模式**尚未实现，报告中不会把它算作已覆盖。
+- **被删除的接口**：delta 用临时 `git worktree` 检出 base，重扫路由并与当前
+  `(method, normalized_path)` 对比，删除项写入 `deleted_apis.json` 并单列报告；
+  用例库中指向该接口的已批准 HTTP 用例会自动标为 `deprecated`（逻辑删除），
+  不再进入运行。扫描失败显式 warning，不把“没扫到”当成“没删除”。
+- **replay 模式**明确不实现，报告中不会把它算作已覆盖。
 
 ## 快速开始
 
@@ -1291,4 +1293,4 @@ python -m pytest -q
   `changed_apis` 交给画像/用例层，需补阈值与报告分流。
 - C2 召回率/误报率基准：用 20 个真实变更分支人工标注，分别统计 Python 与 Java。
 - 增量索引后已删除路由的残留验证（CodeGraph 集成设计未知项 #9）。
-- replay 模式：复用历史基线 + 今日已审核用例重判。
+- replay 模式（明确不实现）：复用历史基线 + 今日已审核用例重判。

@@ -85,15 +85,16 @@ README 首页现在直接对比“pytest + 一个 LLM”和 AstSight 在门禁�
 
 ## 中期
 
-- **gRPC 完整支持**：当前仅 unary；补齐流式与 server reflection。
-- **Dubbo 被测入口（sidecar / Triple）**：下游 Mock 已由 agent + Filter 覆盖；Hessian2 sidecar 与 Triple unary（protobuf descriptor 或 Java interface）均已打通，包含 wheel 分发、常驻 provider 样例、提供方画像、DTO/proto 采样、A4 草案、多步骤、诊断/修复、codegen 与执行。目标定位采用直连解析（来源校验 + 代码地址 + 服务级映射 + IP 字面量），已在 Apache Online Boutique 多服务试点验证；不做注册中心选 provider。仍不支持：streaming、reflection、异步/oneway。
-- **时间窗口测试**：通过时钟注入或专用测试接口，覆盖频控窗口、跨月零点、超时等真实时间场景（当前以“连续请求立即命中”近似，报告显式标注）。
-- **replay 模式**：流量回放生成用例。
-- **被删除接口的变更感知**：已完成 route-level 检测（base worktree 重扫路由，
-  `deleted_apis.json` + 报告单列 + `deleted_api` 告警）；OpenAPI 字段级删除仍走
-  契约 diff。
+- **被删除接口的旧用例处置（已完成 2026-11-19）**：delta 检测到接口删除后，
+  自动把用例库中指向该接口的已批准 HTTP 用例标为 `deprecated`（逻辑删除），
+  `approved_cases` 与执行流程不再包含，报告单列；扫描未完成或没有用例库时不动。
+  OpenAPI 字段级删除仍走契约 diff。
+- 原中期方向中的 gRPC/Dubbo streaming、server reflection、时间窗口测试与 replay
+  已明确不做，见下方“非目标”。
 
 ## 长期 / 待讨论
+
+以下只是方向，当前均不排期：
 
 - 断言类型注册表，开放自定义断言插件
 - 更多 Web 框架路由识别插件（C2）
@@ -109,6 +110,13 @@ README 首页现在直接对比“pytest + 一个 LLM”和 AstSight 在门禁�
   的先后，没有投递顺序；并发发送时先后本身没有业务含义
 - 针对 SUT 多线程/并发行为的测试——并发请求、竞态、并发发送等不在引擎范围；
   “多 SUT 隔离”是框架自身的运行隔离，不是测试 SUT 的并发行为
+- gRPC/Dubbo streaming 与 server reflection
+- 时间窗口测试（时钟注入或专用测试接口）
+- replay 模式（流量回放生成用例）
+- 多 SUT 并发隔离（设计 5.5 保留，不排期）
+- 变异测试
+- 异步多行/多表分组轮询；pika BlockingChannel 专项 e2e
+- confluent-kafka、aio-pika、kombu/Celery、Node/.NET MQ 拦截
 
 ## 参与方式
 

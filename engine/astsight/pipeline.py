@@ -23,6 +23,7 @@ from contracts import DataPlanBundle, TestCase, Transport
 
 from .artifacts import RunDir, new_run_id, utc_now
 from .cases import generate_cases
+from .cases.deleted_cleanup import deprecate_deleted_api_cases
 from .cases.proposal import list_pending_proposals
 from .cases.store import (
     approved_cases,
@@ -1516,10 +1517,16 @@ def run(config: RunConfig) -> dict:
             codegraph_module_root=config.codegraph_module_root,
             openapi_source=config.openapi,
         )
+        cleanup = deprecate_deleted_api_cases(
+            project, config.case_base, deleted_state
+        )
+        deleted_state["case_cleanup"] = cleanup
         impact_dict["deleted_apis"] = deleted_state
         run_dir.write_json("deleted_apis.json", deleted_state)
         if deleted_state.get("deleted"):
             run_meta["deleted_api_count"] = len(deleted_state["deleted"])
+        if cleanup.get("deprecated"):
+            run_meta["deprecated_case_count"] = len(cleanup["deprecated"])
         for warning in deleted_state.get("warnings") or []:
             run_meta.setdefault("warnings", []).append(warning)
         contract_state = contract_diff(
