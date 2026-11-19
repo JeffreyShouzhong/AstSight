@@ -58,16 +58,14 @@ AstSight 是一套**接口自动化测试引擎**，不是测试管理平台。�
 
 ```bash
 cd engine
-pip install -r requirements.txt
+pip install -e ".[dev]"
+astsight --help
 ```
 
-依赖包含 `langgraph`、`pydantic`、`httpx`、`PyYAML`、`pytest`、`fastapi`、`uvicorn` 等。
-源码目录运行时需要把 `engine/` 放进 `PYTHONPATH`：
-
-```bash
-cd engine
-PYTHONPATH=. python -m astsight --help
-```
+核心依赖是 `pydantic`、`httpx`、`PyYAML`、`fastapi`、`uvicorn`、`protobuf`/`grpcio`
+与 `jsonschema`；`pytest`、`langgraph`、PostgreSQL/MySQL 驱动在 `dev` extra 中，
+按需用 `pip install -e ".[postgres]"`、`[mysql]`、`[orchestration]` 安装。
+开发时也可以不安装，把 `engine/` 放进 `PYTHONPATH` 后用 `python -m astsight` 运行。
 
 如果包已经安装到当前 Python 环境，可以省略 `PYTHONPATH=.`。后文命令默认都在
 `engine/` 目录下执行。
@@ -1879,7 +1877,7 @@ PYTHONPATH=. python -m astsight run \
 
 ```bash
 cd engine/examples/partner_onboarding
-pip install -r requirements.txt
+pip install -e ".[dev]"
 python -m uvicorn app:app --host 127.0.0.1 --port 8030
 ```
 
@@ -2009,7 +2007,7 @@ Git Bash 会把以 `/` 开头的参数改写成 Windows 路径。建议传完整
 cd engine
 
 # 环境
-pip install -r requirements.txt
+pip install -e ".[dev]"
 PYTHONPATH=. python -m astsight --help
 PYTHONPATH=. python -m astsight codegraph install
 PYTHONPATH=. python -m astsight codegraph status

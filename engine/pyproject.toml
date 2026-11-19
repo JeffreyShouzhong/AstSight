@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astsight"
+version = "0.1.0.dev0"
+description = "需求与代码变更驱动的 API 自动化测试引擎"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "AstSight contributors" }]
+keywords = ["testing", "api", "openapi", "pytest", "llm", "contract-testing"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "pydantic==2.14.1",
+  "httpx==0.28.1",
+  "PyYAML==6.0.3",
+  "jsonschema==4.26.0",
+  "protobuf==7.36.2",
+  "grpcio==1.85.3",
+  "grpcio-tools==1.85.3",
+  "fastapi==0.162.0",
+  "uvicorn==0.54.0",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]==3.3.8"]
+mysql = ["PyMySQL==1.2.4"]
+orchestration = ["langgraph==1.2.17"]
+dev = [
+  "pytest==9.1.1",
+  "psycopg[binary]==3.3.8",
+  "PyMySQL==1.2.4",
+  "langgraph==1.2.17",
+]
+
+[project.scripts]
+astsight = "astsight.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/JeffreyShouzhong/AstSight"
+Source = "https://github.com/JeffreyShouzhong/AstSight"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["astsight*", "contracts*", "codegraph*"]
+exclude = ["tests*", "examples*"]
+
+[tool.setuptools.package-data]
+codegraph = ["bridge/*.mjs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

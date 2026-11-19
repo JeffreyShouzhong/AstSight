@@ -26,17 +26,17 @@ AstSight 是**引擎，不是平台**：它不做用户管理、用例管理 UI�
 
 ```bash
 cd engine
-pip install -r requirements.txt
-
-# 源码目录运行时把 engine/ 加入 PYTHONPATH
-PYTHONPATH=. python -m astsight --help
+pip install -e ".[dev]"
+astsight --help
 ```
+
+默认安装不包含 `pytest`、`langgraph` 与 PostgreSQL/MySQL 驱动，它们在 `dev` extra 中。
 
 ## 跑测试
 
 ```bash
 cd engine
-PYTHONPATH=. python -m pytest
+python -m pytest
 ```
 
 提交 PR 前请确保全部测试通过。如果你在 Windows 上跑，遇到临时目录路径过长（`WinError 206`），用短 `basetemp` 即可，与代码无关：

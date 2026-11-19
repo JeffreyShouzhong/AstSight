@@ -172,11 +172,11 @@ adapter，计划期标 `unsupported`，不做“假装支持”的降级。
 C:\Users\magic\.workbuddy\binaries\python\envs\default\Scripts\python.exe
 ```
 
-若当前环境没有依赖，可用 `uv run --with-requirements requirements.txt python ...`。
+若当前环境没有依赖，可用 `uv run --with-editable . python ...`。
 
 ```bash
 cd engine
-pip install -r requirements.txt
+pip install -e ".[dev]"
 
 # 代码变更闭环：自动建临时 git 仓库、起服务、跑 delta
 python examples/demo_delta.py

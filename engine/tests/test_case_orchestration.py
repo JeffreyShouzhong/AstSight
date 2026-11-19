@@ -1,6 +1,10 @@
 """编排 A4.5：待审 proposal 阻断，审核通过后才进入 C6。"""
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("langgraph")
+
 from orchestration import build_graph
 from orchestration.graph import node_a4_review
 

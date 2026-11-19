@@ -68,11 +68,13 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、HTTP
 
 ```bash
 cd engine
-pip install -r requirements.txt
-
-# 源码目录运行时把 engine/ 加入 PYTHONPATH
-PYTHONPATH=. python -m astsight --help
+pip install -e ".[dev]"   # 开发/测试；只运行可装 pip install -e .
+astsight --help
 ```
+
+`dev` extra 包含 pytest、langgraph（编排骨架测试用）以及 PostgreSQL/MySQL 驱动；
+默认安装不包含这些。开发时也可以不安装，直接把 `engine/` 加入 `PYTHONPATH`
+后用 `python -m astsight` 运行。
 
 非 Python 项目额外安装代码图谱运行时（用户级缓存，所有项目复用）：
 
