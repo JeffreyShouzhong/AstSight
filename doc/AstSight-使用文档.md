@@ -1443,6 +1443,8 @@ Dubbo 多步骤用例用 `steps`，每步填 `name` / `endpoint` / `dubbo` / `as
 - Kafka：拦截 `KafkaProducer.send`；`topic` 就是 Kafka topic。
 - RabbitMQ：拦截 `ChannelN.basicPublish`；`topic` 用 `exchange/routingKey`
   表示，例如 `orders-exchange/order.created`，`key` 为 routingKey。
+- 版本矩阵：Kafka 2.8.2/3.7.0、RabbitMQ 4.9.0/5.21.0、RocketMQ 4.9.7/5.3.1
+  已用真实客户端跑过拦截 e2e；Python 当前验证 kafka-python 3.0 / pika 1.3。
 - RocketMQ：拦截 `DefaultMQProducer` 的同步/异步 send；`topic` 就是 RocketMQ
   topic，`key` 取 `Message.getKeys()`，headers 取 `getProperties()`。同步发送
   会返回合成的 `SendResult`（构造失败时为 null）；异步回调会尽力调用

@@ -38,14 +38,13 @@
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 默认全量为 **684 passed / 66 skipped**；真实后端联调的历史记录为
+> 默认全量为 **684 passed / 72 skipped**；真实后端联调的历史记录为
 > 654 passed / 28 skipped（本轮未重跑）。
 
 ## 待办盘点（2026-11-19）
 
 | 优先级 | 事项 | 现状 | 下一步 |
 |---|---|---|---|
-| P1 | MQ 客户端版本矩阵 | 每类只验证一个版本：Kafka 3.7、Rabbit 5.21、Rocket 5.3.1；Python kafka-python 3.0 / pika 1.3 | 补 Kafka 2.x/3.x、Rabbit 4/5、Rocket 4/5 与 Python 客户端版本的 gated e2e |
 | P1 | A4 真实模型验证 | A4 的 MQ/实体生成只用脚本化 LLM 验证过 | 用真实模型跑一组需求，检查 `mq_assertions`/`data`/`mock_replies` 是否稳定、是否会编 topic |
 | P1 | 真实后端全量回归 | 默认 684/66；真实 Java/gripmock/Dubbo 联调记录 654/28 已过时 | 开启集成环境重跑全量，确认 MQ/数据链改动没有回归 |
 | P2 | MQ 消息顺序/序列断言 | 只有 topic/key/headers/body 子集与条数 | 需要严格顺序的业务补 `sequence` 断言；不默认要求顺序 |
@@ -70,6 +69,7 @@
 |---|---|---|
 | 跨协议 Mock 统一运行时 | ✅ 2026-11-18 | HTTP/Dubbo/gRPC 共用 session、分支、`mock_calls.jsonl`、证据与门禁；gRPC 真实 gripmock + Python/Java SUT agent run e2e 已通过 |
 | Dubbo 直连目标解析 | ✅ 2026-11-18 | 新增 `execute/dubbo_targets.py`：来源校验（commit/branch 或 artifact sha256）→ 代码/XML 地址 → 单 endpoint 去重 → 服务级映射 → 运行直连 → 受限全局 URL；只接受 IP 字面量 + 端口，域名/Service/VIP 拒绝，注册中心不参与；`run`/`agent run` 新增 `--dubbo-target*` 与 `--dubbo-source-*`，结果写 `dubbo_targets.json`，conftest 按服务键严格查表；新增 15 条测试，全量 639 passed / 60 skipped |
+| MQ 客户端版本矩阵 | ✅ 2026-11-19 | 新增 gated `test_mq_version_matrix_e2e.py`：Maven 按版本解析 classpath、javac 编译后运行，不构建 shade jar；Kafka 2.8.2/3.7.0、RabbitMQ 4.9.0/5.21.0、RocketMQ 4.9.7/5.3.1 共 6 组真实客户端无 broker e2e 全部通过；Python 当前验证 kafka-python 3.0 / pika 1.3 |
 | Python MQ 自动注入 e2e | ✅ 2026-11-19 | 新增 gated `test_agent_flow_python_mq_e2e.py`：真实 `agent run` + FastAPI SUT + KafkaProducer，自动注入生效、用例执行、`mq_tools` 断言与门禁通过；Python capture 启动上报 `mq.installed`/clients；默认全量 684 passed / 66 skipped |
 | 被删除接口变更感知 | ✅ 2026-11-19 | delta 用临时 `git worktree` 检出 merge-base，重扫路由并与当前对比；删除项写 `deleted_apis.json`、报告单列并给 `deleted_api` 告警；扫描失败显式 warning；只提示不自动废弃旧用例；新增 2 条 git 测试，全量 684 passed / 65 skipped |
 | MQ 自动发现与 A4 生成 | ✅ 2026-11-19 | 新增 `profile/mq.py`：扫描 Java Kafka/Rabbit/Rocket 与 Python kafka-python/pika 生产者，解析字符串常量；画像附 `mq_producers[]`；A4 只从候选生成 `mq_assertions`；未知 topic 告警 `mq.topic_not_in_profile`；新增 8 条测试，全量 682 passed / 65 skipped |

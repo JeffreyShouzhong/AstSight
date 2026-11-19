@@ -629,8 +629,10 @@ kafka-python `send` 与 pika `basic_publish`。字符串常量和 `static final`
 命中计划内 topic 时直接返回成功，不连 broker。注入启动时会向 Mock admin 上报
 `mq.installed` 与已安装 client，门禁与 Java agent 一致。kafka-python 3.x 构造时
 会 bootstrap，测试需显式给 `api_version` 或真实 broker。`agent run` + Python
-SUT + MQ plan 的自动注入 e2e 已通过。confluent-kafka、aio-pika、kombu/Celery
-暂不支持。
+SUT + MQ plan 的自动注入 e2e 已通过。版本矩阵（v4.83）：Kafka 2.8.2/3.7.0、
+RabbitMQ 4.9.0/5.21.0、RocketMQ 4.9.7/5.3.1 的真实客户端无 broker e2e 全部通过；
+Python 当前验证 kafka-python 3.0 / pika 1.3。confluent-kafka、aio-pika、
+kombu/Celery 暂不支持。
 
 **异步断言优先级（v4.74）**：有消息边界时先断言消息——是否发出、topic/key、
 payload/headers、次数与顺序；不启动消费者，也不轮询数据库。只有 SUT 内部异步
