@@ -1,6 +1,6 @@
 # AstSight 项目进度
 
-> 最后更新：2026-11-18
+> 最后更新：2026-11-19
 > 分支：`unified-mock-runtime`（工作区干净，已同步远端）
 > 最新代码提交：`c2b3f11`（`新增：Python MQ 生产者拦截（kafka-python / pika）`）；
 > 当前存档已同步远端。
@@ -40,6 +40,25 @@
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
 > 默认全量为 **671 passed / 60 skipped**；真实后端联调的历史记录为
 > 654 passed / 28 skipped（本轮未重跑）。
+
+## 待办盘点（2026-11-19）
+
+| 优先级 | 事项 | 现状 | 下一步 |
+|---|---|---|---|
+| P1 | MQ 自动发现与 A4 生成 | `mq_assertions` 只能手写；画像不扫描生产者，A4 提示词也没有 MQ 规则 | 扫描 Java/Python 生产者 topic（常量/配置键）；A4 只从扫描结果生成 `mq_assertions`，找不到写 gap |
+| P1 | MQ 客户端版本矩阵 | 每类只验证一个版本：Kafka 3.7、Rabbit 5.21、Rocket 5.3.1；Python kafka-python 3.0 / pika 1.3 | 补 Kafka 2.x/3.x、Rabbit 4/5、Rocket 4/5 与 Python 客户端版本的 gated e2e |
+| P1 | Python MQ 自动注入 e2e | 只有手工设置环境变量的 e2e；`agent run` 自动注入只有单测 | 用 Python SUT + `agent run` + MQ plan 跑完整闭环 |
+| P2 | 被删除接口的变更感知 | delta 只比新增/修改 | 从 base 分支/旧 OpenAPI 建第二份路由清单，显式列删除接口 |
+| P2 | 时间窗口测试 | 用连续请求近似 | 时钟注入或专用测试接口，覆盖频控窗口/跨月零点 |
+| P2 | 异步多行/多表轮询 | 单条 `db_row.wait_ms` 已有 | 按需做分组截止时间；没有消息边界时才用 |
+| P3 | gRPC/Dubbo streaming/reflection | unary 已支持 | 按真实业务需求再排期 |
+| P3 | replay 模式 | 未实现 | 流量回放生成用例 |
+| P3 | 多 SUT 并发隔离 | 设计 v4.5 已定，实现待排期 | 按平台化需求推进 |
+| P3 | 变异测试 | 设计目标 0% 存活率，未实现 | 先定义可执行变异算子与评估集 |
+| P3 | 其他语言 MQ | confluent-kafka、aio-pika、kombu/Celery、Node、.NET 未支持；Go 明确不支持 | 按实际项目栈选择，不做全语言铺开 |
+| P4 | 文档基线刷新 | 设计文档仍标 v4.15 基线；README 能力表落后于实现 | 统一版本号与能力表，避免文档滞后 |
+
+**明确不做**：RocketMQ 批量发送拦截、RabbitMQ/RocketMQ 连接级 Mock、注册中心选 provider、自动批准初始用例。
 
 ## 当前状态
 
