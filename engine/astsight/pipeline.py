@@ -34,6 +34,7 @@ from .cases.store import (
     store_hash,
 )
 from .changes.git_diff import GitDiffError, diff_files, repo_root, resolve_range
+from .changes.contract_diff import contract_diff
 from .changes.deleted import deleted_apis
 from .changes.impact import analyze_impact
 from .changes.symbol_diff import symbols_for_changes
@@ -338,6 +339,58 @@ def _dubbo_env(
         else:
             env["dubbo_target_error"] = target_state.error_text
     return env
+
+
+def _merge_contract_impacts(
+    impact: dict[str, Any],
+    contract_state: dict[str, Any],
+    *,
+    routes: list[dict],
+) -> None:
+    """把字段级契约变化并入 changed_apis；代码 diff 已命中的只补 change_kinds。"""
+    changes = contract_state.get("changes") or []
+    if not changes:
+        return
+    route_by_endpoint = {
+        f"{(route.get('method') or '').upper()} {normalize_path(route.get('path') or '')}": route
+        for route in routes
+        if route.get("method") and route.get("path")
+    }
+    by_handler = {
+        str(item.get("handler") or ""): item
+        for item in impact.get("changed_apis") or []
+    }
+    for change in changes:
+        endpoint = str(change.get("endpoint") or "")
+        if not endpoint:
+            continue
+        existing = by_handler.get(endpoint)
+        if existing is not None:
+            existing["change_kinds"] = sorted(
+                set(existing.get("change_kinds") or [])
+                | set(change.get("change_kinds") or [])
+            )
+            continue
+        route = route_by_endpoint.get(endpoint, {})
+        record = {
+            "handler": endpoint,
+            "method": change.get("method") or "",
+            "path": change.get("path") or "",
+            "route_handler": route.get("handler", ""),
+            "route_owner": route.get("owner", ""),
+            "route_file": route.get("file", ""),
+            "route_line": route.get("line", 0) or 0,
+            "confidence": "high",
+            "evidence": "contract",
+            "attribution": "contract_diff",
+            "changed_symbols": [],
+            "change_files": [contract_state.get("current_openapi") or ""],
+            "trace": ["contract_diff"],
+            "route_source": route.get("source", "openapi"),
+            "change_kinds": list(change.get("change_kinds") or []),
+        }
+        impact["changed_apis"].append(record)
+        by_handler[endpoint] = record
 
 
 def _changed_scope_full(routes: list[dict]) -> tuple[list[dict], dict]:
@@ -1469,6 +1522,20 @@ def run(config: RunConfig) -> dict:
             run_meta["deleted_api_count"] = len(deleted_state["deleted"])
         for warning in deleted_state.get("warnings") or []:
             run_meta.setdefault("warnings", []).append(warning)
+        contract_state = contract_diff(
+            project,
+            base=config.base,
+            current_openapi=config.openapi,
+        )
+        impact_dict["contract_changes"] = contract_state
+        run_dir.write_json("contract_changes.json", contract_state)
+        for warning in contract_state.get("warnings") or []:
+            run_meta.setdefault("warnings", []).append(warning)
+        _merge_contract_impacts(
+            impact_dict,
+            contract_state,
+            routes=routes,
+        )
     else:
         run_meta["comparison"] = "full"
         changed_apis, changes_meta = _changed_scope_full(routes)

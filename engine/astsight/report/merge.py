@@ -11,6 +11,39 @@ from collections import Counter, defaultdict
 from typing import Any
 
 
+def _contract_parts(diff: dict) -> str:
+    parts: list[str] = []
+    for key, label in (
+        ("added", "新增"),
+        ("removed", "删除"),
+        ("required_added", "新增必填"),
+        ("required_removed", "取消必填"),
+        ("added_status_codes", "新增状态码"),
+        ("removed_status_codes", "删除状态码"),
+        ("success_added", "新增成功码"),
+        ("success_removed", "删除成功码"),
+    ):
+        values = diff.get(key) or []
+        if values:
+            parts.append(f"{label} {', '.join(str(item) for item in values)}")
+    changed = diff.get("type_changed") or []
+    if changed:
+        parts.append(
+            "类型变化 "
+            + ", ".join(
+                f"{item['field']}: {item['before']} → {item['after']}"
+                for item in changed
+            )
+        )
+    fields = diff.get("fields") or {}
+    for code, item in sorted(fields.items()):
+        if item.get("added"):
+            parts.append(f"{code} 字段新增 {', '.join(item['added'])}")
+        if item.get("removed"):
+            parts.append(f"{code} 字段删除 {', '.join(item['removed'])}")
+    return "，".join(parts)
+
+
 def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4) if denominator else 0.0
 
@@ -283,6 +316,15 @@ def build_report(
                     f"{', '.join(missing)}（mq_producer_not_installed）"
                 )
 
+    contract_state = impact.get("contract_changes") or {}
+    if contract_state.get("changes"):
+        warnings.append(
+            f"本次变更涉及 {len(contract_state['changes'])} 个接口的契约字段变化"
+            "（contract_change）"
+        )
+    for item in contract_state.get("warnings") or []:
+        warnings.append(f"契约 diff 未完成：{item}")
+
     deleted_state = impact.get("deleted_apis") or {}
     if deleted_state.get("deleted"):
         warnings.append(
@@ -433,6 +475,31 @@ def render_markdown(report: dict) -> str:
                 f"{', '.join(api.get('changed_symbols', [])[:4])} |"
             )
     lines.append("")
+
+    contract_state = impact.get("contract_changes") or {}
+    if contract_state.get("checked"):
+        changes = contract_state.get("changes") or []
+        lines.append("## 契约字段变化")
+        lines.append("")
+        if not changes:
+            lines.append("_无_")
+        else:
+            for item in changes:
+                parts = []
+                params = item.get("params") or {}
+                body = item.get("request_body") or {}
+                responses = item.get("responses") or {}
+                if params:
+                    parts.append("参数 " + _contract_parts(params))
+                if body:
+                    parts.append("请求体 " + _contract_parts(body))
+                if responses:
+                    parts.append("响应 " + _contract_parts(responses))
+                lines.append(
+                    f"- `{item.get('endpoint')}`："
+                    + "；".join(part for part in parts if part)
+                )
+        lines.append("")
 
     deleted_state = impact.get("deleted_apis") or {}
     if deleted_state.get("checked"):
