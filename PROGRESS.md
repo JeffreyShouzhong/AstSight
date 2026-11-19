@@ -2,8 +2,8 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`a831676`（`新增：删除接口用例自动逻辑删除；待办范围收敛`）；
-> 文档与代码对齐提交：`1884fd2`；当前存档已同步远端。
+> 最新代码提交：`a9e844e`（`文档：澄清扩展插件机制尚未实现`）；
+> 当前存档已同步远端；设计基线 v4.99。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -39,13 +39,16 @@
 > Actions Linux CI（真实后端 nightly + 手动触发）。delta 检测到接口删除后，
 > 会直接把用例库中指向它的已批准 HTTP 用例标为 deprecated（逻辑删除），
 > 不进入运行；报告单列。其余原待办项已明确不做。
+> 近期收尾：C7.4 报告补上 audit 完整性块、weak_oracle、逐用例会话证据与 token
+> 用量；run / agent run 在门禁失败时自动生成本地诊断包 feedback.zip，配合
+> GitHub Issue 提交；LangGraph 编排与统一插件机制标注为骨架/设计方向，不排期。
 >
 > 数据侧：C5b 已支持多表多行、父子 fixtures、`$ref` 跨行父键引用、单父键自动关联、
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 本地默认全量为 **706 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
-> **696 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
+> 本地默认全量为 **718 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
+> **718 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
 > Java agent、Dubbo、Triple 与 gripmock 的历史本地全量为 **724 passed / 32 skipped**。
 > A4 已用 DeepSeek 做真实验证：flash 的 MQ 场景能正确选 topic，chat 的实体场景
 > 能生成 data/mock_replies；flash 在实体场景会输出非法断言，已记录为模型差异。
@@ -61,6 +64,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 文档与范围归档 | ✅ 2026-11-19 | C7.4 审计、诊断包、LangGraph 编排、扩展插件机制与运行模式口径已同步到设计文档、ROADMAP、使用文档和 CONTRIBUTING；设计基线 v4.99；PROGRESS 计数更新为本地 718/72、Linux CI 718/90 |
 | 本地诊断包与 GitHub Issue 反馈 | ✅ 2026-11-19 | 新增 `feedback collect/open`：从 run 产物生成脱敏 zip（报告/执行/Mock 证据/失败用例快照与代码），生成 issue 草稿与 GitHub 提交链接；`run`/`agent run` 在门禁失败时自动生成 `feedback.zip`（`--feedback auto/always/off`），并纳入 `diagnosis.json`/`flow.json`；默认脱敏、不自动上传、不依赖服务端；新增 7 条测试，相关子集 12 passed |
 | C7.4 审计报告补强 | ✅ 2026-11-19 | 报告新增 `audit` 完整性块；`weak_oracle` 标出 mock-bound + L1 + 零 Mock 命中的用例；`summarize_evidence` 输出逐用例 `session_evidence`（bindings/dep_id/branch/calls/status）；agent flow 把 `token_usage` 汇总写进 report；`egress_guard` 标 `not_implemented`，`instance`/`transport_coverage`/`transport_fallback` 标 `not_applicable`/`not_implemented`；新增 5 条测试 |
 | 文档与代码对齐 | ✅ 2026-11-19 | 运行模式统一为 `full`/`delta`/`cases`（`replay` 明确不实现）；修正 gRPC 下游“仍 unsupported”的过期表述、C7.2 并行调度未实现标注、CLI 无 `--sut-id`；ROADMAP 非目标补全 RocketMQ 批量/连接级 Mock 与注册中心；README/设计文档能力表与测试计数同步 |
