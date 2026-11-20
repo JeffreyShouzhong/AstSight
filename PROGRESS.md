@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`1b950d9`（`新增：astsight init 默认模型配置`）；
+> 最新代码提交：`a20fc69`（`测试：CodeGraph 平台运行时优先于 managed 回退`）；
 > 当前存档已同步远端；设计基线 v5.02。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
@@ -50,8 +50,8 @@
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 本地默认全量为 **728 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
-> **728 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
+> 本地默认全量为 **729 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
+> **729 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
 > Java agent、Dubbo、Triple 与 gripmock 的历史本地全量为 **724 passed / 32 skipped**。
 > A4 已用 DeepSeek 做真实验证：flash 的 MQ 场景能正确选 topic，chat 的实体场景
 > 能生成 data/mock_replies；flash 在实体场景会输出非法断言，已记录为模型差异。
