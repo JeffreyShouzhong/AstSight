@@ -91,13 +91,15 @@ class LLMConfig:
             raise LLMConfigError(
                 "llm_api_key_missing",
                 "未配置模型 key：llm.json 的 api_key/api_key_env、ASTSIGHT_LLM_API_KEY、"
-                "ANTHROPIC_AUTH_TOKEN、ANTHROPIC_API_KEY 均为空",
+                "ANTHROPIC_AUTH_TOKEN、ANTHROPIC_API_KEY 均为空；"
+                "运行 astsight init 生成配置并设置 key",
             )
         self.model = str(self.model or "").strip()
         if not self.model:
             raise LLMConfigError(
                 "llm_model_missing",
-                "未配置模型：ASTSIGHT_LLM_MODEL / ANTHROPIC_MODEL 均为空",
+                "未配置模型：ASTSIGHT_LLM_MODEL / ANTHROPIC_MODEL 均为空；"
+                "运行 astsight init 生成配置",
             )
         self.base_url = str(self.base_url or "").strip().rstrip("/")
         if not self.base_url:

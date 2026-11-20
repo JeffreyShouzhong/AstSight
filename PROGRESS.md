@@ -3,7 +3,7 @@
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
 > 最新代码提交：`7821cd5`（`新增：CodeGraph 平台 wheel，内置 Node 与固定版本 CodeGraph`）；
-> 当前存档已同步远端；设计基线 v5.00。
+> 当前存档已同步远端；设计基线 v5.01。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -50,8 +50,8 @@
 > 多父歧义阻断；`state_paths` 已展开为 `state_path_*` 多行 DataState，可产生唯一主键、
 > 共享父行、每迁移状态一行，并进入 SQLite apply/teardown 闭环。多行终态断言已
 > 按终态行定位，负例可用 `db_row/unchanged` 做请求前后快照比较。
-> 本地默认全量为 **723 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
-> **723 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
+> 本地默认全量为 **728 passed / 72 skipped**；GitHub Actions Linux CI 默认套件
+> **728 passed / 90 skipped**，真实后端 core **40 passed / 28 skipped**。开启 MQ、
 > Java agent、Dubbo、Triple 与 gripmock 的历史本地全量为 **724 passed / 32 skipped**。
 > A4 已用 DeepSeek 做真实验证：flash 的 MQ 场景能正确选 topic，chat 的实体场景
 > 能生成 data/mock_replies；flash 在实体场景会输出非法断言，已记录为模型差异。
@@ -67,6 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 默认模型配置 `astsight init` | ✅ 2026-11-20 | 新增 `astsight init`：默认写入 `~/.astsight/llm.json`，自动检测 Anthropic/OpenAI key 环境变量并选择 provider/model；交互式可改，`--yes`/`--local` 等参数；配置文件不写明文 key；缺配置错误提示运行 init；README/使用文档/快速指南统一改用 `astsight` 命令；新增 5 条测试，全量 728 passed / 72 skipped |
 | CodeGraph 平台 wheel | ✅ 2026-11-20 | 新增 `tools/build_codegraph_wheels.py`：打包 CodeGraph 1.6.2 与自包含 Node 到 `astsight-codegraph-bin`；引擎从包资源解析 Node/node_modules，不依赖 PATH/npm/网络；`codegraph status` 显示 `source=packaged`；本地 Windows wheel 约 53MB，worker 握手 ready；CI 增加 linux-x64 构建与验证 job |
 | 工程债务清理 | ✅ 2026-11-19 | 新增 `engine/pyproject.toml`（包元数据、`astsight` 入口、postgres/mysql/orchestration/dev extras），删除 requirements.txt，langgraph 移入 optional；`cli.py` 2386→1469 行，data/rules/mock 抽到 `commands/`；`cases/validate.py` 3523→738 行，拆为 `validate_base` + 9 个职责模块，门面与错误码不变；报告修复 skipped/无 Mock 证据假绿；本地 723/72、CI 723/90 |
 | 文档与范围归档 | ✅ 2026-11-19 | C7.4 审计、诊断包、LangGraph 编排、扩展插件机制与运行模式口径已同步到设计文档、ROADMAP、使用文档和 CONTRIBUTING；设计基线 v4.99；PROGRESS 计数更新为本地 718/72、Linux CI 718/90 |

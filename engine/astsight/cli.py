@@ -74,6 +74,7 @@ from .commands._shared import (
 from .commands.data import (
     _data_apply, _data_catalog, _data_plan, _data_semantics, _data_states,
 )
+from .commands.init import initialize as initialize_llm_config
 from .commands.mock import _mock_plan_command, _mock_semantics_command
 from .commands.rules import (
     _rules_extract, _rules_import, _rules_prepare, _rules_render, _rules_status,
@@ -745,6 +746,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     agent_run.add_argument("--json", action="store_true")
 
+    init_parser = sub.add_parser(
+        "init", help="生成默认模型配置（默认 ~/.astsight/llm.json）"
+    )
+    init_parser.add_argument(
+        "--provider", choices=("anthropic", "openai"), default=None
+    )
+    init_parser.add_argument("--model", default=None)
+    init_parser.add_argument("--base-url", default=None)
+    init_parser.add_argument(
+        "--auth-style", choices=("x-api-key", "bearer"), default=None
+    )
+    init_parser.add_argument("--api-key-env", default=None)
+    init_parser.add_argument(
+        "--local", action="store_true", help="写入当前目录的 llm.json"
+    )
+    init_parser.add_argument("--out", default=None)
+    init_parser.add_argument("--force", action="store_true")
+    init_parser.add_argument(
+        "--yes", action="store_true", help="不询问，直接使用检测到的默认值"
+    )
+    init_parser.add_argument("--json", action="store_true")
+
     feedback_parser = sub.add_parser(
         "feedback", help="本地诊断包与 GitHub Issue 反馈（默认脱敏、不自动上传）"
     )
@@ -1312,6 +1335,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "agent":
         if args.agent_command == "run":
             return _agent_command(args)
+    if args.command == "init":
+        return _init_command(args)
     if args.command == "feedback":
         if args.feedback_command == "collect":
             return _feedback_collect(args)
@@ -1319,6 +1344,39 @@ def main(argv: list[str] | None = None) -> int:
             return _feedback_open(args)
     parser.print_help()
     return 2
+
+
+def _init_command(args) -> int:
+    try:
+        result = initialize_llm_config(
+            out=Path(args.out) if args.out else None,
+            local=args.local,
+            provider=args.provider,
+            model=args.model,
+            base_url=args.base_url,
+            auth_style=args.auth_style,
+            api_key_env=args.api_key_env,
+            force=args.force,
+            interactive=not args.yes,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    print(f"已生成模型配置: {result['path']}")
+    print(f"  provider: {result['provider']}")
+    print(f"  model: {result['model']}")
+    if result.get("base_url"):
+        print(f"  base_url: {result['base_url']}")
+    print(f"  API key 环境变量: {result['api_key_env']}")
+    if result.get("key_present"):
+        print("  已从当前环境检测到 key。")
+    print("下一步:")
+    for step in result.get("next_steps") or []:
+        print(f"  {step}")
+    return 0
 
 
 def _feedback_collect(args) -> int:

@@ -1,4 +1,4 @@
-# AstSight — 能力设计规格说明书（实现基线 v5.00，2026-11-20）
+# AstSight — 能力设计规格说明书（实现基线 v5.01，2026-11-20）
 
 > **名称**：AstSight（AST + Sight）｜ **CLI**：`astsight` ｜ **Maven**：`io.astsight:astsight-core`
 > **一句话主张**：上一代平台问「你测了多少条」，AstSight 只回答「这次变更带来什么质量结论」。
@@ -15,9 +15,9 @@
 
 > **当前口径**：本文只描述当前有效的能力规格、契约与约束。决策过程（候选对比、落选原因、被推翻的判断、版本变更历史）统一记录在 [`决策记录.md`](决策记录.md)，本文不复述“为什么”。
 
-**当前实现状态（2026-11-20，v5.00）**
+**当前实现状态（2026-11-20，v5.01）**
 
-- **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口与旧用例自动逻辑删除）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告（串行）；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`；MQ topic 的字面量、常量、Spring `@Value`/`@ConfigurationProperties` 与 properties/yml 解析；本地诊断包与 GitHub Issue 反馈通道（`feedback collect/open`；run/agent run 门禁失败时自动生成，默认脱敏、不自动上传）；CodeGraph 平台 wheel `astsight-codegraph-bin` 内置固定版本 Node 与 CodeGraph，引擎从包资源解析，不依赖 PATH/npm/网络。
+- **已实现**：C1/A1 规则抽取、C2 变更感知（含 route-level 删除接口与旧用例自动逻辑删除）、C3 画像与下游识别、C4/A4 用例生成、C5a/C5b 数据目录与造数、C6 codegen、C7 执行/归因/报告（串行）；HTTP/Dubbo/gRPC unary 下游 Mock 统一 session、证据与门禁；Java Kafka/RabbitMQ/RocketMQ 与 Python kafka-python/pika 生产者拦截；用例级实体 `data` + `mock_replies`；多行终态与 `db_row/unchanged`；MQ topic 的字面量、常量、Spring `@Value`/`@ConfigurationProperties` 与 properties/yml 解析；本地诊断包与 GitHub Issue 反馈通道（`feedback collect/open`；run/agent run 门禁失败时自动生成，默认脱敏、不自动上传）；CodeGraph 平台 wheel `astsight-codegraph-bin` 内置固定版本 Node 与 CodeGraph，引擎从包资源解析，不依赖 PATH/npm/网络；`astsight init` 生成默认模型配置并检测现有 provider/key 环境变量。
 - **部分实现**：契约 diff 已覆盖 HTTP OpenAPI、gRPC proto/descriptor 与 Dubbo 接口；gRPC/Dubbo 变化只报告/告警，不自动生成入口用例；A4 真实模型只做过 DeepSeek 场景验证，未固化成自动回归；多协议覆盖策略（M2.8）仅有字段占位，`coverage_role` 固定 primary、`adapter_fingerprint` 为空，alias 冒烟、`--transport-scope` 与 `transport_coverage` 未实现，不排期；C7.4 报告已补 `audit` 完整性块、`weak_oracle`、逐用例 `mock_sessions.evidence` 与 `token_usage` 汇总，`egress_guard` 未实现。C1 已引入统一 ContractModel，并支持按源能力子集确定性生成 CR；Spring/Dubbo 静态源码不能证明的运行时绑定与约束会进入 `contract_gaps`。
 - **明确不做（2026-11-19 范围收敛）**：多 SUT 并发隔离（5.5 设计保留，不排期）；gRPC/Dubbo streaming 与 reflection；replay；时间窗口测试；变异测试；confluent-kafka/aio-pika/kombu/Celery、Node/.NET MQ 拦截；RocketMQ 批量发送与 RabbitMQ/RocketMQ 连接级 Mock；注册中心选 provider；MQ 消息先后/顺序断言；针对 SUT 多线程/并发行为的测试；pika BlockingChannel 专项 e2e；异步多行/多表分组轮询；`egress_guard` 网络隔离标注（报告标 `not_implemented`）；历史缺陷案例库的自动入库与服务端汇聚（当前用本地诊断包 + GitHub Issue）；LangGraph 编排接线（`orchestration/` 骨架保留，当前为线性流程 + 受限修复回环）。
 - **验证基数**：本地默认套件 706 passed / 72 skipped；GitHub Actions Linux CI 默认套件 696 passed / 90 skipped（2026-11-19）。真实后端 core job 40 passed / 28 skipped；JDK 8/11/17/21 的 agent+Dubbo 矩阵各 18 passed；Kafka/RabbitMQ/RocketMQ 客户端矩阵 6 passed。开启全部真实后端的历史本地全量为 724 passed / 32 skipped。
@@ -3390,7 +3390,7 @@ ChangedAPI[] ──C2/C3──▶ Profile（含 transport 与下游）──C5�
 | M4 | C3.5 Mock（HTTP 专属 URL/显式明文代理覆盖 + 条件发现覆盖 + Dubbo agent + 用例级会话）+ C7 并行/冲突 | HTTP 与 Dubbo 2.7+ 下游 Mock 覆盖率 100%；Mock 会话冲突/未命中/晚到调用全部显式出报；`egress_guard` 与 `serialization_verified` 如实标注；HTTP 覆盖策略与实际配置键可审计，v1 承诺项与条件能力分别标注；共享 base URL、覆盖不到或 HTTPS 的标 `unsupported` 且用例 `blocked`；gRPC 下游标 `mock="unsupported"` |
 | M5 | `full` + C2 召回率基准 | 20 个真实分支人工标注；replay 明确不实现 |
 
-> 本说明书实现基线为 **v5.00（2026-11-20）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地；v4.95 将四种契约源统一为 ContractModel，并明确“确定性 = 可复现 + 有证据”，不表示四源表达力相同；v4.97 增加本地诊断包与 GitHub Issue 反馈通道，v4.98 在 run/agent run 门禁失败时自动生成；自动入库与服务端汇聚不做。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计保留、不排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
+> 本说明书实现基线为 **v5.01（2026-11-20）**。历史版本的决策与变更记录统一见 [`决策记录.md`](决策记录.md) §8，本文不再重复逐版说明。v4.7 明确 A4 由规则驱动；C5 拆为 C5a 数据目录 / C5b 逐用例计划；v4.6 取消 Feign 特殊支持；v4.15 新增 `agent_rewrite`；gRPC Mock（C3.5.4）、Dubbo sidecar/Triple、MQ 生产者拦截与平台 wheel 分发均已落地；v4.95 将四种契约源统一为 ContractModel，并明确“确定性 = 可复现 + 有证据”，不表示四源表达力相同；v4.97 增加本地诊断包与 GitHub Issue 反馈通道，v4.98 在 run/agent run 门禁失败时自动生成；自动入库与服务端汇聚不做。v4.5 的多 SUT 并发隔离规则见 **5.5**（设计保留、不排期）。后续实现阶段任何对本契约的偏离，需回写本文档并升版本号。
 
 > **形态范围（v4.2，下游 Mock 边界已由 v4.3 扩展）**：支持三种 transport——**HTTP、gRPC（仅 unary）、Dubbo（仅 2.7+）**。
 > Feign 等 HTTP 客户端一视同仁，按普通 HTTP 出站调用处理，不新增 transport、不做专用支持；gRPC 走仓库 proto/descriptor；Dubbo Hessian2 走 Java sidecar

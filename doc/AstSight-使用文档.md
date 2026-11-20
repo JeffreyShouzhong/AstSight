@@ -124,12 +124,18 @@ Python 项目仍可运行 `full`/`delta`，但内部方法变更会进入 `unres
 
 ### 4.1 模型配置
 
-`rules c1`、`agent run` 和显式调用模型适配层时需要模型。推荐用配置文件：
+`rules c1`、`agent run` 和显式调用模型适配层时需要模型。默认用一条命令生成配置：
 
 ```bash
-cd engine
-cp llm.example.json llm.json     # llm.json 已 gitignore
+astsight init
+export ASTSIGHT_LLM_API_KEY=你的key
 ```
+
+`init` 会检测现有的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`，
+自动选择 provider、模型、base_url 和 key 变量；没有检测到时生成 Anthropic 默认配置
+（`claude-sonnet-5-5`），写入 `~/.astsight/llm.json`。交互式可修改；
+`--yes` 使用默认值，`--local` 写到当前目录，`--provider` / `--model` / `--base-url`
+可直接指定。配置文件只保存 key 的环境变量名，不写明文 key。
 
 查找顺序为 `--llm-config PATH` / `ASTSIGHT_LLM_CONFIG` → `./llm.json` →
 `~/.astsight/llm.json`。`llm.json` 支持 `provider`、`model`、`base_url`、
@@ -301,7 +307,7 @@ python examples/demo_agent_flow.py --keep --no-auto-approve
 
 ```bash
 cd engine
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/service-repo \
   --mode delta --base main --target HEAD \
   --base-url http://127.0.0.1:8010 \
@@ -316,7 +322,7 @@ PYTHONPATH=. python -m astsight run \
 去掉 `--base-url`，或显式加 `--skip-execute`：
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/service-repo \
   --mode delta --base main --target HEAD \
   --skip-execute
@@ -335,7 +341,7 @@ PYTHONPATH=. python -m astsight run \
 
 ```bash
 cd engine
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project examples/partner_onboarding \
   --requirements examples/partner_onboarding/docs/requirements.md \
   --design examples/partner_onboarding/docs/design.md \
@@ -352,7 +358,7 @@ PYTHONPATH=. python -m astsight rules c1 \
 ### 7.2 只有需求文档
 
 ```bash
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project examples/partner_onboarding \
   --requirements examples/partner_onboarding/docs/requirements.md
 ```
@@ -360,7 +366,7 @@ PYTHONPATH=. python -m astsight rules c1 \
 ### 7.3 多份需求和多份设计
 
 ```bash
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project $PROJECT \
   --requirements $PROJECT/docs/requirements.md \
   --requirements $PROJECT/docs/requirements-extra.md \
@@ -372,7 +378,7 @@ PYTHONPATH=. python -m astsight rules c1 \
 ### 7.4 只校验，不写库
 
 ```bash
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project $PROJECT \
   --requirements $PROJECT/docs/requirements.md \
   --design $PROJECT/docs/design.md \
@@ -454,7 +460,7 @@ PYTHONPATH=. python -m astsight rules c1 \
 
 ```bash
 # 1. 只生成上下文
-PYTHONPATH=. python -m astsight rules prepare \
+astsight rules prepare \
   --project examples/partner_onboarding \
   --requirements examples/partner_onboarding/docs/requirements.md \
   --design examples/partner_onboarding/docs/design.md \
@@ -462,14 +468,14 @@ PYTHONPATH=. python -m astsight rules prepare \
 
 # 2. 外部模型按 context.json / prompt.md / rules.schema.json 写 rules.draft.json
 # 3. 先校验
-PYTHONPATH=. python -m astsight rules import \
+astsight rules import \
   --project examples/partner_onboarding \
   --context examples/partner_onboarding/.astsight/rules/<context_id> \
   --draft examples/partner_onboarding/.astsight/rules/<context_id>/rules.draft.json \
   --dry-run
 
 # 4. 校验通过后写入
-PYTHONPATH=. python -m astsight rules import \
+astsight rules import \
   --project examples/partner_onboarding \
   --context examples/partner_onboarding/.astsight/rules/<context_id> \
   --draft examples/partner_onboarding/.astsight/rules/<context_id>/rules.draft.json
@@ -487,7 +493,7 @@ PYTHONPATH=. python -m astsight rules import \
 重跑后检查：
 
 ```bash
-PYTHONPATH=. python -m astsight rules status --project $PROJECT
+astsight rules status --project $PROJECT
 ```
 
 重点看 `business_rules`、`contract_rules`、`status.active`、`questions/gaps/conflicts`
@@ -504,7 +510,7 @@ PYTHONPATH=. python -m astsight rules status --project $PROJECT
 ### 8.1 生成上下文
 
 ```bash
-PYTHONPATH=. python -m astsight cases prepare \
+astsight cases prepare \
   --project examples/partner_onboarding \
   --requirements examples/partner_onboarding/docs/requirements.md \
   --requirements examples/partner_onboarding/docs/design.md \
@@ -743,7 +749,7 @@ Mock 语义可用 `cases prepare --data-catalog/--mock-semantics` 打包进上�
 ### 8.3 校验并生成待审 proposal
 
 ```bash
-PYTHONPATH=. python -m astsight cases import \
+astsight cases import \
   --project examples/partner_onboarding \
   --context examples/partner_onboarding/.astsight/casegen/<context_id> \
   --draft examples/partner_onboarding/.astsight/a4/example-run/cases.draft.json \
@@ -798,7 +804,7 @@ PYTHONPATH=. python -m astsight cases import \
 然后可以用交互命令逐条填写，不必手工编辑 JSON：
 
 ```bash
-PYTHONPATH=. python -m astsight cases review \
+astsight cases review \
   --proposal examples/partner_onboarding/.astsight/cases/proposals/<proposal_id> \
   --pending
 ```
@@ -816,7 +822,7 @@ PYTHONPATH=. python -m astsight cases review \
 ### 9.2 应用审核结果
 
 ```bash
-PYTHONPATH=. python -m astsight cases approve \
+astsight cases approve \
   --project examples/partner_onboarding \
   --proposal examples/partner_onboarding/.astsight/cases/proposals/<proposal_id> \
   --reviewer <your-name>
@@ -836,8 +842,8 @@ CI 中不要并发 `cases approve`。
 ### 9.3 查看状态
 
 ```bash
-PYTHONPATH=. python -m astsight cases status --project $PROJECT
-PYTHONPATH=. python -m astsight rules status --project $PROJECT
+astsight cases status --project $PROJECT
+astsight rules status --project $PROJECT
 ```
 
 重点看已批准/废弃数量、待审 proposal、需求覆盖率、规则漂移和过期用例。
@@ -852,23 +858,23 @@ PYTHONPATH=. python -m astsight rules status --project $PROJECT
 
 ```bash
 # 1) DDL
-PYTHONPATH=. python -m astsight data catalog \
+astsight data catalog \
   --project examples/partner_onboarding \
   --ddl examples/partner_onboarding/schema.sql \
   --out .astsight/data
 
 # 2) DBML
-PYTHONPATH=. python -m astsight data catalog \
+astsight data catalog \
   --project $PROJECT --dbml schema.dbml --dialect postgres
 
 # 3) 真实库反射（只读，不读取业务数据）
-PYTHONPATH=. python -m astsight data catalog \
+astsight data catalog \
   --project $PROJECT \
   --db-url postgresql://user:pass@127.0.0.1:5432/service \
   --schema public --include 'order*'
 
 # 以上任意一种都可以再叠加代码枚举/常量组与规则常量
-PYTHONPATH=. python -m astsight data catalog \
+astsight data catalog \
   --project $PROJECT --ddl schema.sql \
   --code src --code web/src \
   --ruleset ruleset.json
@@ -947,14 +953,14 @@ PostgreSQL 需要 `psycopg`，MySQL 需要 `PyMySQL`；成功反射的表会带�
 
 ```bash
 # 框架外模型：按 prompts/c5_data_catalog.md 写出 draft 再合并
-PYTHONPATH=. python -m astsight data semantics \
+astsight data semantics \
   --project $PROJECT \
   --catalog .astsight/data/data_catalog.json \
   --draft .astsight/data/semantics.draft.json \
   --ruleset ruleset.json
 
 # 或直接调用模型（需要 LLM 环境变量）
-PYTHONPATH=. python -m astsight data semantics \
+astsight data semantics \
   --project $PROJECT \
   --catalog .astsight/data/data_catalog.json \
   --llm \
@@ -976,7 +982,7 @@ PYTHONPATH=. python -m astsight data semantics \
 查看目录里的业务态候选：
 
 ```bash
-PYTHONPATH=. python -m astsight data states \
+astsight data states \
   --project $PROJECT \
   --catalog .astsight/data/data_catalog.json \
   --state rule_BR_01_1a2b3c   # 可选：只看一个状态
@@ -996,7 +1002,7 @@ seed 状态都会列出来，占位值会逐条说明，不会被当成已确认
 在用例批准后生成：
 
 ```bash
-PYTHONPATH=. python -m astsight data plan \
+astsight data plan \
   --project $PROJECT \
   --catalog .astsight/data/data_catalog.json \
   --cases caseset.json \
@@ -1023,7 +1029,7 @@ PYTHONPATH=. python -m astsight data plan \
 ### 10.3 手工 apply / teardown
 
 ```bash
-PYTHONPATH=. python -m astsight data apply \
+astsight data apply \
   --db-url sqlite:////absolute/path/to/service.db \
   --plan .astsight/data/data_plan.json
 ```
@@ -1033,7 +1039,7 @@ PYTHONPATH=. python -m astsight data apply \
 在 `run` 中自动逐用例造数：
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project $PROJECT --mode cases \
   --base-url http://127.0.0.1:8010 \
   --data-plan .astsight/data/data_plan.json \
@@ -1059,7 +1065,7 @@ Mock 语义描述每个下游依赖在成功和业务分支下应返回什么。
 ```bash
 # 确定性层：每个 dep 固定 success；active 的 error_handling/state_transition/
 # data_consistency/validation 规则在文本含失败提示与 dep token 时生成 rule_<BR> 分支
-PYTHONPATH=. python -m astsight mock semantics \
+astsight mock semantics \
   --project $PROJECT \
   --context .astsight/casegen/<context_id> \
   --ruleset ruleset.json \
@@ -1070,11 +1076,11 @@ PYTHONPATH=. python -m astsight mock semantics \
 
 ```bash
 # 框架外模型：按 prompts/c35_mock_semantics.md 写出 draft
-PYTHONPATH=. python -m astsight mock semantics ... \
+astsight mock semantics ... \
   --draft mock_semantics.draft.json
 
 # 直接调用模型
-PYTHONPATH=. python -m astsight mock semantics ... --llm
+astsight mock semantics ... --llm
 ```
 
 候选分支必须带 `source.rule_keys` 且规则存在；未知 dep/规则、重复分支、无依据分支
@@ -1089,7 +1095,7 @@ A4 上下文，`cases import` 才能校验用例的 `mock_bindings`。`agent run
 ### 11.2 生成 MockPlan 草案（C3.5.5）
 
 ```bash
-PYTHONPATH=. python -m astsight mock plan \
+astsight mock plan \
   --project examples/order_service \
   --codegraph off \
   --out .astsight/mock-plan.json
@@ -1141,13 +1147,13 @@ PYTHONPATH=. python -m astsight mock plan \
 
 ```bash
 # 内嵌 Mock：启动服务、生成注入事实、执行后停止
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project $PROJECT --mode cases \
   --base-url http://127.0.0.1:8010 \
   --mock-plan .astsight/mock-plan.json
 
 # 或接入已启动的 Mock
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project $PROJECT --mode cases \
   --base-url http://127.0.0.1:8010 \
   --mock-admin-url http://127.0.0.1:PORT \
@@ -1264,7 +1270,7 @@ record 组件、枚举常量、必填标记（`@NotNull` / `@NotBlank` / `@NotEm
 ```
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/sut \
   --mode full --codegraph off \
   --dubbo-targets .astsight/dubbo-targets.json
@@ -1279,7 +1285,7 @@ global）和代码文件/行号，便于审计。
 纯 Dubbo 项目没有 HTTP 路由，`full` 模式仍可执行：
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/dubbo-service \
   --mode full \
   --codegraph off \
@@ -1536,7 +1542,7 @@ aio-pika、kombu/Celery；Go/Node/.NET 也还没有生产者拦截。
 ### 12.1 full：建基线
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/service-repo \
   --mode full \
   --base-url http://127.0.0.1:8010 \
@@ -1550,7 +1556,7 @@ PYTHONPATH=. python -m astsight run \
 ### 12.2 delta：只重判受影响范围
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/service-repo \
   --mode delta \
   --base main --target HEAD \
@@ -1580,7 +1586,7 @@ PYTHONPATH=. python -m astsight run \
 ### 12.3 cases：只执行已批准用例
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/service-repo \
   --mode cases \
   --base-url http://127.0.0.1:8010 \
@@ -1679,9 +1685,9 @@ PYTHONPATH=. python -m astsight run \
 ### 14.2 使用
 
 ```bash
-PYTHONPATH=. python -m astsight codegraph status
+astsight codegraph status
 
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/java-repo \
   --mode delta --base main --target HEAD \
   --codegraph on \
@@ -1736,7 +1742,7 @@ PYTHONPATH=. python -m astsight run \
 基本命令：
 
 ```bash
-PYTHONPATH=. python -m astsight agent run \
+astsight agent run \
   --project examples/downstream_service \
   --requirements docs/requirements.md \
   --openapi examples/downstream_service/openapi.json \
@@ -1844,13 +1850,13 @@ Mock 未命中的用例，`mock_sessions` 记录逐用例会话证据（详见
 
 ```bash
 # 预览将包含哪些文件，不写盘
-PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id> --dry-run
+astsight feedback collect --run .astsight/runs/<run_id> --dry-run
 
 # 生成 feedback.zip（默认输出到 run 目录）
-PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id>
+astsight feedback collect --run .astsight/runs/<run_id>
 
 # 生成 issue 草稿与 GitHub 提交链接
-PYTHONPATH=. python -m astsight feedback open \
+astsight feedback open \
   --run .astsight/runs/<run_id> --repo JeffreyShouzhong/AstSight
 ```
 
@@ -1884,7 +1890,7 @@ java -jar target/dubbo-provider-sample-0.1.0-SNAPSHOT.jar
 # READY 20880
 
 cd ../../../engine
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project ../java/samples/dubbo-provider \
   --mode full --codegraph off \
   --dubbo-url dubbo://127.0.0.1:20880
@@ -2028,44 +2034,45 @@ cd engine
 
 # 环境
 pip install -e ".[dev]"
-PYTHONPATH=. python -m astsight --help
-PYTHONPATH=. python -m astsight codegraph status
+astsight init
+astsight --help
+astsight codegraph status
 
 # C1：需求 + 设计 + OpenAPI
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project $PROJECT \
   --requirements $PROJECT/docs/requirements.md \
   --design $PROJECT/docs/design.md \
   --openapi $PROJECT/openapi.json
 
 # C1：只有需求
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project $PROJECT \
   --requirements $PROJECT/docs/requirements.md
 
 # C1：两段式
-PYTHONPATH=. python -m astsight rules prepare \
+astsight rules prepare \
   --project $PROJECT \
   --requirements $PROJECT/docs/requirements.md \
   --design $PROJECT/docs/design.md \
   --openapi $PROJECT/openapi.json
-PYTHONPATH=. python -m astsight rules import \
+astsight rules import \
   --project $PROJECT \
   --context $PROJECT/.astsight/rules/<context_id> \
   --draft $PROJECT/.astsight/rules/<context_id>/rules.draft.json
 
 # 规则状态与渲染
-PYTHONPATH=. python -m astsight rules status --project $PROJECT
-PYTHONPATH=. python -m astsight rules render --project $PROJECT --stdout
+astsight rules status --project $PROJECT
+astsight rules render --project $PROJECT --stdout
 
 # A4：生成上下文
-PYTHONPATH=. python -m astsight cases prepare \
+astsight cases prepare \
   --project $PROJECT \
   --requirements $PROJECT/docs/requirements.md \
   --openapi $PROJECT/openapi.json
 
 # 导入草案并生成待审 proposal
-PYTHONPATH=. python -m astsight cases import \
+astsight cases import \
   --project $PROJECT \
   --context $PROJECT/.astsight/casegen/<context_id> \
   --draft $PROJECT/cases.draft.json \
@@ -2073,48 +2080,48 @@ PYTHONPATH=. python -m astsight cases import \
   --require-rules
 
 # 人工审核后批准
-PYTHONPATH=. python -m astsight cases approve \
+astsight cases approve \
   --project $PROJECT \
   --proposal $PROJECT/.astsight/cases/proposals/<proposal_id> \
   --reviewer <your-name>
 
 # 用例状态
-PYTHONPATH=. python -m astsight cases status --project $PROJECT
+astsight cases status --project $PROJECT
 
 # C5a / C5b
-PYTHONPATH=. python -m astsight data catalog \
+astsight data catalog \
   --project $PROJECT --ddl $PROJECT/schema.sql
-PYTHONPATH=. python -m astsight data plan \
+astsight data plan \
   --project $PROJECT \
   --catalog .astsight/data/data_catalog.json \
   --cases caseset.json
-PYTHONPATH=. python -m astsight data apply \
+astsight data apply \
   --db-url sqlite:////absolute/path/to/service.db \
   --plan .astsight/data/data_plan.json
 
 # MockPlan
-PYTHONPATH=. python -m astsight mock plan \
+astsight mock plan \
   --project $PROJECT --out .astsight/mock-plan.json
 
 # 三种运行模式
-PYTHONPATH=. python -m astsight run --project $PROJECT --mode full \
+astsight run --project $PROJECT --mode full \
   --base-url http://127.0.0.1:8010 --openapi $PROJECT/openapi.json
-PYTHONPATH=. python -m astsight run --project $PROJECT --mode delta \
+astsight run --project $PROJECT --mode delta \
   --base main --target HEAD --base-url http://127.0.0.1:8010 --codegraph on
-PYTHONPATH=. python -m astsight run --project $PROJECT --mode cases \
+astsight run --project $PROJECT --mode cases \
   --base-url http://127.0.0.1:8010 --data-plan .astsight/data/data_plan.json
 
 # Agent 端到端
-PYTHONPATH=. python -m astsight agent run \
+astsight agent run \
   --project $PROJECT \
   --requirements $PROJECT/docs/requirements.md \
   --openapi $PROJECT/openapi.json \
   --mode full --approve-as <reviewer>
 
 # 反馈诊断包
-PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id> --dry-run
-PYTHONPATH=. python -m astsight feedback collect --run .astsight/runs/<run_id>
-PYTHONPATH=. python -m astsight feedback open --run .astsight/runs/<run_id> \
+astsight feedback collect --run .astsight/runs/<run_id> --dry-run
+astsight feedback collect --run .astsight/runs/<run_id>
+astsight feedback open --run .astsight/runs/<run_id> \
   --repo JeffreyShouzhong/AstSight
 
 # 示例

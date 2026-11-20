@@ -1020,14 +1020,18 @@ python -m astsight mock semantics --project $PROJECT \
   → 有界重跑（默认最多 3 轮）
 ```
 
-模型配置可以写配置文件，也可以用环境变量。推荐把模板复制成不含密钥的本地配置：
+模型配置用一条命令生成，默认写入 `~/.astsight/llm.json`：
 
 ```bash
-cd engine
-cp llm.example.json llm.json
+astsight init
+export ASTSIGHT_LLM_API_KEY=你的key
 ```
 
-`llm.json` 字段（`llm.example.json` 是可直接使用的模板）：
+`init` 会自动检测 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`，
+选择 provider、模型和 key 变量；配置文件只保存 key 的环境变量名，不写明文 key。
+`llm.example.json` 保留为字段参考。
+
+`llm.json` 字段：
 
 ```json
 {

@@ -66,18 +66,17 @@ python examples/demo_agent_flow.py --keep
 
 ## 4. 配置大模型
 
-### 4.1 复制模板
+### 4.1 一条命令生成配置
 
 ```bash
-cd engine
-cp llm.example.json llm.json
-```
-
-`llm.json` 已加入 `.gitignore`，不会被提交。**推荐把 key 放在环境变量里**，配置文件只写变量名：
-
-```bash
+astsight init
 export ASTSIGHT_LLM_API_KEY=你的key
 ```
+
+`init` 会检测现有的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`，
+自动选择 provider、模型和 key 变量；没有检测到时生成 Anthropic 默认配置并写入
+`~/.astsight/llm.json`。交互式可修改，`--yes` 使用默认值，`--local` 写到当前目录。
+配置文件只保存 key 的环境变量名，不写明文 key。
 
 ### 4.2 三种常见配置
 
@@ -164,7 +163,7 @@ ASTSIGHT_LLM_* 环境变量  >  llm.json  >  ANTHROPIC_* 环境变量
 
 ```bash
 cd engine
-PYTHONPATH=. python -m astsight rules extract \
+astsight rules extract \
   --project examples/partner_onboarding \
   --requirements examples/partner_onboarding/docs/requirements.md \
   --design examples/partner_onboarding/docs/design.md \
@@ -191,7 +190,7 @@ your-project/
 
 ```bash
 cd engine
-PYTHONPATH=. python -m astsight agent run \
+astsight agent run \
   --project /path/to/your-project \
   --requirements /path/to/your-project/docs/requirements.md \
   --base-url http://127.0.0.1:8010 \
@@ -210,7 +209,7 @@ PYTHONPATH=. python -m astsight agent run \
 #### 第 1 步：需求 → 规则库
 
 ```bash
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project /path/to/your-project \
   --requirements /path/to/your-project/docs/requirements.md \
   --design /path/to/your-project/docs/design.md \
@@ -223,7 +222,7 @@ PYTHONPATH=. python -m astsight rules c1 \
 #### 第 2 步：规则 → 用例上下文
 
 ```bash
-PYTHONPATH=. python -m astsight cases prepare \
+astsight cases prepare \
   --project /path/to/your-project \
   --requirements /path/to/your-project/docs/requirements.md \
   --openapi /path/to/your-project/openapi.json \
@@ -239,7 +238,7 @@ PYTHONPATH=. python -m astsight cases prepare \
 #### 第 3 步：导入为待审 proposal
 
 ```bash
-PYTHONPATH=. python -m astsight cases import \
+astsight cases import \
   --project /path/to/your-project \
   --context /path/to/your-project/.astsight/casegen/<context_id> \
   --draft /path/to/your-project/cases.draft.json \
@@ -255,7 +254,7 @@ PYTHONPATH=. python -m astsight cases import \
 
 ```bash
 # 交互式逐条审核：a=approve / r=reject / s=跳过 / q=保存退出
-PYTHONPATH=. python -m astsight cases review \
+astsight cases review \
   --proposal /path/to/your-project/.astsight/cases/proposals/<proposal_id> \
   --pending
 ```
@@ -266,7 +265,7 @@ PYTHONPATH=. python -m astsight cases review \
 #### 第 5 步：批准入用例库
 
 ```bash
-PYTHONPATH=. python -m astsight cases approve \
+astsight cases approve \
   --project /path/to/your-project \
   --proposal /path/to/your-project/.astsight/cases/proposals/<proposal_id> \
   --reviewer 你的名字
@@ -279,7 +278,7 @@ PYTHONPATH=. python -m astsight cases approve \
 ```bash
 # 6.1 数据目录（DDL → 表/字段/状态）
 # 以下三项都是可选的确定性增强：规则常量、代码枚举/常量组、跨表状态骨架
-PYTHONPATH=. python -m astsight data catalog \
+astsight data catalog \
   --project /path/to/your-project \
   --ddl /path/to/your-project/schema.sql \
   --ruleset /path/to/your-project/ruleset.json \
@@ -287,7 +286,7 @@ PYTHONPATH=. python -m astsight data catalog \
   --rule-states
 
 # 6.2 逐用例造数计划
-PYTHONPATH=. python -m astsight data plan \
+astsight data plan \
   --project /path/to/your-project \
   --catalog /path/to/your-project/.astsight/data/data_catalog.json \
   --cases /path/to/your-project/caseset.json \
@@ -299,7 +298,7 @@ PYTHONPATH=. python -m astsight data plan \
 #### 第 7 步：执行
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/your-project \
   --mode cases \
   --base-url http://127.0.0.1:8010 \
@@ -316,7 +315,7 @@ PYTHONPATH=. python -m astsight run \
 ### 5.4 路线 C：按代码变更执行（已有用例库）
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/service-repo \
   --mode delta --base main --target HEAD \
   --base-url http://127.0.0.1:8010 \

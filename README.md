@@ -60,6 +60,7 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、HTTP
 ## 环境要求
 
 - Python 3.11 及以上（CI 使用 3.12；本地最近在 3.13 验证）。
+- 默认主路径需要大模型；安装后执行 `astsight init` 生成配置。
 - 目标运行环境为 Linux（服务器 / CI）；Windows 可用于本地调试。
 - 被测服务（SUT）需要可访问的 HTTP 地址；不提供时只生成、不执行。
 - CodeGraph 由平台 wheel `astsight-codegraph-bin` 内置（含 Node 运行时），
@@ -99,20 +100,21 @@ astsight codegraph status
 
 ## 配置大模型
 
-模型用于规则抽取、用例设计和语义补全，是可选能力；不配模型也可以只用确定性链路。
+默认主路径（规则抽取、用例设计、`agent run`）需要模型。一条命令生成配置：
 
 ```bash
-cd engine
-cp llm.example.json llm.json
+astsight init
 export ASTSIGHT_LLM_API_KEY=你的key
 ```
 
-`llm.example.json` 是可直接使用的模板，支持 `provider`（`anthropic` / `openai`）、
-`model`、`base_url`、`auth_style`、`api_key_env` 和调用参数。密钥建议只放环境变量，
-`llm.json` 已加入 `.gitignore`。
+`init` 会检测已有的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`，
+自动选择 provider、模型和 key 变量；没有检测到时生成 Anthropic 默认配置
+（`claude-sonnet-5-5`），写入 `~/.astsight/llm.json`。交互式可修改 provider/model/base_url，
+`--yes` 使用默认值，`--local` 写到当前目录。
 
-配置查找顺序：`--llm-config PATH` → `ASTSIGHT_LLM_CONFIG` → `./llm.json` →
-`~/.astsight/llm.json`；环境变量 `ASTSIGHT_LLM_*` 始终覆盖文件值。
+配置文件只保存 key 的环境变量名，不写明文 key。查找顺序：
+`--llm-config PATH` → `ASTSIGHT_LLM_CONFIG` → `./llm.json` → `~/.astsight/llm.json`；
+环境变量 `ASTSIGHT_LLM_*` 始终覆盖文件值。`llm.example.json` 保留为字段参考。
 
 三种常见写法见 [快速上手指南](doc/AstSight-快速上手指南.md#42-三种常见配置)。
 配好后用 `rules extract`（别名 `rules c1`）验证连通。
@@ -121,6 +123,9 @@ export ASTSIGHT_LLM_API_KEY=你的key
 
 ```bash
 cd engine
+
+# 配置模型（默认主路径；下面两个 demo 不需要模型）
+astsight init
 
 # 代码变更 → 接口画像 → 用例 → pytest → 报告（不需要模型）
 python examples/demo_delta.py
@@ -147,7 +152,7 @@ demo 会自动启动示例服务，产物在临时目录的 `.astsight/runs/<run
 
 ```bash
 cd engine
-PYTHONPATH=. python -m astsight agent run \
+astsight agent run \
   --project /path/to/project \
   --requirements /path/to/project/docs/requirements.md \
   --base-url http://127.0.0.1:8010 \
@@ -165,48 +170,48 @@ Mock 分支补丁直接热更新。
 cd engine
 
 # 1. 需求 → 规则库
-PYTHONPATH=. python -m astsight rules c1 \
+astsight rules c1 \
   --project /path/to/project \
   --requirements /path/to/project/docs/requirements.md \
   --design /path/to/project/docs/design.md \
   --openapi /path/to/project/openapi.json
 
 # 2. 生成用例上下文（按 prompts/a4_case_design.md 写出 cases.draft.json）
-PYTHONPATH=. python -m astsight cases prepare \
+astsight cases prepare \
   --project /path/to/project \
   --requirements /path/to/project/docs/requirements.md \
   --openapi /path/to/project/openapi.json
 
 # 3. 导入为待审提案（不改用例库）
-PYTHONPATH=. python -m astsight cases import \
+astsight cases import \
   --project /path/to/project \
   --context /path/to/project/.astsight/casegen/<context_id> \
   --draft /path/to/project/cases.draft.json \
   --ruleset /path/to/project/ruleset.json
 
 # 4. 人工审核（a=approve / r=reject / s=跳过 / q=保存退出）
-PYTHONPATH=. python -m astsight cases review \
+astsight cases review \
   --proposal /path/to/project/.astsight/cases/proposals/<proposal_id> --pending
 
 # 5. 由审核人批准入用例库
-PYTHONPATH=. python -m astsight cases approve \
+astsight cases approve \
   --project /path/to/project \
   --proposal /path/to/project/.astsight/cases/proposals/<proposal_id> \
   --reviewer <审核人>
 
 # 6. 造数计划（有前置状态用例时需要）
-PYTHONPATH=. python -m astsight data catalog --project /path/to/project \
+astsight data catalog --project /path/to/project \
   --ddl /path/to/project/schema.sql \
   --ruleset /path/to/project/ruleset.json \
   --code /path/to/project/src \
   --rule-states                              # 后两项可选：代码常量/跨表状态骨架
-PYTHONPATH=. python -m astsight data plan --project /path/to/project \
+astsight data plan --project /path/to/project \
   --catalog /path/to/project/.astsight/data/data_catalog.json \
   --cases /path/to/project/caseset.json \
   --ruleset /path/to/project/ruleset.json
 
 # 7. 执行已批准用例
-PYTHONPATH=. python -m astsight run --project /path/to/project --mode cases \
+astsight run --project /path/to/project --mode cases \
   --base-url http://127.0.0.1:8010 \
   --reset-url http://127.0.0.1:8010/_reset \
   --data-plan /path/to/project/.astsight/data/data_plan.json
@@ -215,7 +220,7 @@ PYTHONPATH=. python -m astsight run --project /path/to/project --mode cases \
 ### 方式三：已有用例库，按代码变更执行
 
 ```bash
-PYTHONPATH=. python -m astsight run \
+astsight run \
   --project /path/to/service-repo \
   --mode delta --base main --target HEAD \
   --base-url http://127.0.0.1:8010 \
