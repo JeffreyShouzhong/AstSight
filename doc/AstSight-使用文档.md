@@ -47,7 +47,7 @@ AstSight 是一套**接口自动化测试引擎**，不是测试管理平台。�
 | C5b | 已批准用例 + 数据目录 → 逐用例造数计划 | `data plan`、`data apply` |
 | C6 | 用例 → pytest 代码 | `run` |
 | C7 | 执行、归因、报告、门禁 | `run`、`cases status`、`rules status` |
-| CodeGraph | 非 Python 符号、调用链、Spring 路由 | `codegraph install/status`、`run --codegraph on` |
+| CodeGraph | 非 Python 符号、调用链、Spring 路由 | `codegraph status`、`run --codegraph on` |
 | Agent | 把上述链路串成一条可选命令 | `agent run` |
 
 ---
@@ -56,19 +56,29 @@ AstSight 是一套**接口自动化测试引擎**，不是测试管理平台。�
 
 ### 3.1 Python 依赖
 
+正式安装：
+
+```bash
+pip install astsight
+astsight init
+astsight --help
+```
+
+支持的平台是 Linux x86_64/arm64、macOS x86_64/arm64、Windows x86_64；
+CodeGraph 平台 wheel 会随主包自动安装。
+
+源码开发：
+
 ```bash
 cd engine
 pip install -e ".[dev]"
-astsight --help
 ```
 
 核心依赖是 `pydantic`、`httpx`、`PyYAML`、`fastapi`、`uvicorn`、`protobuf`/`grpcio`
 与 `jsonschema`；`pytest`、`langgraph`、PostgreSQL/MySQL 驱动在 `dev` extra 中，
 按需用 `pip install -e ".[postgres]"`、`[mysql]`、`[orchestration]` 安装。
-开发时也可以不安装，把 `engine/` 放进 `PYTHONPATH` 后用 `python -m astsight` 运行。
 
-如果包已经安装到当前 Python 环境，可以省略 `PYTHONPATH=.`。后文命令默认都在
-`engine/` 目录下执行。
+后文命令默认已经在任意目录可执行；源码模式下从 `engine/` 目录运行。
 
 ### 3.2 CodeGraph
 

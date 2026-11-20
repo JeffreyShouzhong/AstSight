@@ -3,7 +3,7 @@
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
 > 最新代码提交：`a20fc69`（`测试：CodeGraph 平台运行时优先于 managed 回退`）；
-> 当前存档已同步远端；设计基线 v5.02。
+> 当前存档已同步远端；设计基线 v5.03。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -67,6 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 主包发布 PyPI 0.1.0 | ✅ 2026-11-20 | `astsight==0.1.0` wheel/sdist 已上传 PyPI；版本改为稳定版；干净 venv 执行 `pip install astsight` 会自动安装 `astsight-codegraph-bin==1.6.2`，`codegraph status` 显示 `source=packaged`、worker 可用；README/使用文档/快速指南改为 PyPI 安装主路径 |
 | CodeGraph 默认依赖发布 | ✅ 2026-11-20 | 5 个平台 wheel（Linux x86_64/arm64、macOS x86_64/arm64、Windows x86_64）已上传 PyPI `astsight-codegraph-bin==1.6.2`；pyproject 按平台标记加入默认依赖；验证 PyPI 安装后 `source=packaged`、worker ready |
 | 默认模型配置 `astsight init` | ✅ 2026-11-20 | 新增 `astsight init`：默认写入 `~/.astsight/llm.json`，自动检测 Anthropic/OpenAI key 环境变量并选择 provider/model；交互式可改，`--yes`/`--local` 等参数；配置文件不写明文 key；缺配置错误提示运行 init；README/使用文档/快速指南统一改用 `astsight` 命令；新增 5 条测试，全量 728 passed / 72 skipped |
 | CodeGraph 平台 wheel | ✅ 2026-11-20 | 新增 `tools/build_codegraph_wheels.py`：打包 CodeGraph 1.6.2 与自包含 Node 到 `astsight-codegraph-bin`；引擎从包资源解析 Node/node_modules，不依赖 PATH/npm/网络；`codegraph status` 显示 `source=packaged`；本地 Windows wheel 约 53MB，worker 握手 ready；CI 增加 linux-x64 构建与验证 job |

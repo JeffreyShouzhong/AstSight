@@ -69,14 +69,23 @@ AstSight 是一套接口自动化测试引擎：输入需求/设计文档、HTTP
 ## 安装
 
 ```bash
-cd engine
-pip install -e ".[dev]"   # 开发/测试；只运行可装 pip install -e .
+pip install astsight
+astsight init
 astsight --help
 ```
 
+支持的平台是 Linux x86_64/arm64、macOS x86_64/arm64、Windows x86_64；
+CodeGraph 的平台 wheel 会随主包自动安装。
+
+源码开发：
+
+```bash
+cd engine
+pip install -e ".[dev]"
+```
+
 `dev` extra 包含 pytest、langgraph（编排骨架测试用）以及 PostgreSQL/MySQL 驱动；
-默认安装不包含这些。开发时也可以不安装，直接把 `engine/` 加入 `PYTHONPATH`
-后用 `python -m astsight` 运行。
+默认安装不包含这些。
 
 ### CodeGraph
 

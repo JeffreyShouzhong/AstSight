@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astsight"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "需求与代码变更驱动的 API 自动化测试引擎"
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [{ name = "AstSight contributors" }]
 keywords = ["testing", "api", "openapi", "pytest", "llm", "contract-testing"]

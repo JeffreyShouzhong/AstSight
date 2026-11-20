@@ -25,12 +25,13 @@ AstSight 把「需求文档 + 设计文档 + OpenAPI + 代码仓库」变成可�
 ## 2. 安装
 
 ```bash
-cd engine
-pip install -e ".[dev]"
+pip install astsight
+astsight init
 astsight --help
 ```
 
-不安装也可以开发：把 `engine/` 加入 `PYTHONPATH`，用 `python -m astsight` 运行。
+源码开发使用 `cd engine && pip install -e ".[dev]"`。
+支持的平台是 Linux x86_64/arm64、macOS x86_64/arm64、Windows x86_64。
 
 - Python 3.11 及以上（仓库最近在 3.13 上验证）。
 - Linux 是目标运行环境；Windows 可用于本地调试（见第 7 节注意事项）。
