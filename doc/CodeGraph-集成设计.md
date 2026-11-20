@@ -294,7 +294,7 @@ CodeGraph 是**符号调用图**，没有表/列级读写血缘。图谱最多�
 ## 五、工程红线
 
 1. **遥测必须关**：`CODEGRAPH_TELEMETRY=0` + `DO_NOT_TRACK=1`（客户端已默认注入）。企业代码仓场景，默认开启不可接受。
-2. **Node >= 22.5**：不满足时 **`CodeGraphUnavailable` 早失败**，不允许静默降级成空图谱——空图谱会让所有接口判"无影响"，看起来一切正常，实际什么都没测。
+2. **Node >= 22.5**：正式分发使用 `astsight-codegraph-bin` 平台 wheel，内置固定版本 Node 与 CodeGraph；开发回退路径才要求系统 Node。环境不满足时 **`CodeGraphUnavailable` 早失败**，不允许静默降级成空图谱——空图谱会让所有接口判"无影响"，看起来一切正常，实际什么都没测。
 3. **禁 `try/catch` 吞 open 错误**：先 `isInitialized()`，再决定 open/init。
 4. **Map 必须显式展开**：任何从 Subgraph 出来的数据，序列化前确认不是 Map。
 5. **一仓一写者**：并发写同一 `.codegraph/` 会锁冲突，多进程分析需串行化。

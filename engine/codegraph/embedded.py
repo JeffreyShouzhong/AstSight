@@ -53,7 +53,7 @@ from .route_repair import (
     RouteRepairReport,
     normalize_django_path,
 )
-from .runtime import resolve_module_root
+from .runtime import resolve_module_root, resolve_node
 
 _DEFAULT_TIMEOUT = 60.0
 _INDEX_TIMEOUT = 900.0  # 全量索引大仓可能十几分钟
@@ -72,26 +72,14 @@ class CodeGraphUnavailable(RuntimeError):
 def _find_node() -> str:
     """定位 Node 可执行文件。
 
-    优先托管版本（隔离、版本可控），其次系统 PATH。
+    优先 `ASTSIGHT_NODE` 与平台 wheel 内置 Node，其次系统 PATH。
     """
-    managed = Path(os.environ.get("ASTSIGHT_NODE", ""))
-    if managed.is_file():
-        return str(managed)
-
-    candidates = sorted(
-        Path.home().glob(".workbuddy/binaries/node/versions/*/node.exe"),
-        reverse=True,
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-
-    found = shutil.which("node") or shutil.which("node.exe")
+    found = resolve_node()
     if found:
         return found
     raise CodeGraphUnavailable(
         "找不到 node 可执行文件。CodeGraph 库模式要求 Node >= 22.5（依赖 node:sqlite）。"
-        "请安装 Node 或设置 ASTSIGHT_NODE 指向可执行文件。"
+        "请安装 astsight-codegraph-bin、安装 Node，或设置 ASTSIGHT_NODE。"
     )
 
 

@@ -1391,9 +1391,16 @@ def _codegraph_install(args) -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        action = "已复用" if result.get("reused") else "已安装"
-        print(f"CodeGraph {result.get('version')} {action}: {result['root']}")
-        print("后续运行默认使用该目录；--codegraph-module-root 可显式覆盖。")
+        if result.get("source") == "packaged":
+            print(
+                f"CodeGraph {result.get('version')} 已随平台 wheel 提供: "
+                f"{result['root']}"
+            )
+            print("Node 与 CodeGraph 均来自 astsight-codegraph-bin，无需另装。")
+        else:
+            action = "已复用" if result.get("reused") else "已安装"
+            print(f"CodeGraph {result.get('version')} {action}: {result['root']}")
+            print("后续运行默认使用该目录；--codegraph-module-root 可显式覆盖。")
     return 0
 
 
@@ -1403,13 +1410,16 @@ def _codegraph_status(args) -> int:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         print(f"CodeGraph 包: {data['package']} (pin {data['pinned_version']})")
+        print(f"来源: {data.get('source') or '未安装'}")
         print(f"持久化目录: {data['managed_root']}")
         print(f"实际使用: {data['module_root'] or '未找到（运行时会回退 bridge 目录）'}")
         print(
             f"安装状态: {'已安装 ' + str(data['installed_version']) if data['installed'] else '未安装'}"
         )
         print(f"Node: {data['node'] or '未找到'} / npm: {data['npm'] or '未找到'}")
-        if not data["installed"]:
+        if data.get("source") == "packaged":
+            print("Node 与 CodeGraph 由 astsight-codegraph-bin 平台 wheel 提供，无需安装。")
+        elif not data["installed"]:
             print("安装命令: python -m astsight codegraph install")
     return 0 if data["installed"] else 1
 

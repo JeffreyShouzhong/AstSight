@@ -212,7 +212,9 @@ PYTHONPATH=. python -m astsight run \
   或设置 `MSYS_NO_PATHCONV=1`。
 
 Java/Spring 的 API 级变更感知走同一条命令，但必须让 CodeGraph 可用。
-执行过 `python -m astsight codegraph install` 后会自动使用用户级缓存，
+平台 wheel `astsight-codegraph-bin` 已内置 Node 与 CodeGraph，
+`astsight codegraph status` 显示 `source=packaged` 即可直接运行；
+开发环境可用 `python -m astsight codegraph install` 安装到用户级缓存作为回退，
 `--codegraph-module-root` 只用于覆盖安装目录：
 
 ```bash
@@ -1261,9 +1263,9 @@ python -m pytest -q
   待审阶段不产生 caseset/data_plan/execution、规则与目录快照。
 - `test_codegraph_embedded.py`：CodeGraph 嵌入、已知路由缺陷的修复、证据等级，
   以及 Java/Spring 的真实分支 diff → 受影响 API 闭环（合成 Maven 项目）。
-  需要 Node >= 22.5 与 `@colbymchenry/codegraph`；先执行
-  `python -m astsight codegraph install`，或用 `ASTSIGHT_CODEGRAPH_MODULE_ROOT`
-  指定 node_modules，环境不具备时显式 SKIP。
+  需要 CodeGraph；安装平台 wheel `astsight-codegraph-bin` 后自动可用，
+  开发环境可执行 `python -m astsight codegraph install`，或用
+  `ASTSIGHT_CODEGRAPH_MODULE_ROOT` 指定 node_modules，环境不具备时显式 SKIP。
 - `tests/integration/test_java_feign_e2e.py`：真实 Spring Cloud 工程联调，默认 SKIP。
   设置 `ASTSIGHT_JAVA_E2E=1`、`ASTSIGHT_JAVA_E2E_PROJECT=<feign-eureka 根目录>`
   （client 模块需先 `mvn -q -pl client -am package -DskipTests`），必要时用

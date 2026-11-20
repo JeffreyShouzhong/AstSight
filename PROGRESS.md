@@ -3,7 +3,7 @@
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
 > 最新代码提交：`b54106b`（`修复：报告不再把 skipped / 无 Mock 证据当通过`）；
-> 当前存档已同步远端；设计基线 v4.99。
+> 当前存档已同步远端；设计基线 v5.00。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -67,6 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| CodeGraph 平台 wheel | ✅ 2026-11-20 | 新增 `tools/build_codegraph_wheels.py`：打包 CodeGraph 1.6.2 与自包含 Node 到 `astsight-codegraph-bin`；引擎从包资源解析 Node/node_modules，不依赖 PATH/npm/网络；`codegraph status` 显示 `source=packaged`；本地 Windows wheel 约 53MB，worker 握手 ready；CI 增加 linux-x64 构建与验证 job |
 | 工程债务清理 | ✅ 2026-11-19 | 新增 `engine/pyproject.toml`（包元数据、`astsight` 入口、postgres/mysql/orchestration/dev extras），删除 requirements.txt，langgraph 移入 optional；`cli.py` 2386→1469 行，data/rules/mock 抽到 `commands/`；`cases/validate.py` 3523→738 行，拆为 `validate_base` + 9 个职责模块，门面与错误码不变；报告修复 skipped/无 Mock 证据假绿；本地 723/72、CI 723/90 |
 | 文档与范围归档 | ✅ 2026-11-19 | C7.4 审计、诊断包、LangGraph 编排、扩展插件机制与运行模式口径已同步到设计文档、ROADMAP、使用文档和 CONTRIBUTING；设计基线 v4.99；PROGRESS 计数更新为本地 718/72、Linux CI 718/90 |
 | 本地诊断包与 GitHub Issue 反馈 | ✅ 2026-11-19 | 新增 `feedback collect/open`：从 run 产物生成脱敏 zip（报告/执行/Mock 证据/失败用例快照与代码），生成 issue 草稿与 GitHub 提交链接；`run`/`agent run` 在门禁失败时自动生成 `feedback.zip`（`--feedback auto/always/off`），并纳入 `diagnosis.json`/`flow.json`；默认脱敏、不自动上传、不依赖服务端；新增 7 条测试，相关子集 12 passed |

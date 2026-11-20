@@ -70,24 +70,45 @@ astsight --help
 如果包已经安装到当前 Python 环境，可以省略 `PYTHONPATH=.`。后文命令默认都在
 `engine/` 目录下执行。
 
-### 3.2 CodeGraph（非 Python 项目必需）
+### 3.2 CodeGraph
 
-CodeGraph 用于 Java/Kotlin/TypeScript 的符号边界、调用链和 Spring 路由识别。
-Python 项目的基础 AST 能力不依赖它，但完整调用链和跨语言符号映射需要。
+CodeGraph 用于 `delta` 的“内部方法变更 → 受影响接口”追溯，以及
+Java/Kotlin/TypeScript 的符号边界和调用链。它由平台 wheel
+`astsight-codegraph-bin` 分发，内含固定版本 CodeGraph 与自包含 Node 运行时；
+安装后不需要系统 Node、npm 或联网。
 
-前置条件：Node >= 22.5。安装到用户级缓存后，所有项目复用：
+发布到 PyPI 后可直接安装：
 
 ```bash
-PYTHONPATH=. python -m astsight codegraph install
-PYTHONPATH=. python -m astsight codegraph status
+pip install "astsight[codegraph]"
+astsight codegraph status
 ```
 
-默认安装位置：
+当前源码安装可以先构建本地平台 wheel：
+
+```bash
+python tools/build_codegraph_wheels.py --platform linux-x64
+pip install dist/astsight_codegraph_bin-*.whl
+astsight codegraph status
+```
+
+`status` 中 `source=packaged` 表示正在使用 wheel 内置运行时。
+
+开发或离线环境仍可回退到用户级缓存（需要系统 Node >= 22.5）：
+
+```bash
+astsight codegraph install
+astsight codegraph status
+```
+
+默认缓存位置：
 
 - Windows：`%LOCALAPPDATA%\AstSight\codegraph`
 - Linux/macOS：`~/.local/share/astsight/codegraph`
 
-`--root` 可覆盖安装目录；`--force` 可强制重装。
+`--root` 可覆盖安装目录；`--force` 可强制重装。没有 CodeGraph 时，
+Python 项目仍可运行 `full`/`delta`，但内部方法变更会进入 `unresolved`
+（`no_codegraph`），影响面不完整；非 Python 的 `delta` 不建议这样跑。
 
 ### 3.3 运行环境
 
@@ -1658,7 +1679,6 @@ PYTHONPATH=. python -m astsight run \
 ### 14.2 使用
 
 ```bash
-PYTHONPATH=. python -m astsight codegraph install
 PYTHONPATH=. python -m astsight codegraph status
 
 PYTHONPATH=. python -m astsight run \
@@ -2009,7 +2029,6 @@ cd engine
 # 环境
 pip install -e ".[dev]"
 PYTHONPATH=. python -m astsight --help
-PYTHONPATH=. python -m astsight codegraph install
 PYTHONPATH=. python -m astsight codegraph status
 
 # C1：需求 + 设计 + OpenAPI
