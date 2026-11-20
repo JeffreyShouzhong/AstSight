@@ -25,6 +25,12 @@ def _no_env(monkeypatch):
     monkeypatch.delenv("ASTSIGHT_CODEGRAPH_HOME", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_packaged(monkeypatch):
+    """这些用例验证 managed/PATH 回退；平台 wheel 由专门用例覆盖。"""
+    monkeypatch.setattr(runtime, "packaged_runtime", lambda: None)
+
+
 def test_explicit_root_wins(monkeypatch, tmp_path):
     monkeypatch.setenv("ASTSIGHT_CODEGRAPH_MODULE_ROOT", str(tmp_path / "env"))
     assert runtime.resolve_module_root(tmp_path / "explicit") == str(
@@ -97,3 +103,30 @@ def test_status_reports_managed_state(monkeypatch, tmp_path):
     assert state["installed"] is True
     assert state["installed_version"] == "1.6.2"
     assert state["module_root"] == str(managed.resolve())
+
+
+def test_packaged_runtime_takes_precedence(monkeypatch, tmp_path):
+    package = tmp_path / "package"
+    root = package / "node_modules"
+    root.mkdir(parents=True)
+    node = package / "node"
+    node.write_text("", encoding="utf-8")
+    packaged = {
+        "root": str(root),
+        "node": str(node),
+        "version": "1.6.2",
+        "platform": "linux-x64",
+        "source": "packaged",
+    }
+    monkeypatch.setattr(runtime, "packaged_runtime", lambda: packaged)
+    managed = _fake_install(tmp_path / "managed")
+    monkeypatch.setenv("ASTSIGHT_CODEGRAPH_HOME", str(managed))
+    assert runtime.resolve_module_root() == str(root)
+    assert runtime.resolve_node() == str(node)
+    assert runtime.is_installed()
+    result = runtime.install(managed)
+    assert result["reused"] is True
+    assert result["source"] == "packaged"
+    state = runtime.status()
+    assert state["source"] == "packaged"
+    assert state["installed_version"] == "1.6.2"
