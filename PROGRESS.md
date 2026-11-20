@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`b54106b`（`修复：报告不再把 skipped / 无 Mock 证据当通过`）；
+> 最新代码提交：`7821cd5`（`新增：CodeGraph 平台 wheel，内置 Node 与固定版本 CodeGraph`）；
 > 当前存档已同步远端；设计基线 v5.00。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
