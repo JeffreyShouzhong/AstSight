@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`7821cd5`（`新增：CodeGraph 平台 wheel，内置 Node 与固定版本 CodeGraph`）；
+> 最新代码提交：`1b950d9`（`新增：astsight init 默认模型配置`）；
 > 当前存档已同步远端；设计基线 v5.01。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
