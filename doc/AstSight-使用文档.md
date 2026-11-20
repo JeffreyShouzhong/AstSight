@@ -73,22 +73,12 @@ astsight --help
 ### 3.2 CodeGraph
 
 CodeGraph 用于 `delta` 的“内部方法变更 → 受影响接口”追溯，以及
-Java/Kotlin/TypeScript 的符号边界和调用链。它由平台 wheel
-`astsight-codegraph-bin` 分发，内含固定版本 CodeGraph 与自包含 Node 运行时；
+Java/Kotlin/TypeScript 的符号边界和调用链。默认安装已经带上平台 wheel
+`astsight-codegraph-bin`，内含固定版本 CodeGraph 与自包含 Node 运行时；
+支持的平台是 Linux x86_64/arm64、macOS x86_64/arm64、Windows x86_64。
 安装后不需要系统 Node、npm 或联网。
 
-发布到 PyPI 后可直接安装：
-
 ```bash
-pip install "astsight[codegraph]"
-astsight codegraph status
-```
-
-当前源码安装可以先构建本地平台 wheel：
-
-```bash
-python tools/build_codegraph_wheels.py --platform linux-x64
-pip install dist/astsight_codegraph_bin-*.whl
 astsight codegraph status
 ```
 

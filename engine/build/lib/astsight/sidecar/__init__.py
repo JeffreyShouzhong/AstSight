@@ -1,0 +1,37 @@
+"""被测 Dubbo 服务的调用客户端（sidecar）。
+
+sidecar 是独立 Java 进程：引擎把调用写成 JSONL 送进 stdin，sidecar 用
+`ReferenceConfig<GenericService>` 泛化调用目标服务，再把结构化结果写回
+stdout。它不 Attach 被测 JVM、不加载 java agent，也不执行仓库代码。
+"""
+from .dubbo import (
+    DubboCallResult,
+    DubboSidecar,
+    DubboSidecarError,
+    locate_java,
+    locate_sidecar_jar,
+)
+from .package import (
+    SIDECAR_PROTOCOL,
+    SIDECAR_VERSION,
+    SidecarJar,
+    SidecarJarError,
+    resolve_sidecar_jar,
+)
+from .triple import TripleUnaryCaller, invoke_triple, is_grpc_compatible_target
+
+__all__ = [
+    "SIDECAR_PROTOCOL",
+    "SIDECAR_VERSION",
+    "DubboCallResult",
+    "DubboSidecar",
+    "DubboSidecarError",
+    "SidecarJar",
+    "SidecarJarError",
+    "TripleUnaryCaller",
+    "invoke_triple",
+    "is_grpc_compatible_target",
+    "locate_java",
+    "locate_sidecar_jar",
+    "resolve_sidecar_jar",
+]

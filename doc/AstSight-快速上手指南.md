@@ -34,7 +34,7 @@ astsight --help
 
 - Python 3.11 及以上（仓库最近在 3.13 上验证）。
 - Linux 是目标运行环境；Windows 可用于本地调试（见第 7 节注意事项）。
-- CodeGraph 由平台 wheel `astsight-codegraph-bin` 内置，安装后不需要另装 Node；
+- CodeGraph 默认随安装包提供（平台 wheel 内置 Node），不需要另装 Node；
   用 `astsight codegraph status` 查看是否已生效。
 
 ---

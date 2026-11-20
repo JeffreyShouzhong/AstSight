@@ -28,13 +28,19 @@ dependencies = [
   "grpcio-tools==1.85.3",
   "fastapi==0.162.0",
   "uvicorn==0.54.0",
+  # 平台 wheel：内置固定版本 CodeGraph 与自包含 Node 运行时。
+  "astsight-codegraph-bin==1.6.2; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "astsight-codegraph-bin==1.6.2; platform_system == 'Linux' and platform_machine == 'aarch64'",
+  "astsight-codegraph-bin==1.6.2; platform_system == 'Linux' and platform_machine == 'arm64'",
+  "astsight-codegraph-bin==1.6.2; platform_system == 'Darwin'",
+  "astsight-codegraph-bin==1.6.2; platform_system == 'Windows' and platform_machine == 'AMD64'",
+  "astsight-codegraph-bin==1.6.2; platform_system == 'Windows' and platform_machine == 'x86_64'",
 ]
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]==3.3.8"]
 mysql = ["PyMySQL==1.2.4"]
 orchestration = ["langgraph==1.2.17"]
-codegraph = ["astsight-codegraph-bin==1.6.2"]
 dev = [
   "pytest==9.1.1",
   "psycopg[binary]==3.3.8",
