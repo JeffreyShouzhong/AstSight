@@ -35,3 +35,7 @@ Thumbs.db
 # 本地联调残留
 .vscode/
 dubbo-manual.jsonl
+
+# Python build artifacts
+engine/build/
+engine/*.egg-info/
