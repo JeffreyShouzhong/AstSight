@@ -64,7 +64,10 @@ git push origin v0.2.0
 3. GitHub Actions 的 `Release` 工作流会自动：
    - 校验 tag 与包版本一致；
    - 构建 wheel/sdist 并 `twine check`；
-   - 上传 PyPI；
+   - 解析主包依赖里的 `astsight-codegraph-bin` 固定版本，检查 PyPI 上
+     Linux x86_64/arm64、macOS x86_64/arm64、Windows x86_64 五个平台 wheel；
+     缺失时自动构建并 `--skip-existing` 上传，主包随后才发布；
+   - 上传主包到 PyPI；
    - 创建 GitHub Release 并附上构建产物。
 
 仓库需要配置 secret `PYPI_API_TOKEN`（PyPI API token）。也可以改用 PyPI Trusted
