@@ -123,6 +123,9 @@ export ASTSIGHT_LLM_API_KEY=你的key
 
 ## 5 分钟上手
 
+> 下面的 demo 只在源码仓库的 `engine/examples/` 中；`pip install astsight`
+> 不包含示例目录。
+
 ```bash
 cd engine
 
@@ -153,7 +156,6 @@ demo 会自动启动示例服务，产物在临时目录的 `.astsight/runs/<run
 ### 方式一：一条命令（需要模型）
 
 ```bash
-cd engine
 astsight agent run \
   --project /path/to/project \
   --requirements /path/to/project/docs/requirements.md \
@@ -162,7 +164,8 @@ astsight agent run \
   --sut-command "python -m uvicorn app:app --port 8010"
 ```
 
-`agent run` 默认就是 delta；非 git 项目或首次建全量基线时显式加 `--mode full`。
+`agent run` 默认就是 delta，因此 `--project` 必须是 git 仓库根。
+非 git 项目、或首次建全量基线时显式加 `--mode full`。
 
 依次完成规则抽取、Mock 语义、数据目录、用例设计、待审提案、造数计划、
 启动 Mock 与 SUT、pytest、失败诊断与修复。不加 `--approve-as` 时停在待审提案，
@@ -172,8 +175,6 @@ Mock 分支补丁直接热更新。
 ### 方式二：分步执行（便于审核和排错）
 
 ```bash
-cd engine
-
 # 1. 需求 → 规则库
 astsight rules c1 \
   --project /path/to/project \
@@ -222,7 +223,7 @@ astsight run --project /path/to/project --mode cases \
   --data-plan /path/to/project/.astsight/data/data_plan.json
 ```
 
-### 方式三：已有用例库，按代码变更执行
+### 方式三：已有基线，按代码变更做契约回归
 
 ```bash
 astsight run \
@@ -232,7 +233,8 @@ astsight run \
   --openapi /path/to/service-repo/openapi.json
 ```
 
-`--project` 必须是 git 仓库根（delta 需要执行 `git diff`）。
+`--project` 必须是 git 仓库根（delta 需要执行 `git diff`）。这条命令生成并执行
+契约/模板用例，不读取已批准用例库；要执行审核通过的用例，用 `--mode cases`。
 
 ## 产物在哪
 

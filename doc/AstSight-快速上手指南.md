@@ -42,6 +42,9 @@ astsight --help
 
 ## 3. 先跑 demo（不需要模型）
 
+> 以下 demo 只在源码仓库的 `engine/examples/` 中；`pip install astsight`
+> 不包含示例目录。
+
 ```bash
 cd engine
 
@@ -190,7 +193,6 @@ your-project/
 ### 5.2 路线 A：一条命令跑完整链路（需要模型）
 
 ```bash
-cd engine
 astsight agent run \
   --project /path/to/your-project \
   --requirements /path/to/your-project/docs/requirements.md \

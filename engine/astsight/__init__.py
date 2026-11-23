@@ -15,4 +15,4 @@ v4.3 起 SUT → Dubbo 下游 Mock 走 agent + ByteBuddy + Filter（低侵入）
 pytest codegen、执行归因与统一 Mock 运行时。
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
