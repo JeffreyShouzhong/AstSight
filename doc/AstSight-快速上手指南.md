@@ -70,7 +70,7 @@ astsight cases approve \
 ```
 
 审核完重新执行第 2 步的命令。只有演示环境才建议直接加
-`--approve-as <审核人>` 自动批准 `new/update/revise`。
+`--approve-as <审核人>` 自动批准 `new/update/revive`。
 
 ## 4. 看结果
 
