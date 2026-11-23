@@ -2,8 +2,8 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`9f0349e`（`修改：agent run 默认改为 delta 模式`）；
-> 当前存档已同步远端；设计基线 v5.07；准备发布 0.2.0。
+> 最新代码提交：`4bc3c5a`（`发布准备：0.2.0 与使用说明校正`）；
+> 当前存档已同步远端；设计基线 v5.07；**0.2.0 已发布 PyPI / GitHub Release**。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -67,7 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
-| 0.2.0 使用说明校正 | ✅ 2026-11-23 | 安装场景移除 `cd engine`；demo 标注仅源码仓库；方式三改为按变更做契约回归；`agent run` 默认 delta 需 git 根目录；Agent 端到端改为主路径；版本升 0.2.0 |
+| 0.2.0 使用说明校正与发布 | ✅ 2026-11-23 | 安装场景移除 `cd engine`；demo 标注仅源码仓库；方式三改为按变更做契约回归；`agent run` 默认 delta 需 git 根目录；Agent 端到端改为主路径；版本升 0.2.0；tag `v0.2.0` 触发 Release 工作流，PyPI 与 GitHub Release 已发布，干净 venv 验证默认模式为 delta |
 | 默认模式改为 delta | ✅ 2026-11-23 | `agent run` CLI 与 `FlowConfig` 默认从 full 改为 delta；README、使用文档、快速指南、命令速查主路径统一为 `--mode delta --base main --target HEAD`；full 标为首次建全量基线的可选模式；非 git 项目需显式 full |
 | Release 工作流 | ✅ 2026-11-23 | 新增 `.github/workflows/release.yml`：push `v*` tag 校验版本 → build wheel/sdist → `twine check` → 确保依赖的 `astsight-codegraph-bin` 五个平台 wheel 在 PyPI 齐备（缺失则自动构建并 `--skip-existing` 上传）→ 上传主包 → 创建 GitHub Release；支持 workflow_dispatch 只构建；凭据用 `PYPI_API_TOKEN` secret 或 Trusted Publishing |
 | 主包发布 PyPI 0.1.0 | ✅ 2026-11-20 | `astsight==0.1.0` wheel/sdist 已上传 PyPI；版本改为稳定版；干净 venv 执行 `pip install astsight` 会自动安装 `astsight-codegraph-bin==1.6.2`，`codegraph status` 显示 `source=packaged`、worker 可用；README/使用文档/快速指南改为 PyPI 安装主路径 |
