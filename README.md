@@ -118,7 +118,7 @@ export ASTSIGHT_LLM_API_KEY=你的key
 `--llm-config PATH` → `ASTSIGHT_LLM_CONFIG` → `./llm.json` → `~/.astsight/llm.json`；
 环境变量 `ASTSIGHT_LLM_*` 始终覆盖文件值。`llm.example.json` 保留为字段参考。
 
-三种常见写法见 [快速上手指南](doc/AstSight-快速上手指南.md#42-三种常见配置)。
+三种常见写法见[使用文档的模型配置章节](doc/AstSight-使用文档.md#41-模型配置)。
 配好后用 `rules extract`（别名 `rules c1`）验证连通。
 
 ## 5 分钟上手

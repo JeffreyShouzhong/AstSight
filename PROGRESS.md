@@ -67,6 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 快速上手指南精简 | ✅ 2026-11-23 | 从 401 行压到约 130 行：只保留安装、init、agent run delta、审核门、结果与常见问题；移除分步路线、配置变体和源码 demo 主导航，详细内容统一指向使用文档 |
 | 0.2.0 使用说明校正与发布 | ✅ 2026-11-23 | 安装场景移除 `cd engine`；demo 标注仅源码仓库；方式三改为按变更做契约回归；`agent run` 默认 delta 需 git 根目录；Agent 端到端改为主路径；版本升 0.2.0；tag `v0.2.0` 触发 Release 工作流，PyPI 与 GitHub Release 已发布，干净 venv 验证默认模式为 delta |
 | 默认模式改为 delta | ✅ 2026-11-23 | `agent run` CLI 与 `FlowConfig` 默认从 full 改为 delta；README、使用文档、快速指南、命令速查主路径统一为 `--mode delta --base main --target HEAD`；full 标为首次建全量基线的可选模式；非 git 项目需显式 full |
 | Release 工作流 | ✅ 2026-11-23 | 新增 `.github/workflows/release.yml`：push `v*` tag 校验版本 → build wheel/sdist → `twine check` → 确保依赖的 `astsight-codegraph-bin` 五个平台 wheel 在 PyPI 齐备（缺失则自动构建并 `--skip-existing` 上传）→ 上传主包 → 创建 GitHub Release；支持 workflow_dispatch 只构建；凭据用 `PYPI_API_TOKEN` secret 或 Trusted Publishing |
