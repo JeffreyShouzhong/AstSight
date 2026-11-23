@@ -3,7 +3,7 @@
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
 > 最新代码提交：`d62d5bf`（`新增：发布主包 astsight 0.1.0 到 PyPI`）；
-> 当前存档已同步远端；设计基线 v5.03。
+> 当前存档已同步远端；设计基线 v5.04。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -67,6 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| Release 工作流 | ✅ 2026-11-23 | 新增 `.github/workflows/release.yml`：push `v*` tag 校验版本 → build wheel/sdist → `twine check` → 上传 PyPI → 创建 GitHub Release；支持 workflow_dispatch 只构建；凭据用 `PYPI_API_TOKEN` secret 或 Trusted Publishing |
 | 主包发布 PyPI 0.1.0 | ✅ 2026-11-20 | `astsight==0.1.0` wheel/sdist 已上传 PyPI；版本改为稳定版；干净 venv 执行 `pip install astsight` 会自动安装 `astsight-codegraph-bin==1.6.2`，`codegraph status` 显示 `source=packaged`、worker 可用；README/使用文档/快速指南改为 PyPI 安装主路径 |
 | CodeGraph 默认依赖发布 | ✅ 2026-11-20 | 5 个平台 wheel（Linux x86_64/arm64、macOS x86_64/arm64、Windows x86_64）已上传 PyPI `astsight-codegraph-bin==1.6.2`；pyproject 按平台标记加入默认依赖；验证 PyPI 安装后 `source=packaged`、worker ready |
 | 默认模型配置 `astsight init` | ✅ 2026-11-20 | 新增 `astsight init`：默认写入 `~/.astsight/llm.json`，自动检测 Anthropic/OpenAI key 环境变量并选择 provider/model；交互式可改，`--yes`/`--local` 等参数；配置文件不写明文 key；缺配置错误提示运行 init；README/使用文档/快速指南统一改用 `astsight` 命令；新增 5 条测试，全量 728 passed / 72 skipped |

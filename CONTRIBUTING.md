@@ -51,6 +51,29 @@ PYTHONPATH=. python -m pytest --basetemp=C:/tmp/pt
 - 一个 PR 只做一件事。改动范围越聚焦，review 越快。
 - 新增行为必须有对应测试；改动现有行为时更新受影响的测试。
 
+## 发布
+
+1. 更新 `engine/pyproject.toml` 的 `version`（使用稳定版本，如 `0.2.0`）并提交。
+2. 打 tag 并推送：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+3. GitHub Actions 的 `Release` 工作流会自动：
+   - 校验 tag 与包版本一致；
+   - 构建 wheel/sdist 并 `twine check`；
+   - 上传 PyPI；
+   - 创建 GitHub Release 并附上构建产物。
+
+仓库需要配置 secret `PYPI_API_TOKEN`（PyPI API token）。也可以改用 PyPI Trusted
+Publishing：在 PyPI 项目设置里绑定该仓库和 `pypi` environment，然后删除工作流里的
+`password` 行。
+
+`workflow_dispatch` 只构建、不发布，用于验证打包。CodeGraph 平台 wheel 的版本独立
+（当前 1.6.2），升级时用 `tools/build_codegraph_wheels.py` 单独构建和发布。
+
 ## 两个不可协商的边界
 
 1. **模型只出候选**：任何模型输出都必须经过框架的 endpoint / quote / rule_key / FK 拓扑 / 断言全套校验，不能直接落库。
