@@ -97,7 +97,7 @@ class FlowConfig:
     requirements: list[str]
     openapi: str | None = None
     llm_config: str | None = None
-    mode: str = "full"                 # full | delta
+    mode: str = "delta"                # delta | full
     base: str = "main"
     target: str = "HEAD"
     depth: int = 5

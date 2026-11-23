@@ -625,7 +625,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="模型配置文件（默认 ./llm.json 或 ~/.astsight/llm.json；"
         "也可用 ASTSIGHT_LLM_CONFIG）",
     )
-    agent_run.add_argument("--mode", choices=("full", "delta"), default="full")
+    agent_run.add_argument("--mode", choices=("full", "delta"), default="delta")
     agent_run.add_argument("--base", default="main")
     agent_run.add_argument("--target", default="HEAD")
     agent_run.add_argument("--depth", type=int, default=5)

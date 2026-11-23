@@ -157,9 +157,12 @@ cd engine
 astsight agent run \
   --project /path/to/project \
   --requirements /path/to/project/docs/requirements.md \
+  --mode delta --base main --target HEAD \
   --base-url http://127.0.0.1:8010 \
   --sut-command "python -m uvicorn app:app --port 8010"
 ```
+
+`agent run` 默认就是 delta；非 git 项目或首次建全量基线时显式加 `--mode full`。
 
 依次完成规则抽取、Mock 语义、数据目录、用例设计、待审提案、造数计划、
 启动 Mock 与 SUT、pytest、失败诊断与修复。不加 `--approve-as` 时停在待审提案，

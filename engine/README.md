@@ -1092,7 +1092,7 @@ PYTHONPATH=. python -m astsight agent run \
   --project examples/downstream_service \
   --requirements docs/requirements.md \
   --openapi examples/downstream_service/openapi.json \
-  --mode full --codegraph off \
+  --mode delta --base main --target HEAD --codegraph off \
   --base-url http://127.0.0.1:8020 \
   --sut-command "python -m uvicorn app:app --host 127.0.0.1 --port 8020 --log-level warning" \
   --approve-as demo
