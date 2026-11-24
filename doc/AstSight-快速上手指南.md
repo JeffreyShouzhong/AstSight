@@ -72,6 +72,33 @@ astsight cases approve \
 审核完重新执行第 2 步的命令。只有演示环境才建议直接加
 `--approve-as <审核人>` 自动批准 `new/update/revive`。
 
+## 3.1 Java 项目
+
+Java SUT **不需要手工写 `-javaagent`**。当计划需要 agent 时（HTTP 下游 Mock、
+MQ 生产者拦截、Dubbo Filter），`agent run` 会自动给 SUT 注入：
+
+- `JAVA_TOOL_OPTIONS=-javaagent:<jar>=admin=...,token_env=ASTSIGHT_AGENT_TOKEN,sut_id=...`
+- `ASTSIGHT_AGENT_TOKEN`
+
+```bash
+astsight agent run \
+  --project . \
+  --requirements docs/requirements.md \
+  --mode delta --base main --target HEAD \
+  --base-url http://127.0.0.1:8010 \
+  --sut-command "java -jar target/app.jar"
+```
+
+Token 只通过环境变量传给 agent，不会出现在 `java` 命令行。
+
+只有你**自己手动启动 SUT**（例如 `astsight run --mock-plan` 之后自己起 JVM）时，才需要
+手动设置 `JAVA_TOOL_OPTIONS`；完整格式和 `mock_injection.json` 的读取方式见
+[使用文档](AstSight-使用文档.md) 的 Agent 章节。
+
+> 当前 PyPI 安装尚未包含 Java agent 与 Dubbo sidecar 的 jar。源码仓库可先执行
+> `python tools/build_agent_wheel.py` 和 `python tools/build_sidecar_wheel.py`
+> 构建并安装；后续会像 CodeGraph 一样随发行包分发。
+
 ## 4. 看结果
 
 ```text
