@@ -74,11 +74,7 @@ astsight cases approve \
 
 ## 3.1 Java 项目
 
-Java SUT **不需要手工写 `-javaagent`**。当计划需要 agent 时（HTTP 下游 Mock、
-MQ 生产者拦截、Dubbo Filter），`agent run` 会自动给 SUT 注入：
-
-- `JAVA_TOOL_OPTIONS=-javaagent:<jar>=admin=...,token_env=ASTSIGHT_AGENT_TOKEN,sut_id=...`
-- `ASTSIGHT_AGENT_TOKEN`
+Java 项目和普通项目用同一条命令，只需要把 SUT 启动命令换成 `java`：
 
 ```bash
 astsight agent run \
@@ -89,15 +85,13 @@ astsight agent run \
   --sut-command "java -jar target/app.jar"
 ```
 
-Token 只通过环境变量传给 agent，不会出现在 `java` 命令行。
+- `--project` 仍然是 git 仓库根；
+- `--sut-command` 换成你的实际启动命令，Spring Boot fat jar 就是
+  `java -jar <包名>.jar`；
+- 不需要额外配置 agent、`JAVA_TOOL_OPTIONS` 或启动脚本，AstSight 会在启动 SUT 时处理；
+- 服务已经启动时，去掉 `--sut-command`，只保留 `--base-url`。
 
-只有你**自己手动启动 SUT**（例如 `astsight run --mock-plan` 之后自己起 JVM）时，才需要
-手动设置 `JAVA_TOOL_OPTIONS`；完整格式和 `mock_injection.json` 的读取方式见
-[使用文档](AstSight-使用文档.md) 的 Agent 章节。
-
-> 从 0.2.1 起，Java agent 与 Dubbo sidecar 的 wheel 随主包默认安装。
-> 如果公司禁止外部 jar，可在内网构建后用 `ASTSIGHT_JAVA_AGENT_JAR` /
-> `ASTSIGHT_DUBBO_SIDECAR_JAR` 覆盖。
+需要排查注入细节时，再看[使用文档](AstSight-使用文档.md)的 Agent 章节。
 
 ## 4. 看结果
 

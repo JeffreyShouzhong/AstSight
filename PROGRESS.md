@@ -67,6 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| 快速指南 Java 接入精简 | ✅ 2026-11-24 | Java 小节只保留接入方式：同一命令 + `--sut-command "java -jar ..."`；移除 JAVA_TOOL_OPTIONS、token、手动注入和内网 jar 细节，排查细节指向使用文档 |
 | Java agent/sidecar 默认分发 | ✅ 2026-11-24 | 主包依赖增加 `astsight-java-agent==0.1.0.dev0` 与 `astsight-dubbo-sidecar==0.1.0.dev0`；Release 工作流新增 java-assets，缺失时用 Maven 构建并上传；tag `v0.2.1` 发布成功，PyPI 上主包与两个 Java wheel 均已存在；干净 venv 安装后 agent/sidecar 均从 wheel 解析 |
 | 企业离线安装与离线包 | ✅ 2026-11-24 | README/使用文档补充离线 wheelhouse、内部镜像、Java jar 覆盖与 agent 边界；新增 `tools/build_offline_bundle.py`，在目标平台/Python 打包主包、依赖、CodeGraph wheel、可选 agent/sidecar、SHA256SUMS 和安装脚本；Windows 构建出 83MB 离线包并从离线 wheelhouse 安装验证通过 |
 | 快速上手指南精简 | ✅ 2026-11-23 | 从 401 行压到约 130 行：只保留安装、init、agent run delta、审核门、结果与常见问题；移除分步路线、配置变体和源码 demo 主导航，详细内容统一指向使用文档 |
