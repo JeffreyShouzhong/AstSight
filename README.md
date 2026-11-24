@@ -100,6 +100,61 @@ astsight codegraph status
 `status` 显示 `source=packaged` 时，Node 与 CodeGraph 都来自 wheel，无需系统 Node。
 其他平台或开发/离线环境可回退到 `astsight codegraph install` 安装到用户缓存。
 
+## 企业离线安装
+
+服务器不能访问外网 PyPI，或安全策略不允许外部 jar 时，用离线 wheelhouse：
+
+1. 在一台联网、且**与目标平台相同**的机器上下载：
+
+```bash
+pip download astsight==0.2.0 -d wheelhouse --only-binary=:all:
+```
+
+`astsight-codegraph-bin` 是平台 wheel，会随当前平台一起下载。
+
+2. 把 `wheelhouse` 拷到内网服务器：
+
+```bash
+pip install --no-index --find-links wheelhouse astsight==0.2.0
+```
+
+也可以把 wheel 上传到内网 Nexus/Artifactory，客户端配置内部 `index-url`。
+
+### 生成离线包
+
+在源码仓库、目标平台和目标 Python 版本上执行：
+
+```bash
+python tools/build_offline_bundle.py
+# dist/offline/astsight-offline-<version>-cp<xy>-<platform>.zip
+```
+
+离线包内含主包、全部依赖、对应平台的 CodeGraph wheel，以及 `SHA256SUMS` 和
+`install.sh` / `install.ps1`。如果本地 `dist/` 有 Java agent / sidecar wheel，
+会一并带上；内网已构建的 wheel 可用 `--agent-wheel` / `--sidecar-wheel` 指定，
+不需要 Java 时用 `--skip-java`，已有 wheel 目录时用 `--wheels-dir` 跳过下载。
+
+### Java jar 策略
+
+如果外部 jar 一律不允许落盘，在内网从源码构建并指向审核过的 jar：
+
+```bash
+cd java
+mvn -q -DskipTests package
+python tools/build_agent_wheel.py --skip-build
+python tools/build_sidecar_wheel.py --skip-build
+```
+
+或直接指定已有 jar：
+
+```bash
+export ASTSIGHT_JAVA_AGENT_JAR=/opt/approved/astsight-agent.jar
+export ASTSIGHT_DUBBO_SIDECAR_JAR=/opt/approved/astsight-dubbo-sidecar.jar
+```
+
+如果禁止加载 agent，HTTP 下游 Mock 仍可用 `url_override` / `discovery_override`；
+**MQ 生产者拦截和 Dubbo Filter 必须加载 agent**，这两项能力无法在禁止 agent 的环境下提供。
+
 ## 配置大模型
 
 默认主路径（规则抽取、用例设计、`agent run`）需要模型。一条命令生成配置：
