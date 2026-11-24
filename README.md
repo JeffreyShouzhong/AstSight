@@ -107,7 +107,7 @@ astsight codegraph status
 1. 在一台联网、且**与目标平台相同**的机器上下载：
 
 ```bash
-pip download astsight==0.2.0 -d wheelhouse --only-binary=:all:
+pip download astsight==0.2.1 -d wheelhouse --only-binary=:all:
 ```
 
 `astsight-codegraph-bin` 是平台 wheel，会随当前平台一起下载。
@@ -115,7 +115,7 @@ pip download astsight==0.2.0 -d wheelhouse --only-binary=:all:
 2. 把 `wheelhouse` 拷到内网服务器：
 
 ```bash
-pip install --no-index --find-links wheelhouse astsight==0.2.0
+pip install --no-index --find-links wheelhouse astsight==0.2.1
 ```
 
 也可以把 wheel 上传到内网 Nexus/Artifactory，客户端配置内部 `index-url`。

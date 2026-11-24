@@ -95,9 +95,9 @@ Token 只通过环境变量传给 agent，不会出现在 `java` 命令行。
 手动设置 `JAVA_TOOL_OPTIONS`；完整格式和 `mock_injection.json` 的读取方式见
 [使用文档](AstSight-使用文档.md) 的 Agent 章节。
 
-> 当前 PyPI 安装尚未包含 Java agent 与 Dubbo sidecar 的 jar。源码仓库可先执行
-> `python tools/build_agent_wheel.py` 和 `python tools/build_sidecar_wheel.py`
-> 构建并安装；后续会像 CodeGraph 一样随发行包分发。
+> 从 0.2.1 起，Java agent 与 Dubbo sidecar 的 wheel 随主包默认安装。
+> 如果公司禁止外部 jar，可在内网构建后用 `ASTSIGHT_JAVA_AGENT_JAR` /
+> `ASTSIGHT_DUBBO_SIDECAR_JAR` 覆盖。
 
 ## 4. 看结果
 

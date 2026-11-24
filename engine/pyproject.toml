@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astsight"
-version = "0.2.0"
+version = "0.2.1"
 description = "需求与代码变更驱动的 API 自动化测试引擎"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "Apache-2.0"
@@ -36,6 +36,9 @@ dependencies = [
   "astsight-codegraph-bin==1.6.2; platform_system == 'Darwin'",
   "astsight-codegraph-bin==1.6.2; platform_system == 'Windows' and platform_machine == 'AMD64'",
   "astsight-codegraph-bin==1.6.2; platform_system == 'Windows' and platform_machine == 'x86_64'",
+  # Java agent 与 Dubbo sidecar：纯 Python wheel，内含审核/构建好的 jar。
+  "astsight-java-agent==0.1.0.dev0",
+  "astsight-dubbo-sidecar==0.1.0.dev0",
 ]
 
 [project.optional-dependencies]

@@ -3,7 +3,7 @@
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
 > 最新代码提交：`00d2f8f`（`新增：企业离线安装文档与 offline bundle 工具`）；
-> 当前存档已同步远端；设计基线 v5.08；**0.2.0 已发布 PyPI / GitHub Release**。
+> 当前存档已同步远端；设计基线 v5.09；准备发布 0.2.1（Java agent/sidecar 默认分发）。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
 > gRPC unary 已打通 Python 与真实 Java SUT 两条完整 `agent run` 链路，并支持
@@ -67,6 +67,7 @@
 
 | 阶段 | 状态 | 产物 / 证据 |
 |---|---|---|
+| Java agent/sidecar 默认分发 | ✅ 2026-11-24 | 主包依赖增加 `astsight-java-agent==0.1.0.dev0` 与 `astsight-dubbo-sidecar==0.1.0.dev0`；Release 工作流新增 java-assets，缺失时用 Maven 构建并上传；主包版本升 0.2.1 |
 | 企业离线安装与离线包 | ✅ 2026-11-24 | README/使用文档补充离线 wheelhouse、内部镜像、Java jar 覆盖与 agent 边界；新增 `tools/build_offline_bundle.py`，在目标平台/Python 打包主包、依赖、CodeGraph wheel、可选 agent/sidecar、SHA256SUMS 和安装脚本；Windows 构建出 83MB 离线包并从离线 wheelhouse 安装验证通过 |
 | 快速上手指南精简 | ✅ 2026-11-23 | 从 401 行压到约 130 行：只保留安装、init、agent run delta、审核门、结果与常见问题；移除分步路线、配置变体和源码 demo 主导航，详细内容统一指向使用文档 |
 | 0.2.0 使用说明校正与发布 | ✅ 2026-11-23 | 安装场景移除 `cd engine`；demo 标注仅源码仓库；方式三改为按变更做契约回归；`agent run` 默认 delta 需 git 根目录；Agent 端到端改为主路径；版本升 0.2.0；tag `v0.2.0` 触发 Release 工作流，PyPI 与 GitHub Release 已发布，干净 venv 验证默认模式为 delta |

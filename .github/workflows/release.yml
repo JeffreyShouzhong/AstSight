@@ -128,9 +128,98 @@ jobs:
             --username __token__ --password "$PYPI_API_TOKEN" \
             dist/astsight_codegraph_bin-*.whl
 
+  java-assets:
+    name: Ensure Java agent and sidecar wheels
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: java/pom.xml
+
+      - name: Resolve pinned Java asset versions
+        id: versions
+        run: |
+          python - >> "$GITHUB_OUTPUT" <<'PY'
+          import re, tomllib
+          deps = tomllib.load(open("engine/pyproject.toml", "rb"))["project"]["dependencies"]
+          text = "\n".join(deps)
+          for name, key in (
+              ("astsight-java-agent", "agent"),
+              ("astsight-dubbo-sidecar", "sidecar"),
+          ):
+              match = re.search(rf"{re.escape(name)}==([^;\s]+)", text)
+              assert match, f"{name} dependency missing"
+              print(f"{key}_version={match.group(1)}")
+          PY
+
+      - name: Check PyPI coverage
+        id: check
+        run: |
+          python - "${{ steps.versions.outputs.agent_version }}" \
+            "${{ steps.versions.outputs.sidecar_version }}" > check.txt <<'PY'
+          import json, sys, urllib.request
+          checks = (
+              ("astsight-java-agent", sys.argv[1], "astsight_java_agent"),
+              ("astsight-dubbo-sidecar", sys.argv[2], "astsight_dubbo_sidecar"),
+          )
+          needed = []
+          for package, version, prefix in checks:
+              filename = f"{prefix}-{version}-py3-none-any.whl"
+              try:
+                  with urllib.request.urlopen(
+                      f"https://pypi.org/pypi/{package}/{version}/json",
+                      timeout=30,
+                  ) as response:
+                      data = json.load(response)
+                  present = {item["filename"] for item in data.get("urls") or []}
+              except Exception:
+                  present = set()
+              if filename not in present:
+                  needed.append(package)
+          print("needed=" + ("true" if needed else "false"))
+          print("packages=" + ",".join(needed))
+          PY
+          cat check.txt
+          cat check.txt >> "$GITHUB_OUTPUT"
+
+      - name: Build missing Java wheels
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          mvn -q -B -DskipTests package -f java/pom.xml
+          python -m pip install twine
+          python tools/build_agent_wheel.py --skip-build \
+            --version "${{ steps.versions.outputs.agent_version }}"
+          python tools/build_sidecar_wheel.py --skip-build \
+            --version "${{ steps.versions.outputs.sidecar_version }}"
+          python -m twine check \
+            dist/astsight_java_agent-*.whl dist/astsight_dubbo_sidecar-*.whl
+
+      - name: Upload missing Java wheels to PyPI
+        if: steps.check.outputs.needed == 'true' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m twine upload --skip-existing --non-interactive --disable-progress-bar \
+            --username __token__ --password "$PYPI_API_TOKEN" \
+            dist/astsight_java_agent-*.whl dist/astsight_dubbo_sidecar-*.whl
+
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, codegraph-assets]
+    needs: [build, codegraph-assets, java-assets]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi
