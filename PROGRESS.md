@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`cd57454`（`发布准备：0.2.1 Java agent/sidecar 默认分发`）；
+> 最新代码提交：`4c26d8d`（`文档：精简快速指南的 Java 接入说明`）；
 > 当前存档已同步远端；设计基线 v5.09；**0.2.1 已发布 PyPI / GitHub Release**。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
