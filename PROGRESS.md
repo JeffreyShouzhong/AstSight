@@ -2,7 +2,7 @@
 
 > 最后更新：2026-11-19
 > 分支：`main`（已合并 `unified-mock-runtime`，与远端同步）
-> 最新代码提交：`d87882b`（`文档：精简快速上手指南`）；
+> 最新代码提交：`00d2f8f`（`新增：企业离线安装文档与 offline bundle 工具`）；
 > 当前存档已同步远端；设计基线 v5.08；**0.2.0 已发布 PyPI / GitHub Release**。
 >
 > 当前阶段：HTTP / Dubbo / gRPC 下游 Mock 已统一到同一 session、分支、证据与门禁；
